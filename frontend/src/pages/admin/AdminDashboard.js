@@ -13,11 +13,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import {
-  ClipboardList, Users, Package, Truck, BarChart3, Search,
+  ClipboardList, Users, Package, Truck, Search,
   Eye, Edit, DollarSign, Plus, Trash2, Printer,
 } from "lucide-react";
 
@@ -34,10 +33,6 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState({});
   const [orders, setOrders] = useState([]);
   const [salesData, setSalesData] = useState(null);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
   const [loading, setLoading] = useState(true);
   const [formulationGlobal, setFormulationGlobal] = useState(false);
 
@@ -58,6 +53,8 @@ export default function AdminDashboard() {
   const [reportPeriod, setReportPeriod] = useState("today");
   const [excludeGst, setExcludeGst] = useState(false);
   const [excludeShipping, setExcludeShipping] = useState(false);
+  const [reportDateFrom, setReportDateFrom] = useState("");
+  const [reportDateTo, setReportDateTo] = useState("");
 
   useEffect(() => { loadAll(); }, []);
 
@@ -88,20 +85,6 @@ export default function AdminDashboard() {
       toast.success(value ? "Formulations visible to all" : "Formulations hidden");
     } catch { toast.error("Failed to update"); }
   };
-
-  const searchOrders = async () => {
-    try {
-      const params = new URLSearchParams();
-      if (search) params.set("search", search);
-      if (statusFilter && statusFilter !== "all") params.set("status", statusFilter);
-      if (dateFrom) params.set("date_from", dateFrom);
-      if (dateTo) params.set("date_to", dateTo);
-      const res = await api.get(`/orders?${params.toString()}`);
-      setOrders(res.data);
-    } catch { }
-  };
-
-  useEffect(() => { searchOrders(); }, [statusFilter, dateFrom, dateTo]);
 
   // Formulation dialog
   const openFormulation = (order) => {
@@ -151,9 +134,12 @@ export default function AdminDashboard() {
     if (!tid) return;
     setSelectedTelecaller(tid);
     try {
+      let salesUrl = `/reports/telecaller-sales?telecaller_id=${tid}&period=${reportPeriod}&exclude_gst=${excludeGst}&exclude_shipping=${excludeShipping}`;
+      if (reportPeriod === "custom" && reportDateFrom) salesUrl += `&date_from=${reportDateFrom}`;
+      if (reportPeriod === "custom" && reportDateTo) salesUrl += `&date_to=${reportDateTo}`;
       const [dashRes, salesRes] = await Promise.all([
         api.get(`/reports/telecaller-dashboard/${tid}`),
-        api.get(`/reports/telecaller-sales?telecaller_id=${tid}&period=${reportPeriod}&exclude_gst=${excludeGst}&exclude_shipping=${excludeShipping}`),
+        api.get(salesUrl),
       ]);
       setTelecallerStats(dashRes.data);
       setTelecallerSales(salesRes.data);
@@ -162,13 +148,16 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     if (selectedTelecaller) loadTelecallerReport(selectedTelecaller);
-  }, [reportPeriod, excludeGst, excludeShipping]);
+  }, [reportPeriod, excludeGst, excludeShipping, reportDateFrom, reportDateTo]);
 
   const backendUrl = process.env.REACT_APP_BACKEND_URL;
 
   const handlePrint = (orderId) => {
-    window.open(`${backendUrl}/api/orders/${orderId}/print`, '_blank');
+    const token = localStorage.getItem("token");
+    window.open(`${backendUrl}/api/orders/${orderId}/print?token=${token}`, '_blank');
   };
+
+  const recentOrders = orders.slice(0, 10);
 
   const statCards = [
     { label: "Total Orders", value: stats.total_orders || 0, icon: ClipboardList, color: "text-blue-500" },
@@ -200,7 +189,7 @@ export default function AdminDashboard() {
 
       <Tabs defaultValue="orders" className="space-y-4">
         <TabsList className="flex-wrap h-auto gap-1">
-          <TabsTrigger value="orders" data-testid="tab-orders">Orders</TabsTrigger>
+          <TabsTrigger value="orders" data-testid="tab-orders">Recent Orders</TabsTrigger>
           <TabsTrigger value="sales" data-testid="tab-sales">Sales Report</TabsTrigger>
           <TabsTrigger value="reports" data-testid="tab-reports">Executive Reports</TabsTrigger>
           <TabsTrigger value="settings" data-testid="tab-settings">Settings</TabsTrigger>
@@ -209,42 +198,11 @@ export default function AdminDashboard() {
         <TabsContent value="orders">
           <Card>
             <CardHeader className="pb-3">
-              <div className="flex flex-col sm:flex-row flex-wrap items-end gap-3">
-                <div className="relative flex-1 min-w-0 w-full sm:w-auto">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search order # or customer..."
-                    className="pl-9"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && searchOrders()}
-                    data-testid="admin-order-search"
-                  />
-                </div>
-                <div className="w-full sm:w-36">
-                  <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger data-testid="admin-status-filter"><SelectValue placeholder="Status" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Status</SelectItem>
-                      <SelectItem value="new">New</SelectItem>
-                      <SelectItem value="packaging">Packaging</SelectItem>
-                      <SelectItem value="packed">Packed</SelectItem>
-                      <SelectItem value="dispatched">Dispatched</SelectItem>
-                      <SelectItem value="cancelled">Cancelled</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="w-full sm:w-auto">
-                  <Label className="text-xs">From</Label>
-                  <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} data-testid="admin-date-from" />
-                </div>
-                <div className="w-full sm:w-auto">
-                  <Label className="text-xs">To</Label>
-                  <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} data-testid="admin-date-to" />
-                </div>
-                <Button variant="outline" size="sm" onClick={searchOrders} data-testid="admin-search-btn">
-                  <Search className="w-4 h-4" />
-                </Button>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Recent Orders</CardTitle>
+                <Link to="/all-orders">
+                  <Button variant="outline" size="sm" data-testid="view-all-orders-link">View All Orders</Button>
+                </Link>
               </div>
             </CardHeader>
             <CardContent className="overflow-x-auto">
@@ -261,7 +219,7 @@ export default function AdminDashboard() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {orders.map((order) => (
+                  {recentOrders.map((order) => (
                     <TableRow key={order.id} data-testid={`admin-order-${order.order_number}`}>
                       <TableCell className="font-mono font-medium text-sm">{order.order_number}</TableCell>
                       <TableCell className="text-sm">{order.customer_name}</TableCell>
@@ -290,8 +248,8 @@ export default function AdminDashboard() {
                   ))}
                 </TableBody>
               </Table>
-              {orders.length === 0 && (
-                <p className="text-center py-8 text-muted-foreground">No orders found</p>
+              {recentOrders.length === 0 && (
+                <p className="text-center py-8 text-muted-foreground">No orders yet</p>
               )}
             </CardContent>
           </Card>
@@ -356,6 +314,7 @@ export default function AdminDashboard() {
                           <SelectItem value="week">This Week</SelectItem>
                           <SelectItem value="month">This Month</SelectItem>
                           <SelectItem value="all">All Time</SelectItem>
+                          <SelectItem value="custom">Custom Range</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -372,6 +331,20 @@ export default function AdminDashboard() {
                   </>
                 )}
               </div>
+
+              {/* Custom date range inputs */}
+              {selectedTelecaller && reportPeriod === "custom" && (
+                <div className="flex flex-wrap gap-3">
+                  <div className="w-full sm:w-auto">
+                    <Label className="text-xs">Start Date</Label>
+                    <Input type="date" value={reportDateFrom} onChange={(e) => setReportDateFrom(e.target.value)} data-testid="report-date-from" />
+                  </div>
+                  <div className="w-full sm:w-auto">
+                    <Label className="text-xs">End Date</Label>
+                    <Input type="date" value={reportDateTo} onChange={(e) => setReportDateTo(e.target.value)} data-testid="report-date-to" />
+                  </div>
+                </div>
+              )}
 
               {telecallerStats && selectedTelecaller && (
                 <div className="space-y-4">
@@ -459,7 +432,7 @@ export default function AdminDashboard() {
         </TabsContent>
       </Tabs>
 
-      {/* Formulation Dialog - No per-item visibility toggle */}
+      {/* Formulation Dialog */}
       <Dialog open={showFormulation} onOpenChange={setShowFormulation}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>

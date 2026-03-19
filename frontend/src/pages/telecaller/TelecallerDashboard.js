@@ -7,11 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Search, Package, Truck, ClipboardList, Eye, DollarSign } from "lucide-react";
+import { Plus, Package, Truck, ClipboardList, Eye, DollarSign } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 
 const STATUS_STYLES = {
   new: "status-new",
@@ -25,20 +24,21 @@ export default function TelecallerDashboard() {
   const { user } = useAuth();
   const [orders, setOrders] = useState([]);
   const [stats, setStats] = useState({});
-  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [salesPeriod, setSalesPeriod] = useState("today");
   const [salesData, setSalesData] = useState(null);
   const [excludeGst, setExcludeGst] = useState(false);
   const [excludeShipping, setExcludeShipping] = useState(false);
-  const [viewAll, setViewAll] = useState(false);
+  const [salesDateFrom, setSalesDateFrom] = useState("");
+  const [salesDateTo, setSalesDateTo] = useState("");
 
-  useEffect(() => { loadData(); }, [viewAll]);
+  useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
     try {
+      // Dashboard shows only the user's recent orders (not all)
       const [ordersRes, statsRes] = await Promise.all([
-        api.get(`/orders?view_all=${viewAll}`),
+        api.get("/orders"),
         api.get("/reports/dashboard"),
       ]);
       setOrders(ordersRes.data);
@@ -49,18 +49,17 @@ export default function TelecallerDashboard() {
 
   const loadSales = async () => {
     try {
-      const res = await api.get(`/reports/telecaller-sales?period=${salesPeriod}&exclude_gst=${excludeGst}&exclude_shipping=${excludeShipping}`);
+      let url = `/reports/telecaller-sales?period=${salesPeriod}&exclude_gst=${excludeGst}&exclude_shipping=${excludeShipping}`;
+      if (salesPeriod === "custom" && salesDateFrom) url += `&date_from=${salesDateFrom}`;
+      if (salesPeriod === "custom" && salesDateTo) url += `&date_to=${salesDateTo}`;
+      const res = await api.get(url);
       setSalesData(res.data);
     } catch {}
   };
 
-  useEffect(() => { loadSales(); }, [salesPeriod, excludeGst, excludeShipping]);
+  useEffect(() => { loadSales(); }, [salesPeriod, excludeGst, excludeShipping, salesDateFrom, salesDateTo]);
 
-  const filtered = orders.filter(
-    (o) =>
-      o.order_number?.toLowerCase().includes(search.toLowerCase()) ||
-      o.customer_name?.toLowerCase().includes(search.toLowerCase())
-  );
+  const recentOrders = orders.slice(0, 10);
 
   const statCards = [
     { label: "Total Orders", value: stats.total_orders || 0, icon: ClipboardList, color: "text-blue-500" },
@@ -113,6 +112,7 @@ export default function TelecallerDashboard() {
                   <SelectItem value="week">This Week</SelectItem>
                   <SelectItem value="month">This Month</SelectItem>
                   <SelectItem value="all">All Time</SelectItem>
+                  <SelectItem value="custom">Custom Range</SelectItem>
                 </SelectContent>
               </Select>
               <div className="flex items-center gap-2">
@@ -125,6 +125,18 @@ export default function TelecallerDashboard() {
               </div>
             </div>
           </div>
+          {salesPeriod === "custom" && (
+            <div className="flex flex-wrap gap-3 mt-3">
+              <div className="w-full sm:w-auto">
+                <Label className="text-xs">Start Date</Label>
+                <Input type="date" value={salesDateFrom} onChange={(e) => setSalesDateFrom(e.target.value)} data-testid="sales-date-from" />
+              </div>
+              <div className="w-full sm:w-auto">
+                <Label className="text-xs">End Date</Label>
+                <Input type="date" value={salesDateTo} onChange={(e) => setSalesDateTo(e.target.value)} data-testid="sales-date-to" />
+              </div>
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           {salesData ? (
@@ -146,35 +158,22 @@ export default function TelecallerDashboard() {
         </CardContent>
       </Card>
 
-      {/* Orders Table */}
+      {/* Recent Orders Only */}
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <CardTitle className="text-lg">Orders</CardTitle>
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2">
-                <Switch id="viewAll" checked={viewAll} onCheckedChange={setViewAll} data-testid="view-all-orders-toggle" />
-                <Label htmlFor="viewAll" className="text-sm cursor-pointer">View All Orders</Label>
-              </div>
-              <div className="relative w-full sm:w-64">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search orders..."
-                  className="pl-9"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  data-testid="order-search-input"
-                />
-              </div>
-            </div>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-lg">Recent Orders</CardTitle>
+            <Link to="/all-orders">
+              <Button variant="outline" size="sm" data-testid="view-all-orders-link">View All Orders</Button>
+            </Link>
           </div>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {loading ? (
             <div className="text-center py-8 text-muted-foreground">Loading...</div>
-          ) : filtered.length === 0 ? (
+          ) : recentOrders.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              No orders found. Create your first order!
+              No orders yet. Create your first order!
             </div>
           ) : (
             <Table>
@@ -190,7 +189,7 @@ export default function TelecallerDashboard() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.slice(0, 50).map((order) => (
+                {recentOrders.map((order) => (
                   <TableRow key={order.id} data-testid={`order-row-${order.order_number}`}>
                     <TableCell className="font-mono font-medium text-sm">{order.order_number}</TableCell>
                     <TableCell className="text-sm">{order.customer_name}</TableCell>

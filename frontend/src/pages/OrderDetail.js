@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { ArrowLeft, Package, Truck, ClipboardList, Check, Phone, Mail, Ban, Edit, Printer } from "lucide-react";
+import { ArrowLeft, Package, Truck, ClipboardList, Check, Phone, Mail, Trash2, Edit, Printer } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,8 +40,8 @@ export default function OrderDetail() {
   const [order, setOrder] = useState(null);
   const [customer, setCustomer] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [showCancelConfirm1, setShowCancelConfirm1] = useState(false);
-  const [showCancelConfirm2, setShowCancelConfirm2] = useState(false);
+  const [showDeleteConfirm1, setShowDeleteConfirm1] = useState(false);
+  const [showDeleteConfirm2, setShowDeleteConfirm2] = useState(false);
   const [settings, setSettings] = useState({ show_formulation: false });
   const [showPaymentEdit, setShowPaymentEdit] = useState(false);
   const [paymentForm, setPaymentForm] = useState({ payment_status: "unpaid", amount_paid: 0 });
@@ -65,12 +65,13 @@ export default function OrderDetail() {
     finally { setLoading(false); }
   };
 
-  const handleCancel = async () => {
+  const handleDelete = async () => {
     try {
-      await api.put(`/orders/${orderId}/cancel`);
-      toast.success("Order cancelled");
-      setShowCancelConfirm2(false);
-      loadOrder();
+      await api.delete(`/orders/${orderId}`);
+      toast.success("Order permanently deleted");
+      setShowDeleteConfirm2(false);
+      // Navigate back since order no longer exists
+      window.history.back();
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
   };
 
@@ -90,7 +91,8 @@ export default function OrderDetail() {
   };
 
   const handlePrint = () => {
-    window.open(`${backendUrl}/api/orders/${orderId}/print`, '_blank');
+    const token = localStorage.getItem("token");
+    window.open(`${backendUrl}/api/orders/${orderId}/print?token=${token}`, '_blank');
   };
 
   if (loading) return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
@@ -121,9 +123,9 @@ export default function OrderDetail() {
               <Printer className="w-4 h-4 mr-1" /> Print
             </Button>
           )}
-          {order.status !== "cancelled" && (isAdmin || user?.role === "telecaller") && (
-            <Button variant="destructive" size="sm" onClick={() => setShowCancelConfirm1(true)} data-testid="cancel-order-btn">
-              <Ban className="w-4 h-4 mr-1" /> Cancel
+          {(isAdmin || user?.role === "telecaller") && (
+            <Button variant="destructive" size="sm" onClick={() => setShowDeleteConfirm1(true)} data-testid="delete-order-btn">
+              <Trash2 className="w-4 h-4 mr-1" /> Delete
             </Button>
           )}
         </div>
@@ -366,26 +368,26 @@ export default function OrderDetail() {
         </Card>
       )}
 
-      {/* Cancel Confirmation 1 */}
-      <Dialog open={showCancelConfirm1} onOpenChange={setShowCancelConfirm1}>
+      {/* Delete Confirmation 1 */}
+      <Dialog open={showDeleteConfirm1} onOpenChange={setShowDeleteConfirm1}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Cancel Order {order.order_number}?</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">Are you sure you want to cancel this order?</p>
+          <DialogHeader><DialogTitle>Delete Order {order.order_number}?</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">This will permanently delete the order and all its related data (items, payment details, dispatch details). This action cannot be undone.</p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCancelConfirm1(false)}>No, Keep</Button>
-            <Button variant="destructive" onClick={() => { setShowCancelConfirm1(false); setShowCancelConfirm2(true); }} data-testid="cancel-confirm-1">Yes, Cancel</Button>
+            <Button variant="outline" onClick={() => setShowDeleteConfirm1(false)}>No, Keep</Button>
+            <Button variant="destructive" onClick={() => { setShowDeleteConfirm1(false); setShowDeleteConfirm2(true); }} data-testid="delete-confirm-1">Yes, Delete</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Cancel Confirmation 2 */}
-      <Dialog open={showCancelConfirm2} onOpenChange={setShowCancelConfirm2}>
+      {/* Delete Confirmation 2 */}
+      <Dialog open={showDeleteConfirm2} onOpenChange={setShowDeleteConfirm2}>
         <DialogContent>
           <DialogHeader><DialogTitle>Final Confirmation</DialogTitle></DialogHeader>
-          <p className="text-sm text-destructive font-medium">Order {order.order_number} will be permanently cancelled. Are you sure?</p>
+          <p className="text-sm text-destructive font-medium">Order {order.order_number} and ALL related data will be PERMANENTLY deleted. This cannot be reversed. Are you absolutely sure?</p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCancelConfirm2(false)}>Go Back</Button>
-            <Button variant="destructive" onClick={handleCancel} data-testid="cancel-confirm-2">Yes, Cancel Order</Button>
+            <Button variant="outline" onClick={() => setShowDeleteConfirm2(false)}>Go Back</Button>
+            <Button variant="destructive" onClick={handleDelete} data-testid="delete-confirm-2">Yes, Permanently Delete</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

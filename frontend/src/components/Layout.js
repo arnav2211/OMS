@@ -16,21 +16,25 @@ import {
 const NAV_ITEMS = {
   telecaller: [
     { label: "Dashboard", icon: Home, path: "/" },
+    { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Create Order", icon: Plus, path: "/create-order" },
     { label: "Customers", icon: Users, path: "/customers" },
     { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
   ],
   packaging: [
     { label: "Dashboard", icon: Home, path: "/" },
+    { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Packaging Queue", icon: Package, path: "/packaging" },
     { label: "Dispatch", icon: Truck, path: "/dispatch" },
   ],
   dispatch: [
     { label: "Dashboard", icon: Home, path: "/" },
+    { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Dispatch Queue", icon: Truck, path: "/dispatch" },
   ],
   admin: [
     { label: "Dashboard", icon: Home, path: "/" },
+    { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Create Order", icon: Plus, path: "/create-order" },
     { label: "Customers", icon: Users, path: "/customers" },
     { label: "Proforma Invoice", icon: FileText, path: "/proforma" },

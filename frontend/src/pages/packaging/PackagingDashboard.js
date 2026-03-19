@@ -159,7 +159,8 @@ export default function PackagingDashboard() {
 
   const backendUrl = process.env.REACT_APP_BACKEND_URL;
   const handlePrint = (orderId) => {
-    window.open(`${backendUrl}/api/orders/${orderId}/print`, '_blank');
+    const token = localStorage.getItem("token");
+    window.open(`${backendUrl}/api/orders/${orderId}/print?token=${token}`, '_blank');
   };
 
   return (

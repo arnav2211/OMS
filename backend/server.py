@@ -170,6 +170,17 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+async def get_user_from_token_param(token: str):
+    """Authenticate user from a query parameter token (for endpoints opened in new tabs like PDF print)."""
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
+        if not user or not user.get("active", True):
+            raise HTTPException(status_code=401, detail="User not found or inactive")
+        return user
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
 async def require_admin(user=Depends(get_current_user)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
@@ -473,14 +484,14 @@ async def list_orders(
     user=Depends(get_current_user)
 ):
     query = {}
-    # Role-based filtering
-    if user["role"] == "telecaller":
-        if not view_all:
+    # Role-based filtering when NOT viewing all
+    if not view_all:
+        if user["role"] == "telecaller":
             query["telecaller_id"] = user["id"]
-    elif user["role"] == "packaging":
-        query["status"] = {"$in": ["new", "packaging", "packed", "dispatched"]}
-    elif user["role"] == "dispatch":
-        query["status"] = {"$in": ["packed", "dispatched"]}
+        elif user["role"] == "packaging":
+            query["status"] = {"$in": ["new", "packaging", "packed", "dispatched"]}
+        elif user["role"] == "dispatch":
+            query["status"] = {"$in": ["packed", "dispatched"]}
 
     if status:
         query["status"] = status
@@ -500,12 +511,20 @@ async def list_orders(
 
     orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
-    # For non-admin users viewing all orders, hide telecaller info
+    # For non-admin users: hide telecaller info and formulations when viewing all
     if user["role"] != "admin":
         for o in orders:
-            if view_all or o.get("telecaller_id") != user["id"]:
+            # Hide executive name for all non-admin when viewing all orders
+            if view_all:
                 o.pop("telecaller_name", None)
                 o.pop("telecaller_id", None)
+            elif o.get("telecaller_id") != user.get("id"):
+                o.pop("telecaller_name", None)
+                o.pop("telecaller_id", None)
+            # For telecaller and dispatch viewing all: strip formulations
+            if view_all and user["role"] in ["telecaller", "dispatch"]:
+                for item in o.get("items", []):
+                    item.pop("formulation", None)
 
     return orders
 
@@ -624,22 +643,18 @@ async def update_dispatch(order_id: str, req: DispatchUpdate, user=Depends(get_c
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated
 
-# Order Cancel
-@api_router.put("/orders/{order_id}/cancel")
-async def cancel_order(order_id: str, user=Depends(get_current_user)):
+# Order Delete (permanent)
+@api_router.delete("/orders/{order_id}")
+async def delete_order(order_id: str, user=Depends(get_current_user)):
     if user["role"] not in ["admin", "telecaller"]:
-        raise HTTPException(status_code=403, detail="Only admin or telecaller can cancel")
+        raise HTTPException(status_code=403, detail="Only admin or telecaller can delete")
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    if order["status"] == "cancelled":
-        raise HTTPException(status_code=400, detail="Order already cancelled")
-    await db.orders.update_one(
-        {"id": order_id},
-        {"$set": {"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
-    updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
-    return updated
+    result = await db.orders.delete_one({"id": order_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return {"message": f"Order {order.get('order_number', '')} permanently deleted"}
 
 # Packaging Staff Management
 @api_router.get("/packaging-staff")
@@ -800,13 +815,22 @@ async def telecaller_sales(
     exclude_gst: Optional[bool] = False,
     exclude_shipping: Optional[bool] = False,
     telecaller_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     user=Depends(get_current_user)
 ):
     # If admin provides telecaller_id, use that; otherwise use own id
     target_id = telecaller_id if (telecaller_id and user["role"] == "admin") else user["id"]
     query = {"telecaller_id": target_id, "status": {"$ne": "cancelled"}}
     now = datetime.now(timezone.utc)
-    if period == "today":
+
+    # Custom date range takes priority over period
+    if date_from or date_to:
+        if date_from:
+            query.setdefault("created_at", {})["$gte"] = date_from
+        if date_to:
+            query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
+    elif period == "today":
         query["created_at"] = {"$gte": now.replace(hour=0, minute=0, second=0).isoformat()}
     elif period == "week":
         week_start = now - timedelta(days=now.weekday())
@@ -925,9 +949,12 @@ async def reset_data(admin=Depends(require_admin)):
     await db.counters.update_one({"_id": "pi_number"}, {"$set": {"seq": 0}})
     return {"message": "All orders, customers, and proforma invoices have been cleared"}
 
-# Order Print (Packaging Print)
+# Order Print (Packaging Print) - accepts token via query param for new-tab access
 @api_router.get("/orders/{order_id}/print")
-async def print_order(order_id: str, size: str = "A4", user=Depends(get_current_user)):
+async def print_order(order_id: str, size: str = "A4", token: str = ""):
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user = await get_user_from_token_param(token)
     if user["role"] not in ["admin", "packaging"]:
         raise HTTPException(status_code=403, detail="Admin or packaging only")
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
