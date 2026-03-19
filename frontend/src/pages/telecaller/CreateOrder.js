@@ -1,0 +1,639 @@
+import { useState, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import api from "@/lib/api";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
+import { Plus, Trash2, Search, UserPlus } from "lucide-react";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+
+const UNITS = ["mL", "L", "g", "Kg", "pcs", ""];
+const SHIPPING_METHODS = [
+  { value: "transport", label: "Transport" },
+  { value: "courier", label: "Courier" },
+  { value: "porter", label: "Porter" },
+  { value: "self_arranged", label: "Self-Arranged Shipping" },
+  { value: "office_collection", label: "Office Collection" },
+];
+const GST_RATES = [0, 5, 18];
+
+const emptyItem = () => ({
+  product_name: "", qty: 0, unit: "", rate: 0, amount: 0, gst_rate: 0, gst_amount: 0, total: 0,
+});
+
+const emptyAddress = () => ({ address: "", city: "", state: "", pincode: "" });
+
+export default function CreateOrder() {
+  const navigate = useNavigate();
+  const [customers, setCustomers] = useState([]);
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [showNewCustomer, setShowNewCustomer] = useState(false);
+  const [newCust, setNewCust] = useState({
+    name: "", gst_no: "", billing_address: emptyAddress(), shipping_address: emptyAddress(),
+    phone_numbers: [""], email: "",
+  });
+  const [sameAsBilling, setSameAsBilling] = useState(true);
+  const [purpose, setPurpose] = useState("");
+  const [items, setItems] = useState([emptyItem()]);
+  const [gstApplicable, setGstApplicable] = useState(false);
+  const [shippingMethod, setShippingMethod] = useState("");
+  const [courierName, setCourierName] = useState("");
+  const [shippingCharge, setShippingCharge] = useState(0);
+  const [remark, setRemark] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [gstLoading, setGstLoading] = useState(false);
+
+  useEffect(() => {
+    api.get("/customers").then((r) => setCustomers(r.data)).catch(() => {});
+  }, []);
+
+  const filteredCustomers = customers.filter(
+    (c) =>
+      c.name?.toLowerCase().includes(customerSearch.toLowerCase()) ||
+      c.phone_numbers?.some((p) => p.includes(customerSearch)) ||
+      c.gst_no?.toLowerCase().includes(customerSearch.toLowerCase())
+  );
+
+  // Item calculations
+  const updateItem = (idx, field, value) => {
+    setItems((prev) => {
+      const updated = [...prev];
+      const item = { ...updated[idx], [field]: value };
+      if (field === "rate" && item.qty > 0) {
+        item.amount = +(item.rate * item.qty).toFixed(2);
+      } else if (field === "amount" && item.qty > 0) {
+        item.rate = +(item.amount / item.qty).toFixed(2);
+      } else if (field === "qty") {
+        if (item.rate > 0) item.amount = +(item.rate * item.qty).toFixed(2);
+      }
+      if (gstApplicable && item.gst_rate > 0) {
+        item.gst_amount = +(item.amount * item.gst_rate / 100).toFixed(2);
+      } else {
+        item.gst_amount = 0;
+      }
+      item.total = +(item.amount + item.gst_amount).toFixed(2);
+      updated[idx] = item;
+      return updated;
+    });
+  };
+
+  const addItem = () => setItems((prev) => [...prev, emptyItem()]);
+  const removeItem = (idx) => {
+    if (items.length <= 1) return;
+    setItems((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  // Recalc GST when toggle changes
+  useEffect(() => {
+    setItems((prev) =>
+      prev.map((item) => {
+        const gst_amount = gstApplicable && item.gst_rate > 0
+          ? +(item.amount * item.gst_rate / 100).toFixed(2) : 0;
+        return { ...item, gst_amount, total: +(item.amount + gst_amount).toFixed(2) };
+      })
+    );
+  }, [gstApplicable]);
+
+  // Totals
+  const subtotal = items.reduce((s, i) => s + i.amount, 0);
+  const totalItemGst = items.reduce((s, i) => s + i.gst_amount, 0);
+  const shippingGst = gstApplicable && shippingCharge > 0 ? +(shippingCharge * 0.18).toFixed(2) : 0;
+  const grandTotal = +(subtotal + totalItemGst + shippingCharge + shippingGst).toFixed(2);
+
+  // GST Verification
+  const verifyGst = async (gstNo) => {
+    if (!gstNo || gstNo.length < 15) return;
+    setGstLoading(true);
+    try {
+      const res = await api.get(`/gst-verify/${gstNo}`);
+      const data = res.data;
+      if (data.state_name) {
+        toast.success(`GST Valid - ${data.state_name}`);
+        if (data.legal_name || data.trade_name) {
+          setNewCust((p) => ({
+            ...p,
+            name: p.name || data.trade_name || data.legal_name || "",
+            billing_address: {
+              ...p.billing_address,
+              state: data.state_name,
+              address: data.address || p.billing_address.address,
+            },
+          }));
+        } else {
+          setNewCust((p) => ({
+            ...p,
+            billing_address: { ...p.billing_address, state: data.state_name },
+          }));
+        }
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Invalid GST number");
+    } finally {
+      setGstLoading(false);
+    }
+  };
+
+  // Create customer
+  const createCustomer = async () => {
+    if (!newCust.name) return toast.error("Customer name is required");
+    if (newCust.phone_numbers.filter(Boolean).length === 0) return toast.error("At least one phone number is required");
+    try {
+      const payload = {
+        ...newCust,
+        phone_numbers: newCust.phone_numbers.filter(Boolean),
+        shipping_address: sameAsBilling ? newCust.billing_address : newCust.shipping_address,
+      };
+      const res = await api.post("/customers", payload);
+      setSelectedCustomer(res.data);
+      setCustomers((prev) => [res.data, ...prev]);
+      setShowNewCustomer(false);
+      toast.success("Customer created");
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to create customer");
+    }
+  };
+
+  // Submit order
+  const handleSubmit = async () => {
+    if (!selectedCustomer) return toast.error("Select a customer");
+    if (items.some((i) => !i.product_name)) return toast.error("All items need a product name");
+    if (shippingMethod === "courier" && !courierName) return toast.error("Enter courier name");
+
+    setSubmitting(true);
+    try {
+      const payload = {
+        customer_id: selectedCustomer.id,
+        purpose,
+        items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total }) => ({
+          product_name, qty, unit, rate, amount, gst_rate, gst_amount, total,
+        })),
+        gst_applicable: gstApplicable,
+        shipping_method: shippingMethod,
+        courier_name: courierName,
+        shipping_charge: shippingCharge,
+        shipping_gst: shippingGst,
+        remark,
+      };
+      const res = await api.post("/orders", payload);
+      toast.success(`Order ${res.data.order_number} created!`);
+      navigate(`/orders/${res.data.id}`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to create order");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="max-w-5xl mx-auto space-y-6" data-testid="create-order-page">
+      <h1 className="text-2xl font-bold tracking-tight">Create New Order</h1>
+
+      {/* Customer Selection */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Customer</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {selectedCustomer ? (
+            <div className="flex items-center justify-between p-3 rounded-lg bg-secondary">
+              <div>
+                <p className="font-medium">{selectedCustomer.name}</p>
+                <p className="text-sm text-muted-foreground">
+                  {selectedCustomer.phone_numbers?.join(", ")} {selectedCustomer.gst_no && `| GST: ${selectedCustomer.gst_no}`}
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setSelectedCustomer(null)} data-testid="change-customer-btn">
+                Change
+              </Button>
+            </div>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search by name, phone, or GST..."
+                    className="pl-9"
+                    value={customerSearch}
+                    onChange={(e) => setCustomerSearch(e.target.value)}
+                    data-testid="customer-search-input"
+                  />
+                </div>
+                <Button variant="outline" onClick={() => setShowNewCustomer(true)} data-testid="new-customer-btn">
+                  <UserPlus className="w-4 h-4 mr-2" /> New Customer
+                </Button>
+              </div>
+              {customerSearch && (
+                <div className="border rounded-lg max-h-48 overflow-y-auto">
+                  {filteredCustomers.length === 0 ? (
+                    <p className="p-3 text-sm text-muted-foreground">No customers found</p>
+                  ) : (
+                    filteredCustomers.map((c) => (
+                      <button
+                        key={c.id}
+                        className="w-full text-left px-3 py-2 hover:bg-accent transition-colors border-b last:border-0"
+                        onClick={() => { setSelectedCustomer(c); setCustomerSearch(""); }}
+                        data-testid={`select-customer-${c.id}`}
+                      >
+                        <p className="text-sm font-medium">{c.name}</p>
+                        <p className="text-xs text-muted-foreground">{c.phone_numbers?.join(", ")}</p>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Purpose */}
+      <Card>
+        <CardContent className="pt-6">
+          <Label>Purpose / Requirement</Label>
+          <Textarea
+            placeholder="Enter the purpose for which the customer needs the products..."
+            className="mt-2"
+            value={purpose}
+            onChange={(e) => setPurpose(e.target.value)}
+            data-testid="order-purpose-input"
+          />
+        </CardContent>
+      </Card>
+
+      {/* GST Toggle */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex items-center gap-3">
+            <Checkbox
+              id="gst"
+              checked={gstApplicable}
+              onCheckedChange={setGstApplicable}
+              data-testid="gst-applicable-checkbox"
+            />
+            <Label htmlFor="gst" className="cursor-pointer">GST Applicable</Label>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Items */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">Order Items</CardTitle>
+            <Button variant="outline" size="sm" onClick={addItem} data-testid="add-item-btn">
+              <Plus className="w-4 h-4 mr-1" /> Add Item
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {items.map((item, idx) => (
+            <div key={idx} className="p-4 rounded-lg border bg-secondary/30 space-y-3" data-testid={`order-item-${idx}`}>
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-muted-foreground">Item {idx + 1}</span>
+                {items.length > 1 && (
+                  <Button variant="ghost" size="icon" onClick={() => removeItem(idx)} data-testid={`remove-item-${idx}`}>
+                    <Trash2 className="w-4 h-4 text-destructive" />
+                  </Button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+                <div className="col-span-2">
+                  <Label className="text-xs">Product Name</Label>
+                  <Input
+                    value={item.product_name}
+                    onChange={(e) => updateItem(idx, "product_name", e.target.value)}
+                    placeholder="Product name"
+                    data-testid={`item-name-${idx}`}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Qty</Label>
+                  <Input
+                    type="number"
+                    value={item.qty || ""}
+                    onChange={(e) => updateItem(idx, "qty", +e.target.value)}
+                    data-testid={`item-qty-${idx}`}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Unit</Label>
+                  <Select value={item.unit} onValueChange={(v) => updateItem(idx, "unit", v)}>
+                    <SelectTrigger data-testid={`item-unit-${idx}`}>
+                      <SelectValue placeholder="Unit" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {UNITS.map((u) => (
+                        <SelectItem key={u || "blank"} value={u || "blank"}>{u || "(none)"}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">Rate</Label>
+                  <Input
+                    type="number"
+                    value={item.rate || ""}
+                    onChange={(e) => updateItem(idx, "rate", +e.target.value)}
+                    data-testid={`item-rate-${idx}`}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Amount</Label>
+                  <Input
+                    type="number"
+                    value={item.amount || ""}
+                    onChange={(e) => updateItem(idx, "amount", +e.target.value)}
+                    data-testid={`item-amount-${idx}`}
+                  />
+                </div>
+              </div>
+              {gstApplicable && (
+                <div className="flex items-center gap-3">
+                  <div className="w-32">
+                    <Label className="text-xs">GST Rate</Label>
+                    <Select
+                      value={String(item.gst_rate)}
+                      onValueChange={(v) => updateItem(idx, "gst_rate", +v)}
+                    >
+                      <SelectTrigger data-testid={`item-gst-rate-${idx}`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {GST_RATES.map((r) => (
+                          <SelectItem key={r} value={String(r)}>{r}%</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs">GST Amt</Label>
+                    <p className="text-sm font-mono mt-1">{"\u20B9"}{item.gst_amount.toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Item Total</Label>
+                    <p className="text-sm font-mono font-medium mt-1">{"\u20B9"}{item.total.toFixed(2)}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* Shipping */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Shipping Details</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <Label>Shipping Method</Label>
+              <Select value={shippingMethod} onValueChange={setShippingMethod}>
+                <SelectTrigger data-testid="shipping-method-select">
+                  <SelectValue placeholder="Select method" />
+                </SelectTrigger>
+                <SelectContent>
+                  {SHIPPING_METHODS.map((m) => (
+                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {shippingMethod === "courier" && (
+              <div>
+                <Label>Courier Name</Label>
+                <Input
+                  value={courierName}
+                  onChange={(e) => setCourierName(e.target.value)}
+                  placeholder="e.g. DTDC, BlueDart"
+                  data-testid="courier-name-input"
+                />
+              </div>
+            )}
+            <div>
+              <Label>Shipping / Local Charge</Label>
+              <Input
+                type="number"
+                value={shippingCharge || ""}
+                onChange={(e) => setShippingCharge(+e.target.value)}
+                data-testid="shipping-charge-input"
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Remark */}
+      <Card>
+        <CardContent className="pt-6">
+          <Label>Remarks / Special Requests</Label>
+          <Textarea
+            placeholder="Any special instructions..."
+            className="mt-2"
+            value={remark}
+            onChange={(e) => setRemark(e.target.value)}
+            data-testid="order-remark-input"
+          />
+        </CardContent>
+      </Card>
+
+      {/* Summary */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Order Summary</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">{"\u20B9"}{subtotal.toFixed(2)}</span></div>
+            {gstApplicable && (
+              <div className="flex justify-between"><span className="text-muted-foreground">Item GST</span><span className="font-mono">{"\u20B9"}{totalItemGst.toFixed(2)}</span></div>
+            )}
+            {shippingCharge > 0 && (
+              <div className="flex justify-between"><span className="text-muted-foreground">Shipping</span><span className="font-mono">{"\u20B9"}{shippingCharge.toFixed(2)}</span></div>
+            )}
+            {shippingGst > 0 && (
+              <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST (18%)</span><span className="font-mono">{"\u20B9"}{shippingGst.toFixed(2)}</span></div>
+            )}
+            <Separator />
+            <div className="flex justify-between text-base font-bold">
+              <span>Grand Total</span><span className="font-mono">{"\u20B9"}{grandTotal.toFixed(2)}</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="flex justify-end gap-3">
+        <Button variant="outline" onClick={() => navigate(-1)} data-testid="cancel-order-btn">Cancel</Button>
+        <Button onClick={handleSubmit} disabled={submitting} className="rounded-lg min-w-[140px]" data-testid="submit-order-btn">
+          {submitting ? "Creating..." : "Create Order"}
+        </Button>
+      </div>
+
+      {/* New Customer Dialog */}
+      <Dialog open={showNewCustomer} onOpenChange={setShowNewCustomer}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>New Customer</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-2">
+                <Label>Customer / Company Name *</Label>
+                <Input value={newCust.name} onChange={(e) => setNewCust({ ...newCust, name: e.target.value })} data-testid="new-cust-name" />
+              </div>
+              <div className="col-span-2">
+                <Label>GST No.</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={newCust.gst_no}
+                    onChange={(e) => setNewCust({ ...newCust, gst_no: e.target.value.toUpperCase() })}
+                    placeholder="e.g. 27AABCU9603R1ZM"
+                    data-testid="new-cust-gst"
+                  />
+                  <Button
+                    variant="outline" size="sm"
+                    onClick={() => verifyGst(newCust.gst_no)}
+                    disabled={gstLoading}
+                    data-testid="verify-gst-btn"
+                  >
+                    {gstLoading ? "..." : "Verify"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <Separator />
+            <h4 className="text-sm font-semibold">Billing Address</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <Label className="text-xs">Address</Label>
+                <Input
+                  value={newCust.billing_address.address}
+                  onChange={(e) => setNewCust({ ...newCust, billing_address: { ...newCust.billing_address, address: e.target.value } })}
+                  data-testid="new-cust-billing-address"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">City</Label>
+                <Input
+                  value={newCust.billing_address.city}
+                  onChange={(e) => setNewCust({ ...newCust, billing_address: { ...newCust.billing_address, city: e.target.value } })}
+                  data-testid="new-cust-billing-city"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">State</Label>
+                <Input
+                  value={newCust.billing_address.state}
+                  onChange={(e) => setNewCust({ ...newCust, billing_address: { ...newCust.billing_address, state: e.target.value } })}
+                  data-testid="new-cust-billing-state"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Pincode</Label>
+                <Input
+                  value={newCust.billing_address.pincode}
+                  onChange={(e) => setNewCust({ ...newCust, billing_address: { ...newCust.billing_address, pincode: e.target.value } })}
+                  data-testid="new-cust-billing-pincode"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="sameAddr"
+                checked={sameAsBilling}
+                onCheckedChange={setSameAsBilling}
+                data-testid="same-as-billing-checkbox"
+              />
+              <Label htmlFor="sameAddr" className="cursor-pointer text-sm">Shipping address same as billing</Label>
+            </div>
+
+            {!sameAsBilling && (
+              <>
+                <h4 className="text-sm font-semibold">Shipping Address</h4>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="col-span-2">
+                    <Label className="text-xs">Address</Label>
+                    <Input
+                      value={newCust.shipping_address.address}
+                      onChange={(e) => setNewCust({ ...newCust, shipping_address: { ...newCust.shipping_address, address: e.target.value } })}
+                      data-testid="new-cust-shipping-address"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">City</Label>
+                    <Input
+                      value={newCust.shipping_address.city}
+                      onChange={(e) => setNewCust({ ...newCust, shipping_address: { ...newCust.shipping_address, city: e.target.value } })}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">State</Label>
+                    <Input
+                      value={newCust.shipping_address.state}
+                      onChange={(e) => setNewCust({ ...newCust, shipping_address: { ...newCust.shipping_address, state: e.target.value } })}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Pincode</Label>
+                    <Input
+                      value={newCust.shipping_address.pincode}
+                      onChange={(e) => setNewCust({ ...newCust, shipping_address: { ...newCust.shipping_address, pincode: e.target.value } })}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+
+            <Separator />
+            <h4 className="text-sm font-semibold">Contact</h4>
+            {newCust.phone_numbers.map((ph, i) => (
+              <div key={i} className="flex gap-2">
+                <Input
+                  value={ph}
+                  onChange={(e) => {
+                    const phones = [...newCust.phone_numbers];
+                    phones[i] = e.target.value;
+                    setNewCust({ ...newCust, phone_numbers: phones });
+                  }}
+                  placeholder="Phone number"
+                  data-testid={`new-cust-phone-${i}`}
+                />
+                {i === newCust.phone_numbers.length - 1 && (
+                  <Button variant="outline" size="icon" onClick={() => setNewCust({ ...newCust, phone_numbers: [...newCust.phone_numbers, ""] })}>
+                    <Plus className="w-4 h-4" />
+                  </Button>
+                )}
+              </div>
+            ))}
+            <div>
+              <Label className="text-xs">Email (optional)</Label>
+              <Input
+                type="email"
+                value={newCust.email}
+                onChange={(e) => setNewCust({ ...newCust, email: e.target.value })}
+                data-testid="new-cust-email"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowNewCustomer(false)}>Cancel</Button>
+            <Button onClick={createCustomer} data-testid="save-customer-btn">Save Customer</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
