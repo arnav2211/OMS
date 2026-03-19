@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { ArrowLeft, Package, Truck, ClipboardList, Check, MapPin, Phone, Mail, XCircle, Edit, Ban } from "lucide-react";
+import { ArrowLeft, Package, Truck, ClipboardList, Check, Phone, Mail, Ban, Edit, Printer } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -89,42 +89,52 @@ export default function OrderDetail() {
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
   };
 
+  const handlePrint = () => {
+    window.open(`${backendUrl}/api/orders/${orderId}/print`, '_blank');
+  };
+
   if (loading) return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
   if (!order) return <div className="text-center py-12 text-muted-foreground">Order not found</div>;
 
   const stepIndex = STEPS.findIndex((s) => s.key === order.status);
+  const isAdmin = user?.role === "admin";
 
   return (
     <div className="max-w-5xl mx-auto space-y-6" data-testid="order-detail">
-      <div className="flex items-center gap-4">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
         <Link to={-1}>
           <Button variant="ghost" size="icon" data-testid="back-btn"><ArrowLeft className="w-5 h-5" /></Button>
         </Link>
-        <div className="flex-1">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight">{order.order_number}</h1>
-            <Badge variant="secondary" className={`${STATUS_STYLES[order.status]} text-xs uppercase`}>
-              {order.status}
-            </Badge>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight">{order.order_number}</h1>
+            <Badge variant="secondary" className={`${STATUS_STYLES[order.status]} text-xs uppercase`}>{order.status}</Badge>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
             Created on {new Date(order.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}
-            {" by "}{order.telecaller_name}
+            {isAdmin && order.telecaller_name && ` by ${order.telecaller_name}`}
           </p>
         </div>
-        {order.status !== "cancelled" && (user?.role === "admin" || user?.role === "telecaller") && (
-          <Button variant="destructive" size="sm" onClick={() => setShowCancelConfirm1(true)} data-testid="cancel-order-btn">
-            <Ban className="w-4 h-4 mr-1" /> Cancel Order
-          </Button>
-        )}
+        <div className="flex gap-2">
+          {(isAdmin || user?.role === "packaging") && (
+            <Button variant="outline" size="sm" onClick={handlePrint} data-testid="print-order-btn">
+              <Printer className="w-4 h-4 mr-1" /> Print
+            </Button>
+          )}
+          {order.status !== "cancelled" && (isAdmin || user?.role === "telecaller") && (
+            <Button variant="destructive" size="sm" onClick={() => setShowCancelConfirm1(true)} data-testid="cancel-order-btn">
+              <Ban className="w-4 h-4 mr-1" /> Cancel
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Payment Status Bar */}
       {order.payment_status && (
         <Card>
           <CardContent className="pt-4 pb-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-3 flex-wrap">
                 <span className="text-sm font-medium text-muted-foreground">Payment:</span>
                 <Badge variant="secondary" className={`${PAYMENT_COLORS[order.payment_status]} text-xs uppercase`}>
                   {order.payment_status === "partial" ? "Partial Paid" : order.payment_status === "full" ? "Fully Paid" : "Unpaid"}
@@ -136,7 +146,7 @@ export default function OrderDetail() {
                   </span>
                 )}
               </div>
-              {(user?.role === "admin" || user?.role === "telecaller") && (
+              {(isAdmin || user?.role === "telecaller") && (
                 <Button variant="outline" size="sm" onClick={() => {
                   setPaymentForm({ payment_status: order.payment_status || "unpaid", amount_paid: order.amount_paid || 0 });
                   setShowPaymentEdit(true);
@@ -150,28 +160,21 @@ export default function OrderDetail() {
       {/* Progress Tracker */}
       <Card>
         <CardContent className="pt-6">
-          <div className="flex items-center justify-between px-4">
+          <div className="flex items-center justify-between px-2 sm:px-4">
             {STEPS.map((step, idx) => {
               const Icon = step.icon;
               const status = idx < stepIndex ? "completed" : idx === stepIndex ? "current" : "pending";
               return (
                 <div key={step.key} className="flex flex-col items-center relative flex-1">
                   {idx > 0 && (
-                    <div
-                      className={`absolute top-4 -left-1/2 w-full h-0.5 ${
-                        idx <= stepIndex ? "bg-primary" : "bg-muted"
-                      }`}
-                      style={{ right: "50%", left: "-50%" }}
-                    />
+                    <div className={`absolute top-4 -left-1/2 w-full h-0.5 ${idx <= stepIndex ? "bg-primary" : "bg-muted"}`} style={{ right: "50%", left: "-50%" }} />
                   )}
                   <div className={`progress-step ${status}`}>
                     <div className="step-dot relative z-10">
                       {status === "completed" ? <Check className="w-4 h-4" /> : <Icon className="w-4 h-4" />}
                     </div>
                   </div>
-                  <p className={`text-xs mt-2 font-medium ${status === "pending" ? "text-muted-foreground" : "text-foreground"}`}>
-                    {step.label}
-                  </p>
+                  <p className={`text-xs mt-2 font-medium text-center ${status === "pending" ? "text-muted-foreground" : "text-foreground"}`}>{step.label}</p>
                 </div>
               );
             })}
@@ -179,26 +182,24 @@ export default function OrderDetail() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Customer Info */}
         <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Customer Details</CardTitle>
-          </CardHeader>
+          <CardHeader className="pb-3"><CardTitle className="text-base">Customer Details</CardTitle></CardHeader>
           <CardContent className="space-y-3 text-sm">
             <p className="font-medium text-base">{order.customer_name}</p>
             {customer && (
               <>
                 {customer.phone_numbers?.length > 0 && (
                   <div className="flex items-center gap-2 text-muted-foreground">
-                    <Phone className="w-3.5 h-3.5" />
-                    {customer.phone_numbers.join(", ")}
+                    <Phone className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span className="break-all">{customer.phone_numbers.join(", ")}</span>
                   </div>
                 )}
                 {customer.email && (
                   <div className="flex items-center gap-2 text-muted-foreground">
-                    <Mail className="w-3.5 h-3.5" />
-                    {customer.email}
+                    <Mail className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span className="break-all">{customer.email}</span>
                   </div>
                 )}
                 {customer.gst_no && (
@@ -224,11 +225,9 @@ export default function OrderDetail() {
 
         {/* Shipping & Dispatch */}
         <Card className="lg:col-span-2">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Shipping & Dispatch</CardTitle>
-          </CardHeader>
+          <CardHeader className="pb-3"><CardTitle className="text-base">Shipping & Dispatch</CardTitle></CardHeader>
           <CardContent className="space-y-3 text-sm">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <p className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Method</p>
                 <p className="capitalize mt-1">{order.shipping_method?.replace("_", " ") || "N/A"}</p>
@@ -239,18 +238,22 @@ export default function OrderDetail() {
                   <p className="mt-1">{order.courier_name}</p>
                 </div>
               )}
+              {order.transporter_name && (
+                <div>
+                  <p className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Transporter</p>
+                  <p className="mt-1">{order.transporter_name}</p>
+                </div>
+              )}
             </div>
-            {order.dispatch?.lr_no && (
+            {(order.dispatch?.lr_no || order.dispatch?.dispatched_at) && (
               <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800">
                 <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">Dispatch Info</p>
-                <div className="grid grid-cols-2 gap-2 mt-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
                   {order.dispatch.courier_name && <div><span className="text-muted-foreground">Courier:</span> {order.dispatch.courier_name}</div>}
                   {order.dispatch.transporter_name && <div><span className="text-muted-foreground">Transporter:</span> {order.dispatch.transporter_name}</div>}
-                  <div><span className="text-muted-foreground">LR No:</span> <span className="font-mono">{order.dispatch.lr_no}</span></div>
+                  {order.dispatch.lr_no && <div><span className="text-muted-foreground">LR No:</span> <span className="font-mono">{order.dispatch.lr_no}</span></div>}
                   {order.dispatch.dispatched_by && <div><span className="text-muted-foreground">Dispatched By:</span> {order.dispatch.dispatched_by}</div>}
-                  {order.dispatch.dispatched_at && (
-                    <div><span className="text-muted-foreground">Date:</span> {new Date(order.dispatch.dispatched_at).toLocaleDateString("en-IN")}</div>
-                  )}
+                  {order.dispatch.dispatched_at && <div><span className="text-muted-foreground">Date:</span> {new Date(order.dispatch.dispatched_at).toLocaleDateString("en-IN")}</div>}
                 </div>
               </div>
             )}
@@ -272,19 +275,17 @@ export default function OrderDetail() {
 
       {/* Order Items */}
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Order Items</CardTitle>
-        </CardHeader>
+        <CardHeader className="pb-3"><CardTitle className="text-base">Order Items</CardTitle></CardHeader>
         <CardContent>
           <div className="space-y-3">
             {order.items?.map((item, idx) => (
-              <div key={idx} className="flex items-center justify-between p-3 rounded-lg border" data-testid={`detail-item-${idx}`}>
+              <div key={idx} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 rounded-lg border gap-2" data-testid={`detail-item-${idx}`}>
                 <div className="flex-1">
                   <p className="font-medium">{item.product_name}</p>
                   <p className="text-sm text-muted-foreground">
                     {item.qty} {item.unit !== "blank" ? item.unit : ""} @ {"\u20B9"}{item.rate?.toFixed(2)}
                   </p>
-                  {item.formulation && (user?.role === "admin" || settings.show_formulation) && (
+                  {item.formulation && (isAdmin || settings.show_formulation) && (
                     <p className="text-xs mt-1 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded px-2 py-1 inline-block">
                       Formulation: {item.formulation}
                     </p>
@@ -299,60 +300,37 @@ export default function OrderDetail() {
               </div>
             ))}
           </div>
-
           <Separator className="my-4" />
-
           <div className="space-y-2 text-sm max-w-xs ml-auto">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Subtotal</span>
-              <span className="font-mono">{"\u20B9"}{order.subtotal?.toFixed(2)}</span>
-            </div>
-            {order.total_gst > 0 && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">GST</span>
-                <span className="font-mono">{"\u20B9"}{order.total_gst?.toFixed(2)}</span>
-              </div>
-            )}
-            {order.shipping_charge > 0 && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Shipping</span>
-                <span className="font-mono">{"\u20B9"}{order.shipping_charge?.toFixed(2)}</span>
-              </div>
-            )}
-            {order.shipping_gst > 0 && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Shipping GST</span>
-                <span className="font-mono">{"\u20B9"}{order.shipping_gst?.toFixed(2)}</span>
-              </div>
-            )}
+            <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">{"\u20B9"}{order.subtotal?.toFixed(2)}</span></div>
+            {order.total_gst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-mono">{"\u20B9"}{order.total_gst?.toFixed(2)}</span></div>}
+            {order.shipping_charge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping</span><span className="font-mono">{"\u20B9"}{order.shipping_charge?.toFixed(2)}</span></div>}
+            {order.shipping_gst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST</span><span className="font-mono">{"\u20B9"}{order.shipping_gst?.toFixed(2)}</span></div>}
             <Separator />
-            <div className="flex justify-between text-base font-bold">
-              <span>Grand Total</span>
-              <span className="font-mono">{"\u20B9"}{order.grand_total?.toFixed(2)}</span>
-            </div>
+            <div className="flex justify-between text-base font-bold"><span>Grand Total</span><span className="font-mono">{"\u20B9"}{order.grand_total?.toFixed(2)}</span></div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Packaging Images */}
-      {(order.packaging?.order_images?.length > 0 || order.packaging?.packed_box_images?.length > 0 || Object.keys(order.packaging?.item_images || {}).length > 0) && (
+      {/* Packaging Info */}
+      {(order.packaging?.order_images?.length > 0 || order.packaging?.packed_box_images?.length > 0 || Object.keys(order.packaging?.item_images || {}).length > 0 || order.packaging?.item_packed_by?.length > 0) && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Packaging Images</CardTitle>
-            {order.packaging?.packed_by && (
-              <CardDescription>Packed by: {order.packaging.packed_by}</CardDescription>
-            )}
+            <CardTitle className="text-base">Packaging Details</CardTitle>
+            <CardDescription className="space-y-1">
+              {order.packaging?.item_packed_by?.length > 0 && <span className="block">Item Packed By: {order.packaging.item_packed_by.join(", ")}</span>}
+              {order.packaging?.box_packed_by?.length > 0 && <span className="block">Box Packed By: {order.packaging.box_packed_by.join(", ")}</span>}
+              {order.packaging?.checked_by?.length > 0 && <span className="block">Checked By: {order.packaging.checked_by.join(", ")}</span>}
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
               {Object.entries(order.packaging?.item_images || {}).map(([idx, urls]) => (
                 <div key={idx}>
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-                    Item {+idx + 1}: {order.items?.[idx]?.product_name}
-                  </p>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Item {+idx + 1}: {order.items?.[idx]?.product_name}</p>
                   <div className="flex flex-wrap gap-2">
                     {urls.map((url, i) => (
-                      <a key={i} href={`${backendUrl}${url}`} target="_blank" rel="noreferrer" className="w-24 h-24 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-shadow">
+                      <a key={i} href={`${backendUrl}${url}`} target="_blank" rel="noreferrer" className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-shadow">
                         <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
                       </a>
                     ))}
@@ -364,7 +342,7 @@ export default function OrderDetail() {
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Order Images</p>
                   <div className="flex flex-wrap gap-2">
                     {order.packaging.order_images.map((url, i) => (
-                      <a key={i} href={`${backendUrl}${url}`} target="_blank" rel="noreferrer" className="w-24 h-24 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-shadow">
+                      <a key={i} href={`${backendUrl}${url}`} target="_blank" rel="noreferrer" className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-shadow">
                         <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
                       </a>
                     ))}
@@ -376,7 +354,7 @@ export default function OrderDetail() {
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Packed Box</p>
                   <div className="flex flex-wrap gap-2">
                     {order.packaging.packed_box_images.map((url, i) => (
-                      <a key={i} href={`${backendUrl}${url}`} target="_blank" rel="noreferrer" className="w-24 h-24 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-shadow">
+                      <a key={i} href={`${backendUrl}${url}`} target="_blank" rel="noreferrer" className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-shadow">
                         <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
                       </a>
                     ))}
@@ -392,7 +370,7 @@ export default function OrderDetail() {
       <Dialog open={showCancelConfirm1} onOpenChange={setShowCancelConfirm1}>
         <DialogContent>
           <DialogHeader><DialogTitle>Cancel Order {order.order_number}?</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">Are you sure you want to cancel this order? This action will mark the order as cancelled.</p>
+          <p className="text-sm text-muted-foreground">Are you sure you want to cancel this order?</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCancelConfirm1(false)}>No, Keep</Button>
             <Button variant="destructive" onClick={() => { setShowCancelConfirm1(false); setShowCancelConfirm2(true); }} data-testid="cancel-confirm-1">Yes, Cancel</Button>
@@ -404,7 +382,7 @@ export default function OrderDetail() {
       <Dialog open={showCancelConfirm2} onOpenChange={setShowCancelConfirm2}>
         <DialogContent>
           <DialogHeader><DialogTitle>Final Confirmation</DialogTitle></DialogHeader>
-          <p className="text-sm text-destructive font-medium">This is the final warning. Order {order.order_number} will be permanently cancelled. Are you absolutely sure?</p>
+          <p className="text-sm text-destructive font-medium">Order {order.order_number} will be permanently cancelled. Are you sure?</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCancelConfirm2(false)}>Go Back</Button>
             <Button variant="destructive" onClick={handleCancel} data-testid="cancel-confirm-2">Yes, Cancel Order</Button>

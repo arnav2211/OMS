@@ -150,10 +150,9 @@ export default function Customers() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="text-xs uppercase tracking-wider">Name</TableHead>
-                  <TableHead className="text-xs uppercase tracking-wider">Phone</TableHead>
-                  <TableHead className="text-xs uppercase tracking-wider">GST</TableHead>
-                  <TableHead className="text-xs uppercase tracking-wider">City</TableHead>
-                  <TableHead className="text-xs uppercase tracking-wider">City</TableHead>
+                  <TableHead className="text-xs uppercase tracking-wider hidden sm:table-cell">Phone</TableHead>
+                  <TableHead className="text-xs uppercase tracking-wider hidden sm:table-cell">GST</TableHead>
+                  <TableHead className="text-xs uppercase tracking-wider hidden sm:table-cell">City</TableHead>
                   <TableHead className="text-xs uppercase tracking-wider">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -162,9 +161,9 @@ export default function Customers() {
                   <>
                     <TableRow key={c.id} data-testid={`customer-row-${c.id}`}>
                       <TableCell className="font-medium">{c.name}</TableCell>
-                      <TableCell className="text-sm">{c.phone_numbers?.join(", ")}</TableCell>
-                      <TableCell className="text-sm font-mono">{c.gst_no || "-"}</TableCell>
-                      <TableCell className="text-sm">{c.billing_address?.city || "-"}</TableCell>
+                      <TableCell className="text-sm hidden sm:table-cell">{c.phone_numbers?.join(", ")}</TableCell>
+                      <TableCell className="text-sm font-mono hidden sm:table-cell">{c.gst_no || "-"}</TableCell>
+                      <TableCell className="text-sm hidden sm:table-cell">{c.billing_address?.city || "-"}</TableCell>
                       <TableCell>
                         <div className="flex gap-1">
                           <Button variant="ghost" size="icon" onClick={() => toggleCustomerOrders(c.id)} data-testid={`expand-customer-${c.id}`}>

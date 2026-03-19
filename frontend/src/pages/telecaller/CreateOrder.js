@@ -23,6 +23,7 @@ const SHIPPING_METHODS = [
   { value: "self_arranged", label: "Self-Arranged Shipping" },
   { value: "office_collection", label: "Office Collection" },
 ];
+const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
 const GST_RATES = [0, 5, 18];
 
 const emptyItem = () => ({
@@ -47,6 +48,7 @@ export default function CreateOrder() {
   const [gstApplicable, setGstApplicable] = useState(false);
   const [shippingMethod, setShippingMethod] = useState("");
   const [courierName, setCourierName] = useState("");
+  const [transporterName, setTransporterName] = useState("");
   const [shippingCharge, setShippingCharge] = useState(0);
   const [remark, setRemark] = useState("");
   const [paymentStatus, setPaymentStatus] = useState("unpaid");
@@ -186,7 +188,7 @@ export default function CreateOrder() {
   const handleSubmit = async () => {
     if (!selectedCustomer) return toast.error("Select a customer");
     if (items.some((i) => !i.product_name)) return toast.error("All items need a product name");
-    if (shippingMethod === "courier" && !courierName) return toast.error("Enter courier name");
+    if (shippingMethod === "courier" && !courierName) return toast.error("Select a courier");
 
     setSubmitting(true);
     try {
@@ -199,6 +201,7 @@ export default function CreateOrder() {
         gst_applicable: gstApplicable,
         shipping_method: shippingMethod,
         courier_name: courierName,
+        transporter_name: transporterName,
         shipping_charge: shippingCharge,
         shipping_gst: shippingGst,
         remark,
@@ -217,8 +220,8 @@ export default function CreateOrder() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6" data-testid="create-order-page">
-      <h1 className="text-2xl font-bold tracking-tight">Create New Order</h1>
+    <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6 px-1 sm:px-0" data-testid="create-order-page">
+      <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Create New Order</h1>
 
       {/* Customer Selection */}
       <Card>
@@ -329,7 +332,7 @@ export default function CreateOrder() {
                   </Button>
                 )}
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-2 sm:gap-3">
                 <div className="col-span-2">
                   <Label className="text-xs">Product Name</Label>
                   <Input
@@ -435,12 +438,25 @@ export default function CreateOrder() {
             </div>
             {shippingMethod === "courier" && (
               <div>
-                <Label>Courier Name</Label>
+                <Label>Courier *</Label>
+                <Select value={courierName} onValueChange={setCourierName}>
+                  <SelectTrigger data-testid="courier-name-select"><SelectValue placeholder="Select courier" /></SelectTrigger>
+                  <SelectContent>
+                    {COURIER_OPTIONS.map((c) => (
+                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {shippingMethod === "transport" && (
+              <div>
+                <Label>Transporter Name</Label>
                 <Input
-                  value={courierName}
-                  onChange={(e) => setCourierName(e.target.value)}
-                  placeholder="e.g. DTDC, BlueDart"
-                  data-testid="courier-name-input"
+                  value={transporterName}
+                  onChange={(e) => setTransporterName(e.target.value)}
+                  placeholder="Transporter name (optional)"
+                  data-testid="transporter-name-input"
                 />
               </div>
             )}

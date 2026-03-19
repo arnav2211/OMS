@@ -31,14 +31,12 @@ const NAV_ITEMS = {
   ],
   admin: [
     { label: "Dashboard", icon: Home, path: "/" },
-    { label: "All Orders", icon: ClipboardList, path: "/orders" },
     { label: "Create Order", icon: Plus, path: "/create-order" },
     { label: "Customers", icon: Users, path: "/customers" },
     { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
     { label: "Packaging", icon: Package, path: "/packaging" },
     { label: "Dispatch", icon: Truck, path: "/dispatch" },
     { label: "Item Analytics", icon: TrendingUp, path: "/item-analytics" },
-    { label: "Reports", icon: BarChart3, path: "/reports" },
     { label: "Users", icon: Settings, path: "/users" },
   ],
 };
