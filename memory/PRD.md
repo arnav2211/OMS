@@ -1,7 +1,7 @@
 # CitSpray Order Management System - PRD
 
 ## Original Problem Statement
-Build a comprehensive Order Management System for "CitSpray" company with roles: Admin, Telecaller, Packaging, Dispatch. Workflow includes order creation, formulation management, packaging tracking, and dispatch handling.
+Build a comprehensive Order Management System for "CitSpray" company with roles: Admin, Telecaller, Packaging, Dispatch.
 
 ## Tech Stack
 - **Backend**: FastAPI + Motor (async MongoDB)
@@ -18,7 +18,7 @@ Build a comprehensive Order Management System for "CitSpray" company with roles:
 ## Phase 1 (MVP) - COMPLETED
 - [x] JWT auth with 4 roles
 - [x] Customer CRUD with duplicate checks
-- [x] Order lifecycle (create, edit, cancel, track status)
+- [x] Order lifecycle (create, edit, track status)
 - [x] Dark/light theme toggle
 - [x] Green CitSpray branding
 
@@ -29,50 +29,46 @@ Build a comprehensive Order Management System for "CitSpray" company with roles:
 - [x] Telecaller sales dashboard with period filters
 - [x] Global formulation visibility toggle
 
-## Phase 3 (Current) - COMPLETED (March 19, 2026)
+## Phase 3 (Restructure) - COMPLETED (March 19, 2026)
 - [x] Data reset for fresh start
 - [x] Removed per-item formulation visibility (global control only)
-- [x] Merged Dashboard + All Orders into single view
-- [x] Telecaller sees own orders by default, toggle to view all (anonymized)
-- [x] Hide "created by" executive name from other executives
-- [x] Admin Executive Reports tab (view individual telecaller dashboards)
+- [x] Dashboard shows recent orders only
 - [x] Packaging: 3 mandatory multi-select fields (Item Packed By, Box Packed By, Checked By)
-- [x] Admin-manageable packaging staff list (default: Yogita, Sapna, Samiksha)
+- [x] Admin-manageable packaging staff list
 - [x] Dispatch logic: Porter/Self-arranged/Office Collection = no LR needed
-- [x] Transport: transporter name optional for telecallers, LR mandatory for dispatch
-- [x] Courier: predefined dropdown only (DTDC, Anjani, Professional, India Post)
+- [x] Transport: LR mandatory for dispatch, transporter name optional for telecallers
+- [x] Courier: predefined dropdown (DTDC, Anjani, Professional, India Post)
 - [x] Order print (PDF) for packaging/admin with formulations always included
 - [x] Formulation history for admin/packaging
-- [x] Mobile-responsive improvements across all pages
+
+## Phase 4 (Fixes & Restructure) - COMPLETED (March 19, 2026)
+- [x] Print auth fix: token passed via query param for new-tab PDF access
+- [x] Replace Cancel Order with Delete Order (permanent deletion, 2 confirmations)
+- [x] New "All Orders" sidebar nav item for ALL roles
+- [x] All Orders page with payment status filter (Fully Paid, Partial, Unpaid)
+- [x] Role-based visibility: non-admin can't see executive name, telecaller/dispatch can't see formulations in All Orders
+- [x] Dashboard now shows Recent Orders only (latest 10), not all
+- [x] Custom date range filter in Executive Reports (admin)
+- [x] Custom date range filter in telecaller's own sales dashboard
+- [x] Data reset (testing cleanup) - preserved users and config
 
 ## Key API Endpoints
-- POST /api/auth/login - Login
-- GET/POST /api/users - User management
-- GET/POST /api/customers - Customer CRUD
-- GET/POST /api/orders - Order CRUD
-- PUT /api/orders/{id}/formulation - Update formulations (admin)
-- PUT /api/orders/{id}/packaging - Update packaging (3 multi-select fields)
-- PUT /api/orders/{id}/dispatch - Dispatch order
-- PUT /api/orders/{id}/cancel - Cancel order
-- GET /api/orders/{id}/print - Generate order PDF for packaging
-- GET /api/packaging-staff - List packaging staff
-- POST /api/packaging-staff - Add staff
-- DELETE /api/packaging-staff/{id} - Remove staff (soft delete)
-- GET /api/courier-options - Get courier dropdown list
-- GET /api/settings - Get global settings
-- PUT /api/settings - Update settings
-- GET /api/reports/sales - Admin sales report
-- GET /api/reports/dashboard - Dashboard stats
-- GET /api/reports/telecaller-sales - Telecaller sales
-- GET /api/reports/telecaller-dashboard/{id} - Admin view telecaller dashboard
-- GET /api/reports/item-sales - Item analytics
-- GET /api/orders/formulation-history/{customer_id} - Formulation history
-- POST /api/admin/reset-data - Reset all data
-- POST/GET /api/proforma-invoices - PI CRUD
-- GET /api/proforma-invoices/{id}/pdf - PI PDF
-
-## Database Collections
-- users, customers, orders, proforma_invoices, settings, packaging_staff, counters
+- POST /api/auth/login
+- GET/POST /api/users
+- GET/POST /api/customers
+- GET/POST /api/orders (view_all param for all-orders view)
+- DELETE /api/orders/{id} (permanent delete)
+- PUT /api/orders/{id}/formulation
+- PUT /api/orders/{id}/packaging
+- PUT /api/orders/{id}/dispatch
+- GET /api/orders/{id}/print?token=JWT (PDF with auth via query param)
+- GET /api/packaging-staff, POST, DELETE
+- GET /api/courier-options
+- GET/PUT /api/settings
+- GET /api/reports/sales, /dashboard, /telecaller-sales (with date_from, date_to), /telecaller-dashboard/{id}, /item-sales
+- GET /api/orders/formulation-history/{customer_id}
+- POST /api/admin/reset-data
+- POST/GET /api/proforma-invoices, /pdf
 
 ## Credentials
 - Admin: admin / admin123
