@@ -1,0 +1,206 @@
+{
+  "brand_identity": {
+    "name": "CitSpray",
+    "aesthetic": "Industrial Citrus",
+    "description": "A high-performance order management system blending industrial reliability with fresh, organic energy. The interface prioritizes data density and workflow speed while using vibrant citrus accents to guide user attention.",
+    "emotional_tone": "Efficient, Fresh, Reliable, Professional"
+  },
+  "typography": {
+    "font_family": {
+      "headings": "Manrope, sans-serif",
+      "body": "Public Sans, sans-serif",
+      "mono": "JetBrains Mono, monospace"
+    },
+    "scale": {
+      "h1": "text-4xl font-bold tracking-tight lg:text-5xl",
+      "h2": "text-3xl font-semibold tracking-tight",
+      "h3": "text-2xl font-semibold tracking-tight",
+      "h4": "text-xl font-medium tracking-tight",
+      "p": "text-base leading-7",
+      "small": "text-sm font-medium leading-none",
+      "tiny": "text-xs font-medium uppercase tracking-wider"
+    },
+    "weights": {
+      "regular": 400,
+      "medium": 500,
+      "semibold": 600,
+      "bold": 700
+    },
+    "usage_rules": {
+      "headings": "Use Manrope for all headings (h1-h4). Letter spacing should be slightly tight (-0.02em).",
+      "body": "Use Public Sans for all body text, inputs, and tables. Enable tabular figures (font-feature-settings: 'tnum') for all numerical data.",
+      "caps": "Use uppercase only for table headers, badges, and overlines (tracking-wider)."
+    }
+  },
+  "colors": {
+    "light_theme": {
+      "background": "#F8FAFC",
+      "foreground": "#0F172A",
+      "card": "#FFFFFF",
+      "card_foreground": "#0F172A",
+      "popover": "#FFFFFF",
+      "popover_foreground": "#0F172A",
+      "primary": "#F59E0B",
+      "primary_foreground": "#FFFFFF",
+      "secondary": "#F1F5F9",
+      "secondary_foreground": "#1E293B",
+      "muted": "#F1F5F9",
+      "muted_foreground": "#64748B",
+      "accent": "#FFF7ED",
+      "accent_foreground": "#F59E0B",
+      "destructive": "#EF4444",
+      "destructive_foreground": "#FFFFFF",
+      "border": "#E2E8F0",
+      "input": "#F1F5F9",
+      "ring": "#F59E0B"
+    },
+    "dark_theme": {
+      "background": "#020617",
+      "foreground": "#F8FAFC",
+      "card": "#0F172A",
+      "card_foreground": "#F8FAFC",
+      "popover": "#0F172A",
+      "popover_foreground": "#F8FAFC",
+      "primary": "#F59E0B",
+      "primary_foreground": "#FFFFFF",
+      "secondary": "#1E293B",
+      "secondary_foreground": "#F8FAFC",
+      "muted": "#1E293B",
+      "muted_foreground": "#94A3B8",
+      "accent": "#1E293B",
+      "accent_foreground": "#F59E0B",
+      "destructive": "#991B1B",
+      "destructive_foreground": "#FFFFFF",
+      "border": "#1E293B",
+      "input": "#1E293B",
+      "ring": "#F59E0B"
+    },
+    "semantic_palette": {
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "error": "#EF4444",
+      "info": "#3B82F6",
+      "pending": "#64748B",
+      "processing": "#8B5CF6",
+      "shipped": "#10B981",
+      "delivered": "#059669"
+    }
+  },
+  "layout": {
+    "spacing_scale": {
+      "xs": "0.25rem",
+      "sm": "0.5rem",
+      "md": "1rem",
+      "lg": "1.5rem",
+      "xl": "2rem",
+      "2xl": "3rem",
+      "section": "4rem"
+    },
+    "container": {
+      "center": true,
+      "padding": "2rem",
+      "screens": {
+        "2xl": "1400px"
+      }
+    },
+    "border_radius": {
+      "sm": "0.375rem",
+      "md": "0.5rem",
+      "lg": "0.75rem",
+      "xl": "1rem"
+    },
+    "dashboard_grid": {
+      "desktop": "grid grid-cols-12 gap-6",
+      "tablet": "grid grid-cols-4 gap-4",
+      "mobile": "grid grid-cols-1 gap-4"
+    }
+  },
+  "components": {
+    "buttons": {
+      "base": "inline-flex items-center justify-center rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+      "primary": "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm",
+      "secondary": "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+      "ghost": "hover:bg-accent hover:text-accent-foreground",
+      "outline": "border border-input bg-background hover:bg-accent hover:text-accent-foreground"
+    },
+    "cards": {
+      "wrapper": "rounded-xl border bg-card text-card-foreground shadow-sm",
+      "header": "flex flex-col space-y-1.5 p-6",
+      "content": "p-6 pt-0",
+      "footer": "flex items-center p-6 pt-0"
+    },
+    "inputs": {
+      "base": "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+    }
+  },
+  "visual_enhancers": {
+    "glassmorphism": "backdrop-blur-md bg-white/80 dark:bg-slate-950/80 border-b border-white/10",
+    "shadows": {
+      "subtle": "shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]",
+      "medium": "shadow-[0_4px_6px_-1px_rgba(0,0,0,0.1),0_2px_4px_-1px_rgba(0,0,0,0.06)]",
+      "card": "shadow-[0_0_0_1px_rgba(0,0,0,0.03),0_2px_8px_rgba(0,0,0,0.04)] dark:shadow-none"
+    },
+    "gradients": {
+      "primary_action": "bg-gradient-to-r from-amber-500 to-orange-500",
+      "surface_glow": "bg-gradient-to-tr from-slate-50 to-white dark:from-slate-900 dark:to-slate-950"
+    }
+  },
+  "media": {
+    "image_urls": {
+      "login_bg": {
+        "url": "https://images.unsplash.com/photo-1625813506062-ccb45305a4cc?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwxfHxmcmVzaCUyMGNpdHJ1cyUyMGZydWl0JTIwd2F0ZXIlMjBzcGxhc2glMjBoaWdoJTIwc3BlZWQlMjBwaG90b2dyYXBoeSUyMHByb2Zlc3Npb25hbCUyMGFic3RyYWN0fGVufDB8fHx8MTc3MzkzODY1OHww&ixlib=rb-4.1.0&q=85",
+        "alt": "CitSpray Freshness - Lemon Splash Abstract",
+        "usage": "Login page background (left split)",
+        "category": "branding"
+      },
+      "warehouse_context": {
+        "url": "https://images.unsplash.com/photo-1685119166946-d4050647b0e3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1ODB8MHwxfHNlYXJjaHw0fHx3YXJlaG91c2UlMjBwYWNrYWdpbmclMjBib3hlcyUyMGRlbGl2ZXJ5JTIwdHJ1Y2slMjBwcm9mZXNzaW9uYWx8ZW58MHx8fHwxNzczOTM4NjM4fDA&ixlib=rb-4.1.0&q=85",
+        "alt": "Warehouse Operations",
+        "usage": "Dashboard widget background or empty state for Dispatch",
+        "category": "context"
+      },
+      "delivery_truck": {
+        "url": "https://images.unsplash.com/photo-1681514583222-0579e6835666?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1ODB8MHwxfHNlYXJjaHwyfHx3YXJlaG91c2UlMjBwYWNrYWdpbmclMjBib3hlcyUyMGRlbGl2ZXJ5JTIwdHJ1Y2slMjBwcm9mZXNzaW9uYWx8ZW58MHx8fHwxNzczOTM4NjM4fDA&ixlib=rb-4.1.0&q=85",
+        "alt": "Delivery Truck",
+        "usage": "Dispatch dashboard or tracking view",
+        "category": "context"
+      }
+    },
+    "icons": "Lucide React (default). Use specific icons: 'Package', 'Truck', 'Users', 'BarChart3', 'ClipboardList', 'Settings', 'LogOut', 'Search', 'Filter'."
+  },
+  "accessibility": {
+    "rules": [
+      "Ensure all text has a contrast ratio of at least 4.5:1 against its background.",
+      "Interactive elements must have a focus ring visible via keyboard navigation.",
+      "Use semantic HTML (main, nav, aside, section) for proper screen reader support.",
+      "All images must have alt text.",
+      "Do not rely on color alone to convey status (use icons + text + color)."
+    ],
+    "test_attributes": "Add data-testid to all interactive elements (buttons, inputs, links) using kebab-case role-based naming (e.g., 'submit-order-btn', 'customer-search-input')."
+  },
+  "universal_guidelines": {
+    "general": [
+      "Do not use gradients for dark colors.",
+      "Avoid generic centered layouts; use grid-based or asymmetrical layouts where appropriate.",
+      "Create depth through layered design elements with z-index hierarchy.",
+      "Use glassmorphism effects with backdrop filters (8-16px blur) for sticky headers.",
+      "Do not apply 'transition: all'; target specific properties (transform, opacity, colors).",
+      "Do not center align the app container text.",
+      "Use pill-shaped or rounded-lg button styles with interaction animations.",
+      "Micro-animations are mandatory for hover, focus, and active states."
+    ],
+    "component_reuse": [
+      "Prioritize using pre-existing components from src/components/ui.",
+      "Create new components that match the style of existing ones.",
+      "Components must use named exports.",
+      "Pages must use default exports."
+    ],
+    "tech_specific": {
+      "framework": "React (Create React App)",
+      "styling": "Tailwind CSS + Shadcn UI",
+      "language": "JavaScript (.js, .jsx) - NO TypeScript syntax in code files",
+      "icons": "lucide-react"
+    }
+  },
+  "instructions_to_main_agent": "Start by setting up the theme in tailwind.config.js using the colors provided. Then, update the index.css with the base styles and font imports. Create a Layout component that handles the Sidebar/Header structure and Theme Toggle. Build the Login page first using the 'login_bg' image. Then proceed to build role-specific dashboards (Telecaller, Packaging, Dispatch, Admin) using the 'bento' grid layout. Ensure all forms use Shadcn UI components customized with the 'inputs' and 'buttons' styles defined here."
+}
