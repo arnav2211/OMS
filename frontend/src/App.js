@@ -13,6 +13,8 @@ import DispatchDashboard from "@/pages/dispatch/DispatchDashboard";
 import AdminDashboard from "@/pages/admin/AdminDashboard";
 import UserManagement from "@/pages/admin/UserManagement";
 import OrderDetail from "@/pages/OrderDetail";
+import PIBuilder from "@/pages/PIBuilder";
+import ItemAnalytics from "@/pages/ItemAnalytics";
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
@@ -46,9 +48,11 @@ function AppRoutes() {
       <Route path="/create-order" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><CreateOrder /></ProtectedRoute>} />
       <Route path="/customers" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><Customers /></ProtectedRoute>} />
       <Route path="/packaging" element={<ProtectedRoute allowedRoles={["packaging", "admin"]}><PackagingDashboard /></ProtectedRoute>} />
-      <Route path="/dispatch" element={<ProtectedRoute allowedRoles={["dispatch", "admin"]}><DispatchDashboard /></ProtectedRoute>} />
+      <Route path="/dispatch" element={<ProtectedRoute allowedRoles={["dispatch", "packaging", "admin"]}><DispatchDashboard /></ProtectedRoute>} />
       <Route path="/orders" element={<ProtectedRoute allowedRoles={["admin"]}><AdminDashboard /></ProtectedRoute>} />
       <Route path="/orders/:orderId" element={<ProtectedRoute><OrderDetail /></ProtectedRoute>} />
+      <Route path="/proforma" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><PIBuilder /></ProtectedRoute>} />
+      <Route path="/item-analytics" element={<ProtectedRoute allowedRoles={["admin"]}><ItemAnalytics /></ProtectedRoute>} />
       <Route path="/reports" element={<ProtectedRoute allowedRoles={["admin"]}><AdminDashboard /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute allowedRoles={["admin"]}><UserManagement /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />

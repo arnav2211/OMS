@@ -10,6 +10,7 @@ import {
 import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
+  FileText, TrendingUp,
 } from "lucide-react";
 
 const NAV_ITEMS = {
@@ -17,10 +18,12 @@ const NAV_ITEMS = {
     { label: "Dashboard", icon: Home, path: "/" },
     { label: "Create Order", icon: Plus, path: "/create-order" },
     { label: "Customers", icon: Users, path: "/customers" },
+    { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
   ],
   packaging: [
     { label: "Dashboard", icon: Home, path: "/" },
     { label: "Packaging Queue", icon: Package, path: "/packaging" },
+    { label: "Dispatch", icon: Truck, path: "/dispatch" },
   ],
   dispatch: [
     { label: "Dashboard", icon: Home, path: "/" },
@@ -31,8 +34,10 @@ const NAV_ITEMS = {
     { label: "All Orders", icon: ClipboardList, path: "/orders" },
     { label: "Create Order", icon: Plus, path: "/create-order" },
     { label: "Customers", icon: Users, path: "/customers" },
+    { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
     { label: "Packaging", icon: Package, path: "/packaging" },
     { label: "Dispatch", icon: Truck, path: "/dispatch" },
+    { label: "Item Analytics", icon: TrendingUp, path: "/item-analytics" },
     { label: "Reports", icon: BarChart3, path: "/reports" },
     { label: "Users", icon: Settings, path: "/users" },
   ],
@@ -72,9 +77,7 @@ export default function Layout({ children }) {
         {/* Brand */}
         <div className="h-16 flex items-center px-6 border-b border-border">
           <Link to="/" className="flex items-center gap-2" data-testid="brand-logo">
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-              <Package className="w-4 h-4 text-primary-foreground" />
-            </div>
+            <img src="/logo.png" alt="CitSpray" className="h-8 w-8 rounded-lg object-contain" />
             <span className="text-lg font-bold tracking-tight">CitSpray</span>
           </Link>
           <Button

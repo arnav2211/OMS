@@ -8,18 +8,25 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Search, UserPlus, Edit, Eye } from "lucide-react";
+import { Search, UserPlus, Edit, Eye, Trash2, ChevronDown, ChevronUp } from "lucide-react";
 import { Link } from "react-router-dom";
+import { Badge } from "@/components/ui/badge";
+import { useAuth } from "@/contexts/AuthContext";
 
 const emptyAddress = () => ({ address: "", city: "", state: "", pincode: "" });
 
 export default function Customers() {
+  const { user } = useAuth();
   const [customers, setCustomers] = useState([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [sameAsBilling, setSameAsBilling] = useState(true);
+  const [expandedCustomer, setExpandedCustomer] = useState(null);
+  const [customerOrders, setCustomerOrders] = useState([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
   const [form, setForm] = useState({
     name: "", gst_no: "", billing_address: emptyAddress(), shipping_address: emptyAddress(),
     phone_numbers: [""], email: "",
@@ -61,6 +68,32 @@ export default function Customers() {
     setSameAsBilling(true);
     setForm({ name: "", gst_no: "", billing_address: emptyAddress(), shipping_address: emptyAddress(), phone_numbers: [""], email: "" });
     setShowDialog(true);
+  };
+
+  const toggleCustomerOrders = async (customerId) => {
+    if (expandedCustomer === customerId) {
+      setExpandedCustomer(null);
+      setCustomerOrders([]);
+      return;
+    }
+    setExpandedCustomer(customerId);
+    setOrdersLoading(true);
+    try {
+      const res = await api.get(`/customers/${customerId}/orders`);
+      setCustomerOrders(res.data);
+    } catch {} finally { setOrdersLoading(false); }
+  };
+
+  const deleteCustomer = async (c) => {
+    try {
+      await api.delete(`/customers/${c.id}`);
+      toast.success("Customer deleted");
+      setShowDeleteConfirm(null);
+      loadCustomers();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Cannot delete customer");
+      setShowDeleteConfirm(null);
+    }
   };
 
   const handleSave = async () => {
@@ -120,22 +153,58 @@ export default function Customers() {
                   <TableHead className="text-xs uppercase tracking-wider">Phone</TableHead>
                   <TableHead className="text-xs uppercase tracking-wider">GST</TableHead>
                   <TableHead className="text-xs uppercase tracking-wider">City</TableHead>
-                  <TableHead className="text-xs uppercase tracking-wider"></TableHead>
+                  <TableHead className="text-xs uppercase tracking-wider">City</TableHead>
+                  <TableHead className="text-xs uppercase tracking-wider">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {customers.map((c) => (
-                  <TableRow key={c.id} data-testid={`customer-row-${c.id}`}>
-                    <TableCell className="font-medium">{c.name}</TableCell>
-                    <TableCell className="text-sm">{c.phone_numbers?.join(", ")}</TableCell>
-                    <TableCell className="text-sm font-mono">{c.gst_no || "-"}</TableCell>
-                    <TableCell className="text-sm">{c.billing_address?.city || "-"}</TableCell>
-                    <TableCell>
-                      <Button variant="ghost" size="icon" onClick={() => openEdit(c)} data-testid={`edit-customer-${c.id}`}>
-                        <Edit className="w-4 h-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
+                  <>
+                    <TableRow key={c.id} data-testid={`customer-row-${c.id}`}>
+                      <TableCell className="font-medium">{c.name}</TableCell>
+                      <TableCell className="text-sm">{c.phone_numbers?.join(", ")}</TableCell>
+                      <TableCell className="text-sm font-mono">{c.gst_no || "-"}</TableCell>
+                      <TableCell className="text-sm">{c.billing_address?.city || "-"}</TableCell>
+                      <TableCell>
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="icon" onClick={() => toggleCustomerOrders(c.id)} data-testid={`expand-customer-${c.id}`}>
+                            {expandedCustomer === c.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => openEdit(c)} data-testid={`edit-customer-${c.id}`}>
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                          {["admin", "telecaller"].includes(user?.role) && (
+                            <Button variant="ghost" size="icon" onClick={() => setShowDeleteConfirm(c)} data-testid={`delete-customer-${c.id}`}>
+                              <Trash2 className="w-4 h-4 text-destructive" />
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                    {expandedCustomer === c.id && (
+                      <TableRow key={`orders-${c.id}`}>
+                        <TableCell colSpan={5} className="bg-muted/50 p-4">
+                          {ordersLoading ? <p className="text-sm text-muted-foreground">Loading orders...</p> :
+                            customerOrders.length === 0 ? <p className="text-sm text-muted-foreground">No orders found for this customer</p> : (
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium uppercase text-muted-foreground">{customerOrders.length} Order(s)</p>
+                              {customerOrders.map(o => (
+                                <Link key={o.id} to={`/orders/${o.id}`} className="flex items-center justify-between p-2 rounded border hover:bg-accent transition-colors">
+                                  <div className="flex items-center gap-3">
+                                    <span className="font-mono text-sm font-medium">{o.order_number}</span>
+                                    <Badge variant="secondary" className={`status-${o.status} text-xs`}>{o.status}</Badge>
+                                  </div>
+                                  <div className="text-sm text-muted-foreground">
+                                    {"\u20B9"}{o.grand_total?.toLocaleString("en-IN")} | {new Date(o.created_at).toLocaleDateString("en-IN")}
+                                  </div>
+                                </Link>
+                              ))}
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </>
                 ))}
               </TableBody>
             </Table>
@@ -212,6 +281,21 @@ export default function Customers() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDialog(false)}>Cancel</Button>
             <Button onClick={handleSave} data-testid="save-customer-dialog-btn">{editingId ? "Update" : "Create"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation */}
+      <Dialog open={!!showDeleteConfirm} onOpenChange={() => setShowDeleteConfirm(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Delete Customer</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Are you sure you want to delete <span className="font-medium text-foreground">{showDeleteConfirm?.name}</span>?
+            This action cannot be undone. Customers with existing orders cannot be deleted.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowDeleteConfirm(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => deleteCustomer(showDeleteConfirm)} data-testid="confirm-delete-customer">Delete</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

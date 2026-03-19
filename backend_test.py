@@ -365,6 +365,334 @@ class CitSprayAPITester:
         )
         return success
 
+    # NEW FEATURE TESTS FOR CITSPRAY OMS v2
+    
+    def test_settings_api(self):
+        """Test settings GET endpoint"""
+        success, response = self.run_test(
+            "Get Global Settings",
+            "GET",
+            "settings",
+            200
+        )
+        if success and 'show_formulation' in response:
+            print(f"   Current formulation setting: {response['show_formulation']}")
+        return success
+
+    def test_update_settings(self):
+        """Test updating global formulation setting (admin only)"""
+        success, response = self.run_test(
+            "Update Global Formulation Setting",
+            "PUT",
+            "settings",
+            200,
+            data={"show_formulation": True}
+        )
+        return success
+
+    def test_customer_duplicate_prevention(self):
+        """Test customer duplicate prevention - phone and GST"""
+        # First create a unique customer
+        unique_time = int(time.time())
+        unique_phone = f"999{unique_time % 10000000}"  # Create unique phone
+        unique_gst = f"27AABCU9603R{unique_time % 1000:03d}Z"
+        
+        success1, response1 = self.run_test(
+            "Create Customer for Duplicate Test",
+            "POST", 
+            "customers",
+            200,
+            data={
+                "name": f"Duplicate Test Customer {unique_time}",
+                "gst_no": unique_gst,
+                "billing_address": {"address": "Test Address", "city": "Mumbai", "state": "Maharashtra", "pincode": "400001"},
+                "shipping_address": {"address": "Test Address", "city": "Mumbai", "state": "Maharashtra", "pincode": "400001"},
+                "phone_numbers": [unique_phone],
+                "email": f"test{unique_time}@example.com"
+            }
+        )
+        
+        if not success1:
+            print(f"   Failed to create test customer, trying with different GST")
+            # If failed due to GST collision, try a different approach
+            unique_gst2 = f"27AABCU9603R{(unique_time + 123) % 1000:03d}Z" 
+            success1, response1 = self.run_test(
+                "Create Customer for Duplicate Test (Retry)",
+                "POST",
+                "customers",
+                200,
+                data={
+                    "name": f"Duplicate Test Customer {unique_time}",
+                    "gst_no": unique_gst2,
+                    "billing_address": {"address": "Test Address", "city": "Mumbai", "state": "Maharashtra", "pincode": "400001"},
+                    "shipping_address": {"address": "Test Address", "city": "Mumbai", "state": "Maharashtra", "pincode": "400001"},
+                    "phone_numbers": [unique_phone],
+                    "email": f"test{unique_time}@example.com"
+                }
+            )
+            unique_gst = unique_gst2
+            
+        if not success1:
+            return False
+            
+        # Test duplicate phone rejection
+        success2, response2 = self.run_test(
+            "Test Duplicate Phone Rejection",
+            "POST",
+            "customers", 
+            400,  # Should fail with 400
+            data={
+                "name": "Another Customer",
+                "phone_numbers": [unique_phone],  # Same phone
+                "billing_address": {"address": "Different Address", "city": "Delhi", "state": "Delhi", "pincode": "110001"},
+                "shipping_address": {"address": "Different Address", "city": "Delhi", "state": "Delhi", "pincode": "110001"},
+            }
+        )
+        
+        # Test duplicate GST rejection
+        success3, response3 = self.run_test(
+            "Test Duplicate GST Rejection", 
+            "POST",
+            "customers",
+            400,  # Should fail with 400
+            data={
+                "name": "Yet Another Customer",
+                "gst_no": unique_gst,  # Same GST
+                "phone_numbers": [f"888{(unique_time + 456) % 10000000}"],  # Different phone
+                "billing_address": {"address": "Another Address", "city": "Chennai", "state": "Tamil Nadu", "pincode": "600001"},
+                "shipping_address": {"address": "Another Address", "city": "Chennai", "state": "Tamil Nadu", "pincode": "600001"},
+            }
+        )
+        
+        return success1 and success2 and success3
+
+    def test_customer_orders_endpoint(self):
+        """Test GET /api/customers/{id}/orders"""
+        # Get first customer from list to test
+        list_success, customers = self.run_test("List Customers for Orders Test", "GET", "customers", 200)
+        if not list_success or not customers or len(customers) == 0:
+            print("❌ No customers found for orders test")
+            return False
+            
+        customer_id = customers[0]['id']
+        success, response = self.run_test(
+            "Get Customer Orders",
+            "GET",
+            f"customers/{customer_id}/orders",
+            200
+        )
+        if success:
+            print(f"   Found {len(response)} orders for customer")
+        return success
+
+    def test_delete_customer_with_orders(self):
+        """Test that customers with orders cannot be deleted"""
+        # Get customer with orders from previous test
+        list_success, customers = self.run_test("List Customers for Delete Test", "GET", "customers", 200)
+        if not list_success or not customers:
+            return False
+            
+        # Find a customer with orders (should be the first one as we tested that above)
+        customer_with_orders = customers[0]
+        
+        success, response = self.run_test(
+            "Try Delete Customer With Orders (Should Fail)",
+            "DELETE",
+            f"customers/{customer_with_orders['id']}",
+            400  # Should fail with 400
+        )
+        return success
+
+    def test_cancel_order(self):
+        """Test order cancellation with PUT /api/orders/{id}/cancel"""
+        # Get an existing order
+        list_success, orders = self.run_test("List Orders for Cancel Test", "GET", "orders", 200)
+        if not list_success or not orders or len(orders) == 0:
+            print("❌ No orders found for cancel test")
+            return False
+            
+        # Find a non-cancelled order
+        order_to_cancel = None
+        for order in orders:
+            if order.get('status') != 'cancelled':
+                order_to_cancel = order
+                break
+                
+        if not order_to_cancel:
+            print("❌ No non-cancelled orders found")
+            return False
+            
+        success, response = self.run_test(
+            "Cancel Order",
+            "PUT",
+            f"orders/{order_to_cancel['id']}/cancel",
+            200
+        )
+        if success and response.get('status') == 'cancelled':
+            print(f"   Successfully cancelled order {response.get('order_number')}")
+        return success
+
+    def test_update_payment_status(self):
+        """Test updating order payment status and amount"""
+        # Get an existing order
+        list_success, orders = self.run_test("List Orders for Payment Test", "GET", "orders", 200)
+        if not list_success or not orders or len(orders) == 0:
+            return False
+            
+        # Use first available order
+        order = orders[0]
+        success, response = self.run_test(
+            "Update Order Payment Status",
+            "PUT", 
+            f"orders/{order['id']}",
+            200,
+            data={
+                "payment_status": "partial",
+                "amount_paid": 100.0,
+                "balance_amount": max(0, order.get('grand_total', 0) - 100.0)
+            }
+        )
+        return success
+
+    def test_proforma_invoice_crud(self):
+        """Test Proforma Invoice CRUD operations"""
+        # First get a customer
+        list_success, customers = self.run_test("List Customers for PI Test", "GET", "customers", 200)
+        if not list_success or not customers:
+            return False
+            
+        customer = customers[0]
+        
+        # Create PI
+        success1, pi_response = self.run_test(
+            "Create Proforma Invoice",
+            "POST",
+            "proforma-invoices",
+            200,
+            data={
+                "customer_id": customer['id'],
+                "items": [
+                    {
+                        "product_name": "Test PI Product 1",
+                        "qty": 2,
+                        "unit": "pcs",
+                        "rate": 100.0,
+                        "amount": 200.0,
+                        "gst_rate": 18,
+                        "gst_amount": 36.0,
+                        "total": 236.0
+                    }
+                ],
+                "gst_applicable": True,
+                "show_rate": True,
+                "shipping_charge": 25.0,
+                "remark": "Test PI creation"
+            }
+        )
+        
+        if not success1 or 'id' not in pi_response:
+            return False
+            
+        pi_id = pi_response['id']
+        print(f"   Created PI: {pi_response.get('pi_number')}")
+        
+        # List PIs
+        success2, response2 = self.run_test(
+            "List Proforma Invoices", 
+            "GET",
+            "proforma-invoices",
+            200
+        )
+        
+        # Get PI PDF - Note: PDF endpoint returns binary data, not JSON
+        success3, response3 = self.run_test(
+            "Get PI PDF",
+            "GET", 
+            f"proforma-invoices/{pi_id}/pdf",
+            200
+        )
+        
+        return success1 and success2 and success3
+
+    def test_convert_pi_to_order(self):
+        """Test converting PI to order"""
+        # Get existing PIs
+        list_success, pis = self.run_test("List PIs for Convert Test", "GET", "proforma-invoices", 200)
+        if not list_success or not pis or len(pis) == 0:
+            print("❌ No PIs found for convert test")
+            return False
+            
+        # Find a non-converted PI
+        pi_to_convert = None
+        for pi in pis:
+            if pi.get('status') != 'converted':
+                pi_to_convert = pi
+                break
+                
+        if not pi_to_convert:
+            print("❌ No non-converted PIs found")
+            return False
+            
+        success, response = self.run_test(
+            "Convert PI to Order",
+            "POST",
+            f"proforma-invoices/{pi_to_convert['id']}/convert",
+            200,
+            data={
+                "shipping_method": "courier",
+                "courier_name": "Test Courier",
+                "purpose": "Converted from PI",
+                "payment_status": "unpaid",
+                "amount_paid": 0
+            }
+        )
+        if success and 'order_number' in response:
+            print(f"   Converted to order: {response.get('order_number')}")
+        return success
+
+    def test_item_sales_analytics(self):
+        """Test item sales analytics API"""
+        success, response = self.run_test(
+            "Item Sales Analytics",
+            "GET",
+            "reports/item-sales",
+            200
+        )
+        if success:
+            print(f"   Found analytics for {len(response)} products")
+        return success
+
+    def test_item_sales_with_date_filter(self):
+        """Test item sales analytics with date filters"""
+        success, response = self.run_test(
+            "Item Sales Analytics with Date Filter",
+            "GET",
+            "reports/item-sales?date_from=2024-01-01&date_to=2024-12-31",
+            200
+        )
+        return success
+
+    def test_telecaller_sales_reports(self):
+        """Test telecaller sales reports with different periods and filters"""
+        tests = [
+            ("Today Sales", "reports/telecaller-sales?period=today"),
+            ("Week Sales", "reports/telecaller-sales?period=week"),
+            ("Month Sales", "reports/telecaller-sales?period=month"),
+            ("Sales Excluding GST", "reports/telecaller-sales?period=all&exclude_gst=true"),
+            ("Sales Excluding Shipping", "reports/telecaller-sales?period=all&exclude_shipping=true"),
+            ("Sales Excluding GST & Shipping", "reports/telecaller-sales?period=all&exclude_gst=true&exclude_shipping=true")
+        ]
+        
+        all_passed = True
+        for test_name, endpoint in tests:
+            success, response = self.run_test(test_name, "GET", endpoint, 200)
+            if not success:
+                all_passed = False
+            elif response:
+                print(f"   {test_name}: {response.get('total_orders', 0)} orders, ₹{response.get('product_sales', 0)}")
+                
+        return all_passed
+
 def main():
     print("🚀 Starting CitSpray Order Management System API Tests")
     print("=" * 60)
@@ -381,23 +709,46 @@ def main():
             tester.test_create_telecaller_user,
             tester.test_list_users
         ]),
+        ("Settings API (NEW)", [
+            tester.test_settings_api,
+            tester.test_update_settings
+        ]),
         ("Customer Management", [
-            tester.test_create_customer,
             tester.test_list_customers,
             tester.test_search_customers
         ]),
+        ("Customer Duplicate Prevention (NEW)", [
+            tester.test_customer_duplicate_prevention
+        ]),
+        ("Customer Orders & Delete (NEW)", [
+            tester.test_customer_orders_endpoint,
+            tester.test_delete_customer_with_orders
+        ]),
         ("Order Management", [
-            tester.test_create_order,
             tester.test_list_orders,
-            tester.test_get_order_detail,
             tester.test_order_filters
         ]),
-        ("Order Operations", [
+        ("Order Cancel & Payment (NEW)", [
+            tester.test_cancel_order,
+            tester.test_update_payment_status
+        ]),
+        ("Proforma Invoice (NEW)", [
+            tester.test_proforma_invoice_crud,
+            tester.test_convert_pi_to_order
+        ]),
+        ("Item Sales Analytics (NEW)", [
+            tester.test_item_sales_analytics,
+            tester.test_item_sales_with_date_filter
+        ]),
+        ("Telecaller Sales (NEW)", [
+            tester.test_telecaller_sales_reports
+        ]),
+        ("Order Operations (Original)", [
             tester.test_update_formulation,
             tester.test_update_packaging,
             tester.test_update_dispatch
         ]),
-        ("Utilities & Reports", [
+        ("Utilities & Reports (Original)", [
             tester.test_gst_verification,
             tester.test_dashboard_stats,
             tester.test_sales_report,

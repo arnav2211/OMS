@@ -49,6 +49,9 @@ export default function CreateOrder() {
   const [courierName, setCourierName] = useState("");
   const [shippingCharge, setShippingCharge] = useState(0);
   const [remark, setRemark] = useState("");
+  const [paymentStatus, setPaymentStatus] = useState("unpaid");
+  const [amountPaid, setAmountPaid] = useState(0);
+  const [paymentScreenshots, setPaymentScreenshots] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [gstLoading, setGstLoading] = useState(false);
 
@@ -108,6 +111,23 @@ export default function CreateOrder() {
   const totalItemGst = items.reduce((s, i) => s + i.gst_amount, 0);
   const shippingGst = gstApplicable && shippingCharge > 0 ? +(shippingCharge * 0.18).toFixed(2) : 0;
   const grandTotal = +(subtotal + totalItemGst + shippingCharge + shippingGst).toFixed(2);
+
+  const balanceAmount = paymentStatus === "full" ? 0 : paymentStatus === "partial" ? Math.max(0, +(grandTotal - amountPaid).toFixed(2)) : grandTotal;
+
+  // Upload payment screenshots
+  const handleScreenshotUpload = async (e) => {
+    const files = e.target.files;
+    if (!files?.length) return;
+    for (const file of files) {
+      const formData = new FormData();
+      formData.append("file", file);
+      try {
+        const res = await api.post("/upload", formData, { headers: { "Content-Type": "multipart/form-data" } });
+        setPaymentScreenshots(prev => [...prev, res.data.url]);
+      } catch { toast.error("Upload failed"); }
+    }
+    e.target.value = "";
+  };
 
   // GST Verification
   const verifyGst = async (gstNo) => {
@@ -182,6 +202,9 @@ export default function CreateOrder() {
         shipping_charge: shippingCharge,
         shipping_gst: shippingGst,
         remark,
+        payment_status: paymentStatus,
+        amount_paid: paymentStatus === "full" ? grandTotal : amountPaid,
+        payment_screenshots: paymentScreenshots,
       };
       const res = await api.post("/orders", payload);
       toast.success(`Order ${res.data.order_number} created!`);
@@ -430,6 +453,54 @@ export default function CreateOrder() {
                 data-testid="shipping-charge-input"
               />
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Payment Status */}
+      <Card>
+        <CardHeader className="pb-3"><CardTitle className="text-base">Payment</CardTitle></CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <Label>Payment Status</Label>
+              <Select value={paymentStatus} onValueChange={setPaymentStatus}>
+                <SelectTrigger data-testid="payment-status-select"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unpaid">Unpaid</SelectItem>
+                  <SelectItem value="partial">Partial Paid</SelectItem>
+                  <SelectItem value="full">Full Paid</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {paymentStatus === "partial" && (
+              <>
+                <div>
+                  <Label>Amount Paid</Label>
+                  <Input type="number" value={amountPaid || ""} onChange={e => setAmountPaid(+e.target.value)} data-testid="amount-paid-input" />
+                </div>
+                <div>
+                  <Label>Balance</Label>
+                  <Input type="number" value={balanceAmount || ""} readOnly className="bg-muted" />
+                </div>
+              </>
+            )}
+          </div>
+          <div>
+            <Label>Payment Screenshots (optional)</Label>
+            <input type="file" multiple accept="image/*" onChange={handleScreenshotUpload} className="mt-1 block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90" data-testid="payment-screenshot-input" />
+            {paymentScreenshots.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {paymentScreenshots.map((url, i) => (
+                  <div key={i} className="relative w-16 h-16 rounded border overflow-hidden group">
+                    <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt="" className="w-full h-full object-cover" />
+                    <button className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity" onClick={() => setPaymentScreenshots(prev => prev.filter((_, j) => j !== i))}>
+                      <span className="text-white text-xs">X</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

@@ -7,7 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { ArrowLeft, Package, Truck, ClipboardList, Check, MapPin, Phone, Mail } from "lucide-react";
+import { ArrowLeft, Package, Truck, ClipboardList, Check, MapPin, Phone, Mail, XCircle, Edit, Ban } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const STEPS = [
   { key: "new", label: "Order Placed", icon: ClipboardList },
@@ -21,6 +25,13 @@ const STATUS_STYLES = {
   packaging: "status-packaging",
   packed: "status-packed",
   dispatched: "status-dispatched",
+  cancelled: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+};
+
+const PAYMENT_COLORS = {
+  unpaid: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+  partial: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
+  full: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
 };
 
 export default function OrderDetail() {
@@ -29,20 +40,53 @@ export default function OrderDetail() {
   const [order, setOrder] = useState(null);
   const [customer, setCustomer] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showCancelConfirm1, setShowCancelConfirm1] = useState(false);
+  const [showCancelConfirm2, setShowCancelConfirm2] = useState(false);
+  const [settings, setSettings] = useState({ show_formulation: false });
+  const [showPaymentEdit, setShowPaymentEdit] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({ payment_status: "unpaid", amount_paid: 0 });
   const backendUrl = process.env.REACT_APP_BACKEND_URL;
 
   useEffect(() => { loadOrder(); }, [orderId]);
 
   const loadOrder = async () => {
     try {
-      const res = await api.get(`/orders/${orderId}`);
+      const [res, settingsRes] = await Promise.all([
+        api.get(`/orders/${orderId}`),
+        api.get("/settings"),
+      ]);
       setOrder(res.data);
+      setSettings(settingsRes.data);
       if (res.data.customer_id) {
         const custRes = await api.get(`/customers/${res.data.customer_id}`);
         setCustomer(custRes.data);
       }
     } catch { toast.error("Failed to load order"); }
     finally { setLoading(false); }
+  };
+
+  const handleCancel = async () => {
+    try {
+      await api.put(`/orders/${orderId}/cancel`);
+      toast.success("Order cancelled");
+      setShowCancelConfirm2(false);
+      loadOrder();
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+  };
+
+  const handlePaymentUpdate = async () => {
+    try {
+      const balance = paymentForm.payment_status === "full" ? 0 :
+        paymentForm.payment_status === "partial" ? Math.max(0, (order?.grand_total || 0) - paymentForm.amount_paid) : (order?.grand_total || 0);
+      await api.put(`/orders/${orderId}`, {
+        payment_status: paymentForm.payment_status,
+        amount_paid: paymentForm.payment_status === "full" ? order?.grand_total : paymentForm.amount_paid,
+        balance_amount: balance,
+      });
+      toast.success("Payment updated");
+      setShowPaymentEdit(false);
+      loadOrder();
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
   };
 
   if (loading) return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
@@ -68,7 +112,40 @@ export default function OrderDetail() {
             {" by "}{order.telecaller_name}
           </p>
         </div>
+        {order.status !== "cancelled" && (user?.role === "admin" || user?.role === "telecaller") && (
+          <Button variant="destructive" size="sm" onClick={() => setShowCancelConfirm1(true)} data-testid="cancel-order-btn">
+            <Ban className="w-4 h-4 mr-1" /> Cancel Order
+          </Button>
+        )}
       </div>
+
+      {/* Payment Status Bar */}
+      {order.payment_status && (
+        <Card>
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-muted-foreground">Payment:</span>
+                <Badge variant="secondary" className={`${PAYMENT_COLORS[order.payment_status]} text-xs uppercase`}>
+                  {order.payment_status === "partial" ? "Partial Paid" : order.payment_status === "full" ? "Fully Paid" : "Unpaid"}
+                </Badge>
+                {order.payment_status === "partial" && (
+                  <span className="text-sm">
+                    Paid: <span className="font-mono font-medium">{"\u20B9"}{(order.amount_paid || 0).toFixed(2)}</span>
+                    {" | Balance: "}<span className="font-mono font-medium text-destructive">{"\u20B9"}{(order.balance_amount || 0).toFixed(2)}</span>
+                  </span>
+                )}
+              </div>
+              {(user?.role === "admin" || user?.role === "telecaller") && (
+                <Button variant="outline" size="sm" onClick={() => {
+                  setPaymentForm({ payment_status: order.payment_status || "unpaid", amount_paid: order.amount_paid || 0 });
+                  setShowPaymentEdit(true);
+                }} data-testid="edit-payment-btn"><Edit className="w-3 h-3 mr-1" /> Edit Payment</Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Progress Tracker */}
       <Card>
@@ -207,7 +284,7 @@ export default function OrderDetail() {
                   <p className="text-sm text-muted-foreground">
                     {item.qty} {item.unit !== "blank" ? item.unit : ""} @ {"\u20B9"}{item.rate?.toFixed(2)}
                   </p>
-                  {item.formulation && (user?.role === "admin" || item.show_formulation) && (
+                  {item.formulation && (user?.role === "admin" || settings.show_formulation) && (
                     <p className="text-xs mt-1 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded px-2 py-1 inline-block">
                       Formulation: {item.formulation}
                     </p>
@@ -310,6 +387,61 @@ export default function OrderDetail() {
           </CardContent>
         </Card>
       )}
+
+      {/* Cancel Confirmation 1 */}
+      <Dialog open={showCancelConfirm1} onOpenChange={setShowCancelConfirm1}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Cancel Order {order.order_number}?</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Are you sure you want to cancel this order? This action will mark the order as cancelled.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCancelConfirm1(false)}>No, Keep</Button>
+            <Button variant="destructive" onClick={() => { setShowCancelConfirm1(false); setShowCancelConfirm2(true); }} data-testid="cancel-confirm-1">Yes, Cancel</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cancel Confirmation 2 */}
+      <Dialog open={showCancelConfirm2} onOpenChange={setShowCancelConfirm2}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Final Confirmation</DialogTitle></DialogHeader>
+          <p className="text-sm text-destructive font-medium">This is the final warning. Order {order.order_number} will be permanently cancelled. Are you absolutely sure?</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCancelConfirm2(false)}>Go Back</Button>
+            <Button variant="destructive" onClick={handleCancel} data-testid="cancel-confirm-2">Yes, Cancel Order</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Payment Edit Dialog */}
+      <Dialog open={showPaymentEdit} onOpenChange={setShowPaymentEdit}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Update Payment Status</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Status</Label>
+              <Select value={paymentForm.payment_status} onValueChange={v => setPaymentForm(p => ({ ...p, payment_status: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unpaid">Unpaid</SelectItem>
+                  <SelectItem value="partial">Partial Paid</SelectItem>
+                  <SelectItem value="full">Full Paid</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {paymentForm.payment_status === "partial" && (
+              <div>
+                <Label>Amount Paid</Label>
+                <Input type="number" value={paymentForm.amount_paid || ""} onChange={e => setPaymentForm(p => ({ ...p, amount_paid: +e.target.value }))} />
+                <p className="text-xs text-muted-foreground mt-1">Balance: {"\u20B9"}{Math.max(0, (order?.grand_total || 0) - paymentForm.amount_paid).toFixed(2)}</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowPaymentEdit(false)}>Cancel</Button>
+            <Button onClick={handlePaymentUpdate} data-testid="save-payment-btn">Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

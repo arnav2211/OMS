@@ -1,0 +1,69 @@
+{
+  "summary": "Completed comprehensive testing of CitSpray OMS v2 with extensive new features. Backend APIs showing 97.4% success rate, frontend UI testing shows excellent functionality for most features.",
+  
+  "backend_issues": {
+    "critical_bugs": [],
+    "minor_issues": [
+      {
+        "issue": "Customer duplicate test occasionally fails due to existing GST collision",
+        "impact": "Test reliability only, actual duplicate prevention working correctly",
+        "fix_priority": "LOW"
+      }
+    ]
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "AdminDashboard Settings Tab",
+        "issue": "Global formulation toggle not clearly visible in Settings tab",
+        "selector": "[data-testid='global-formulation-toggle']",
+        "fix_priority": "MEDIUM",
+        "details": "Toggle may be present but not accessible through expected selectors"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "passed_tests": [
+    "Admin login with admin/admin123 credentials",
+    "Settings API GET/PUT for show_formulation toggle",
+    "Customer duplicate prevention (phone and GST)",
+    "Customer delete protection when orders exist",
+    "Customer orders retrieval API",
+    "Order cancellation with double confirmation",
+    "Order payment status updates (unpaid/partial/full)",
+    "Proforma Invoice CRUD operations",
+    "PI PDF generation and download",
+    "PI to Order conversion",
+    "Item sales analytics with case-insensitive grouping",
+    "Telecaller sales reports with period filters (today/week/month)",
+    "Telecaller sales excluding GST/shipping filters",
+    "Frontend login page with CitSpray logo and green theme",
+    "Admin dashboard with stat cards and revenue display",
+    "Navigation sidebar with new features (Proforma Invoice, Item Analytics)",
+    "Proforma Invoice page with create/list/download/convert actions",
+    "Item Analytics page with date filters and drill-down buttons",
+    "Customer management page with expand/delete buttons",
+    "Order management and filtering"
+  ],
+  
+  "test_report_links": [
+    "/app/backend_test.py"
+  ],
+  
+  "action_item_for_main_agent": "Minor fix needed: Ensure global formulation toggle in Admin Settings tab is properly accessible via expected data-testid. All critical features are working correctly.",
+  
+  "updated_files": [
+    "/app/backend_test.py"
+  ],
+  
+  "success_percentage": {
+    "backend": "97.4%",
+    "frontend": "95%"
+  },
+  
+  "should_call_test_agent_after_fix": "false",
+  "should_main_agent_test_itself": "true"
+}

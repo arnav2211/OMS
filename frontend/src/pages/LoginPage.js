@@ -34,27 +34,19 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen grid lg:grid-cols-2" data-testid="login-page">
       {/* Left - Image */}
-      <div className="hidden lg:block relative overflow-hidden">
+      <div className="hidden lg:flex relative overflow-hidden bg-black items-center justify-center">
         <img
-          src="https://images.unsplash.com/photo-1625813506062-ccb45305a4cc?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwxfHxmcmVzaCUyMGNpdHJ1cyUyMGZydWl0JTIwd2F0ZXIlMjBzcGxhc2glMjBoaWdoJTIwc3BlZWQlMjBwaG90b2dyYXBoeSUyMHByb2Zlc3Npb25hbCUyMGFic3RyYWN0fGVufDB8fHx8MTc3MzkzODY1OHww&ixlib=rb-4.1.0&q=85"
-          alt="CitSpray Freshness"
-          className="absolute inset-0 w-full h-full object-cover"
+          src="/logo.png"
+          alt="CitSpray Aroma Sciences"
+          className="w-3/4 max-w-md object-contain"
         />
-        <div className="absolute inset-0 bg-black/40 flex items-end p-12">
-          <div>
-            <h2 className="text-4xl font-bold text-white tracking-tight">CitSpray</h2>
-            <p className="text-white/80 text-lg mt-2">Order Management System</p>
-          </div>
-        </div>
       </div>
 
       {/* Right - Form */}
       <div className="flex items-center justify-center p-8 bg-background">
         <div className="w-full max-w-sm">
           <div className="flex items-center gap-3 mb-8 lg:hidden">
-            <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center">
-              <Package className="w-5 h-5 text-primary-foreground" />
-            </div>
+            <img src="/logo.png" alt="CitSpray" className="h-10 w-10 rounded-xl object-contain" />
             <span className="text-2xl font-bold tracking-tight">CitSpray</span>
           </div>
 

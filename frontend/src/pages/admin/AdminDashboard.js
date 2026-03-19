@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import {
   ClipboardList, Users, Package, Truck, BarChart3, Search,
@@ -24,6 +25,7 @@ const STATUS_STYLES = {
   packaging: "status-packaging",
   packed: "status-packed",
   dispatched: "status-dispatched",
+  cancelled: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
 };
 
 export default function AdminDashboard() {
@@ -35,26 +37,37 @@ export default function AdminDashboard() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [loading, setLoading] = useState(true);
+  const [showFormulation, setShowFormulation] = useState(false);
+  const [formulationGlobal, setFormulationGlobal] = useState(false);
 
   // Formulation
   const [formulationOrder, setFormulationOrder] = useState(null);
-  const [showFormulation, setShowFormulation] = useState(false);
   const [formulationItems, setFormulationItems] = useState([]);
 
   useEffect(() => { loadAll(); }, []);
 
   const loadAll = async () => {
     try {
-      const [statsRes, ordersRes, salesRes] = await Promise.all([
+      const [statsRes, ordersRes, salesRes, settingsRes] = await Promise.all([
         api.get("/reports/dashboard"),
         api.get("/orders"),
         api.get("/reports/sales"),
+        api.get("/settings"),
       ]);
       setStats(statsRes.data);
       setOrders(ordersRes.data);
       setSalesData(salesRes.data);
+      setFormulationGlobal(settingsRes.data?.show_formulation || false);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
+  };
+
+  const toggleFormulationGlobal = async (value) => {
+    try {
+      await api.put("/settings", { show_formulation: value });
+      setFormulationGlobal(value);
+      toast.success(value ? "Formulations visible to all" : "Formulations hidden");
+    } catch { toast.error("Failed to update"); }
   };
 
   const searchOrders = async () => {
@@ -130,6 +143,7 @@ export default function AdminDashboard() {
         <TabsList>
           <TabsTrigger value="orders" data-testid="tab-orders">Orders</TabsTrigger>
           <TabsTrigger value="sales" data-testid="tab-sales">Sales Report</TabsTrigger>
+          <TabsTrigger value="settings" data-testid="tab-settings">Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="orders">
@@ -158,6 +172,7 @@ export default function AdminDashboard() {
                       <SelectItem value="packaging">Packaging</SelectItem>
                       <SelectItem value="packed">Packed</SelectItem>
                       <SelectItem value="dispatched">Dispatched</SelectItem>
+                      <SelectItem value="cancelled">Cancelled</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -248,6 +263,27 @@ export default function AdminDashboard() {
               ) : (
                 <p className="text-center py-8 text-muted-foreground">No sales data yet</p>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="settings">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Formulation Visibility</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between p-4 rounded-lg border">
+                <div>
+                  <p className="font-medium">Show formulations globally</p>
+                  <p className="text-sm text-muted-foreground">When ON, formulations are visible to packaging team for all orders</p>
+                </div>
+                <Switch
+                  checked={formulationGlobal}
+                  onCheckedChange={toggleFormulationGlobal}
+                  data-testid="global-formulation-toggle"
+                />
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

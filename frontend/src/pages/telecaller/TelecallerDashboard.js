@@ -7,13 +7,18 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Search, Package, Truck, ClipboardList, Eye } from "lucide-react";
+import { Plus, Search, Package, Truck, ClipboardList, Eye, DollarSign } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 
 const STATUS_STYLES = {
   new: "status-new",
   packaging: "status-packaging",
   packed: "status-packed",
   dispatched: "status-dispatched",
+  cancelled: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
 };
 
 export default function TelecallerDashboard() {
@@ -22,6 +27,10 @@ export default function TelecallerDashboard() {
   const [stats, setStats] = useState({});
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [salesPeriod, setSalesPeriod] = useState("today");
+  const [salesData, setSalesData] = useState(null);
+  const [excludeGst, setExcludeGst] = useState(false);
+  const [excludeShipping, setExcludeShipping] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -41,6 +50,15 @@ export default function TelecallerDashboard() {
       setLoading(false);
     }
   };
+
+  const loadSales = async () => {
+    try {
+      const res = await api.get(`/reports/telecaller-sales?period=${salesPeriod}&exclude_gst=${excludeGst}&exclude_shipping=${excludeShipping}`);
+      setSalesData(res.data);
+    } catch {}
+  };
+
+  useEffect(() => { loadSales(); }, [salesPeriod, excludeGst, excludeShipping]);
 
   const filtered = orders.filter(
     (o) =>
@@ -85,6 +103,52 @@ export default function TelecallerDashboard() {
           </Card>
         ))}
       </div>
+
+      {/* My Sales */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <CardTitle className="text-lg flex items-center gap-2"><DollarSign className="w-5 h-5 text-primary" /> My Sales</CardTitle>
+            <div className="flex items-center gap-3">
+              <Select value={salesPeriod} onValueChange={setSalesPeriod}>
+                <SelectTrigger className="w-32" data-testid="sales-period-select"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="today">Today</SelectItem>
+                  <SelectItem value="week">This Week</SelectItem>
+                  <SelectItem value="month">This Month</SelectItem>
+                  <SelectItem value="all">All Time</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="flex items-center gap-2">
+                <Checkbox id="exGst" checked={excludeGst} onCheckedChange={setExcludeGst} data-testid="exclude-gst-check" />
+                <Label htmlFor="exGst" className="text-xs cursor-pointer">Excl. GST</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Checkbox id="exShip" checked={excludeShipping} onCheckedChange={setExcludeShipping} data-testid="exclude-shipping-check" />
+                <Label htmlFor="exShip" className="text-xs cursor-pointer">Excl. Shipping</Label>
+              </div>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {salesData ? (
+            <div className="grid grid-cols-3 gap-4">
+              <div className="text-center p-3 rounded-lg bg-secondary">
+                <p className="text-xs text-muted-foreground uppercase">Orders</p>
+                <p className="text-2xl font-bold mt-1">{salesData.total_orders}</p>
+              </div>
+              <div className="text-center p-3 rounded-lg bg-secondary">
+                <p className="text-xs text-muted-foreground uppercase">Total</p>
+                <p className="text-2xl font-bold mt-1 font-mono">{"\u20B9"}{salesData.total_amount?.toLocaleString("en-IN")}</p>
+              </div>
+              <div className="text-center p-3 rounded-lg bg-primary/10">
+                <p className="text-xs text-muted-foreground uppercase">Product Sales</p>
+                <p className="text-2xl font-bold mt-1 font-mono text-primary">{"\u20B9"}{salesData.product_sales?.toLocaleString("en-IN")}</p>
+              </div>
+            </div>
+          ) : <p className="text-muted-foreground text-sm">Loading...</p>}
+        </CardContent>
+      </Card>
 
       {/* Orders Table */}
       <Card>

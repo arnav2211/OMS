@@ -23,8 +23,16 @@ export default function PackagingDashboard() {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
   const [uploadTarget, setUploadTarget] = useState(null);
+  const [formulationVisible, setFormulationVisible] = useState(false);
 
-  useEffect(() => { loadOrders(); }, []);
+  useEffect(() => { loadOrders(); loadSettings(); }, []);
+
+  const loadSettings = async () => {
+    try {
+      const res = await api.get("/settings");
+      setFormulationVisible(res.data?.show_formulation || false);
+    } catch {}
+  };
 
   const loadOrders = async () => {
     try {
@@ -177,7 +185,7 @@ export default function PackagingDashboard() {
                       {item.qty} {item.unit} - {"\u20B9"}{item.total?.toFixed(2)}
                     </span>
                   </div>
-                  {item.show_formulation && item.formulation && (
+                  {formulationVisible && item.formulation && (
                     <div className="p-2 rounded bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
                       <p className="text-xs font-medium text-amber-700 dark:text-amber-400">Formulation:</p>
                       <p className="text-sm mt-1 whitespace-pre-wrap">{item.formulation}</p>
