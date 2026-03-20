@@ -1,427 +1,437 @@
 import { useState, useEffect } from "react";
-import { useParams, Link } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import api from "@/lib/api";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useAuth } from "@/contexts/AuthContext";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { toast } from "sonner";
-import { ArrowLeft, Package, Truck, ClipboardList, Check, Phone, Mail, Trash2, Edit, Printer } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Separator } from "@/components/ui/separator";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { toast } from "sonner";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText } from "lucide-react";
 
-const STEPS = [
-  { key: "new", label: "Order Placed", icon: ClipboardList },
-  { key: "packaging", label: "Packaging", icon: Package },
-  { key: "packed", label: "Packed", icon: Package },
-  { key: "dispatched", label: "Dispatched", icon: Truck },
-];
-
-const STATUS_STYLES = {
-  new: "status-new",
-  packaging: "status-packaging",
-  packed: "status-packed",
-  dispatched: "status-dispatched",
-  cancelled: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
-};
-
-const PAYMENT_COLORS = {
-  unpaid: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
-  partial: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
-  full: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
-};
+const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
+const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
 
 export default function OrderDetail() {
-  const { orderId } = useParams();
+  const { id } = useParams();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [order, setOrder] = useState(null);
-  const [customer, setCustomer] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [showDeleteConfirm1, setShowDeleteConfirm1] = useState(false);
-  const [showDeleteConfirm2, setShowDeleteConfirm2] = useState(false);
-  const [settings, setSettings] = useState({ show_formulation: false });
-  const [showPaymentEdit, setShowPaymentEdit] = useState(false);
-  const [paymentForm, setPaymentForm] = useState({ payment_status: "unpaid", amount_paid: 0 });
-  const backendUrl = process.env.REACT_APP_BACKEND_URL;
+  const [showEdit, setShowEdit] = useState(false);
+  const [editData, setEditData] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [showPackaging, setShowPackaging] = useState(false);
+  const [showDispatch, setShowDispatch] = useState(false);
+  const [showFormulation, setShowFormulation] = useState(false);
+  const [formulationItems, setFormulationItems] = useState([]);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [packagingStaff, setPackagingStaff] = useState([]);
+  const [dispatchData, setDispatchData] = useState({ courier_name: "", transporter_name: "", lr_no: "", dispatch_type: "" });
 
-  useEffect(() => { loadOrder(); }, [orderId]);
+  useEffect(() => { loadOrder(); }, [id]);
 
   const loadOrder = async () => {
-    try {
-      const [res, settingsRes] = await Promise.all([
-        api.get(`/orders/${orderId}`),
-        api.get("/settings"),
-      ]);
-      setOrder(res.data);
-      setSettings(settingsRes.data);
-      if (res.data.customer_id) {
-        const custRes = await api.get(`/customers/${res.data.customer_id}`);
-        setCustomer(custRes.data);
-      }
-    } catch { toast.error("Failed to load order"); }
+    try { const res = await api.get(`/orders/${id}`); setOrder(res.data); }
+    catch { toast.error("Order not found"); navigate("/"); }
     finally { setLoading(false); }
   };
 
-  const handleDelete = async () => {
-    try {
-      await api.delete(`/orders/${orderId}`);
-      toast.success("Order permanently deleted");
-      setShowDeleteConfirm2(false);
-      // Navigate back since order no longer exists
-      window.history.back();
-    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+  const isDispatched = order?.status === "dispatched";
+  const canEditOrder = user?.role === "admin" || (user?.role === "telecaller" && order?.telecaller_id === user?.id);
+  const canEditFormulation = user?.role === "admin" || user?.role === "packaging";
+  const showFormulations = user?.role === "admin" || user?.role === "packaging";
+
+  const openEdit = () => {
+    if (isDispatched) return toast.error("Cannot edit dispatched order");
+    setEditData({
+      purpose: order.purpose || "",
+      remark: order.remark || "",
+      payment_status: order.payment_status || "unpaid",
+      amount_paid: order.amount_paid || 0,
+      mode_of_payment: order.mode_of_payment || "",
+      payment_mode_details: order.payment_mode_details || "",
+    });
+    setShowEdit(true);
   };
 
-  const handlePaymentUpdate = async () => {
+  const saveEdit = async () => {
+    setSaving(true);
     try {
-      const balance = paymentForm.payment_status === "full" ? 0 :
-        paymentForm.payment_status === "partial" ? Math.max(0, (order?.grand_total || 0) - paymentForm.amount_paid) : (order?.grand_total || 0);
-      await api.put(`/orders/${orderId}`, {
-        payment_status: paymentForm.payment_status,
-        amount_paid: paymentForm.payment_status === "full" ? order?.grand_total : paymentForm.amount_paid,
-        balance_amount: balance,
-      });
-      toast.success("Payment updated");
-      setShowPaymentEdit(false);
-      loadOrder();
+      let updatePayload = { ...editData };
+      if (updatePayload.payment_status === "full") {
+        updatePayload.amount_paid = order.grand_total;
+        updatePayload.balance_amount = 0;
+      } else if (updatePayload.payment_status === "partial") {
+        updatePayload.balance_amount = Math.max(0, order.grand_total - updatePayload.amount_paid);
+      } else {
+        updatePayload.amount_paid = 0;
+        updatePayload.balance_amount = order.grand_total;
+      }
+      await api.put(`/orders/${id}`, updatePayload);
+      toast.success("Order updated"); setShowEdit(false); loadOrder();
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+    finally { setSaving(false); }
+  };
+
+  const openFormulation = () => {
+    setFormulationItems(order.items.map(i => ({ product_name: i.product_name, formulation: i.formulation || "" })));
+    setShowFormulation(true);
+  };
+
+  const saveFormulation = async () => {
+    setSaving(true);
+    try {
+      await api.put(`/orders/${id}/formulation`, { items: formulationItems });
+      toast.success("Formulations updated"); setShowFormulation(false); loadOrder();
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+    finally { setSaving(false); }
+  };
+
+  const openPackaging = async () => {
+    try { const res = await api.get("/packaging-staff"); setPackagingStaff(res.data.filter(s => s.active)); }
+    catch { } setShowPackaging(true);
+  };
+
+  const savePackaging = async (packData) => {
+    setSaving(true);
+    try {
+      await api.put(`/orders/${id}/packaging`, packData);
+      toast.success("Packaging updated"); setShowPackaging(false); loadOrder();
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+    finally { setSaving(false); }
+  };
+
+  const openDispatch = () => {
+    setDispatchData({ courier_name: order.courier_name || "", transporter_name: order.transporter_name || "", lr_no: "", dispatch_type: order.shipping_method || "" });
+    setShowDispatch(true);
+  };
+
+  const saveDispatch = async () => {
+    setSaving(true);
+    try {
+      await api.put(`/orders/${id}/dispatch`, dispatchData);
+      toast.success("Order dispatched!"); setShowDispatch(false); loadOrder();
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+    finally { setSaving(false); }
   };
 
   const handlePrint = () => {
     const token = localStorage.getItem("token");
-    window.open(`${backendUrl}/api/orders/${orderId}/print?token=${token}`, '_blank');
+    window.open(`${process.env.REACT_APP_BACKEND_URL}/api/orders/${id}/print?token=${token}`, "_blank");
   };
 
-  if (loading) return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
-  if (!order) return <div className="text-center py-12 text-muted-foreground">Order not found</div>;
+  const deleteOrder = async () => {
+    if (deleteConfirmText !== order.order_number) return toast.error("Type the order number to confirm");
+    try { await api.delete(`/orders/${id}/delete`); toast.success("Order deleted"); navigate("/orders"); }
+    catch (err) { toast.error(err.response?.data?.detail || "Failed"); setShowDeleteConfirm(false); }
+  };
 
-  const stepIndex = STEPS.findIndex((s) => s.key === order.status);
-  const isAdmin = user?.role === "admin";
+  if (loading) return <div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div></div>;
+  if (!order) return <p className="text-center py-8 text-muted-foreground">Order not found.</p>;
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6" data-testid="order-detail">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-        <Link to={-1}>
-          <Button variant="ghost" size="icon" data-testid="back-btn"><ArrowLeft className="w-5 h-5" /></Button>
-        </Link>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-3 flex-wrap">
+    <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6 px-1 sm:px-0" data-testid="order-detail-page">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="icon" onClick={() => navigate(-1)}><ArrowLeft className="w-5 h-5" /></Button>
+          <div>
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight">{order.order_number}</h1>
-            <Badge variant="secondary" className={`${STATUS_STYLES[order.status]} text-xs uppercase`}>{order.status}</Badge>
+            <Badge className={`${STATUS_COLORS[order.status] || "bg-gray-100"} text-xs mt-1`} data-testid="order-status-badge">{order.status}</Badge>
           </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            Created on {new Date(order.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}
-            {isAdmin && order.telecaller_name && ` by ${order.telecaller_name}`}
-          </p>
         </div>
         <div className="flex gap-2">
-          {(isAdmin || user?.role === "packaging") && (
-            <Button variant="outline" size="sm" onClick={handlePrint} data-testid="print-order-btn">
-              <Printer className="w-4 h-4 mr-1" /> Print
-            </Button>
-          )}
-          {(isAdmin || user?.role === "telecaller") && (
-            <Button variant="destructive" size="sm" onClick={() => setShowDeleteConfirm1(true)} data-testid="delete-order-btn">
-              <Trash2 className="w-4 h-4 mr-1" /> Delete
-            </Button>
-          )}
+          <Button variant="outline" size="sm" onClick={handlePrint} data-testid="print-order-btn"><Printer className="w-4 h-4 mr-1" /> Print</Button>
+          {canEditOrder && !isDispatched && <Button variant="outline" size="sm" onClick={openEdit} data-testid="edit-order-btn"><Edit className="w-4 h-4 mr-1" /> Edit</Button>}
+          {canEditFormulation && <Button variant="outline" size="sm" onClick={openFormulation} data-testid="formulation-btn"><FileText className="w-4 h-4 mr-1" /> Formulation</Button>}
+          {user?.role === "admin" && <Button variant="destructive" size="sm" onClick={() => setShowDeleteConfirm(true)} data-testid="delete-order-btn"><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>}
         </div>
       </div>
 
-      {/* Payment Status Bar */}
-      {order.payment_status && (
-        <Card>
-          <CardContent className="pt-4 pb-4">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
-              <div className="flex items-center gap-3 flex-wrap">
-                <span className="text-sm font-medium text-muted-foreground">Payment:</span>
-                <Badge variant="secondary" className={`${PAYMENT_COLORS[order.payment_status]} text-xs uppercase`}>
-                  {order.payment_status === "partial" ? "Partial Paid" : order.payment_status === "full" ? "Fully Paid" : "Unpaid"}
-                </Badge>
-                {order.payment_status === "partial" && (
-                  <span className="text-sm">
-                    Paid: <span className="font-mono font-medium">{"\u20B9"}{(order.amount_paid || 0).toFixed(2)}</span>
-                    {" | Balance: "}<span className="font-mono font-medium text-destructive">{"\u20B9"}{(order.balance_amount || 0).toFixed(2)}</span>
-                  </span>
-                )}
-              </div>
-              {(isAdmin || user?.role === "telecaller") && (
-                <Button variant="outline" size="sm" onClick={() => {
-                  setPaymentForm({ payment_status: order.payment_status || "unpaid", amount_paid: order.amount_paid || 0 });
-                  setShowPaymentEdit(true);
-                }} data-testid="edit-payment-btn"><Edit className="w-3 h-3 mr-1" /> Edit Payment</Button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {isDispatched && <div className="p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 text-sm text-purple-800 dark:text-purple-200" data-testid="dispatch-lock-notice">This order has been dispatched. Editing is locked (formulation changes only).</div>}
 
-      {/* Progress Tracker */}
+      {/* Customer Info */}
       <Card>
-        <CardContent className="pt-6">
-          <div className="flex items-center justify-between px-2 sm:px-4">
-            {STEPS.map((step, idx) => {
-              const Icon = step.icon;
-              const status = idx < stepIndex ? "completed" : idx === stepIndex ? "current" : "pending";
-              return (
-                <div key={step.key} className="flex flex-col items-center relative flex-1">
-                  {idx > 0 && (
-                    <div className={`absolute top-4 -left-1/2 w-full h-0.5 ${idx <= stepIndex ? "bg-primary" : "bg-muted"}`} style={{ right: "50%", left: "-50%" }} />
-                  )}
-                  <div className={`progress-step ${status}`}>
-                    <div className="step-dot relative z-10">
-                      {status === "completed" ? <Check className="w-4 h-4" /> : <Icon className="w-4 h-4" />}
-                    </div>
-                  </div>
-                  <p className={`text-xs mt-2 font-medium text-center ${status === "pending" ? "text-muted-foreground" : "text-foreground"}`}>{step.label}</p>
-                </div>
-              );
-            })}
-          </div>
+        <CardHeader className="pb-3"><CardTitle className="text-base">Customer Information</CardTitle></CardHeader>
+        <CardContent className="space-y-2">
+          <div className="flex justify-between"><span className="text-sm text-muted-foreground">Customer</span><span className="text-sm font-medium">{order.customer_name}</span></div>
+          {order.billing_address && (
+            <div className="flex justify-between"><span className="text-sm text-muted-foreground">Billing Address</span><span className="text-sm text-right max-w-[60%]">{order.billing_address.address_line}, {order.billing_address.city}, {order.billing_address.state} - {order.billing_address.pincode}</span></div>
+          )}
+          {order.shipping_address && (
+            <div className="flex justify-between"><span className="text-sm text-muted-foreground">Shipping Address</span><span className="text-sm text-right max-w-[60%]">{order.shipping_address.address_line}, {order.shipping_address.city}, {order.shipping_address.state} - {order.shipping_address.pincode}</span></div>
+          )}
+          {order.purpose && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Purpose</span><span className="text-sm">{order.purpose}</span></div>}
+          {order.mode_of_payment && (
+            <div className="flex justify-between"><span className="text-sm text-muted-foreground">Payment Mode</span><span className="text-sm">{order.mode_of_payment}{order.payment_mode_details ? ` (${order.payment_mode_details})` : ""}</span></div>
+          )}
+          <div className="flex justify-between"><span className="text-sm text-muted-foreground">Created</span><span className="text-sm">{new Date(order.created_at).toLocaleString("en-IN")}</span></div>
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Customer Info */}
-        <Card>
-          <CardHeader className="pb-3"><CardTitle className="text-base">Customer Details</CardTitle></CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <p className="font-medium text-base">{order.customer_name}</p>
-            {customer && (
-              <>
-                {customer.phone_numbers?.length > 0 && (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Phone className="w-3.5 h-3.5 flex-shrink-0" />
-                    <span className="break-all">{customer.phone_numbers.join(", ")}</span>
-                  </div>
-                )}
-                {customer.email && (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Mail className="w-3.5 h-3.5 flex-shrink-0" />
-                    <span className="break-all">{customer.email}</span>
-                  </div>
-                )}
-                {customer.gst_no && (
-                  <div className="text-muted-foreground">
-                    <span className="text-xs uppercase tracking-wider font-medium">GST:</span> {customer.gst_no}
-                  </div>
-                )}
-                <Separator />
-                <div>
-                  <p className="text-xs uppercase tracking-wider font-medium text-muted-foreground mb-1">Billing Address</p>
-                  <p>{customer.billing_address?.address}</p>
-                  <p>{customer.billing_address?.city}, {customer.billing_address?.state} - {customer.billing_address?.pincode}</p>
-                </div>
-                <div>
-                  <p className="text-xs uppercase tracking-wider font-medium text-muted-foreground mb-1">Shipping Address</p>
-                  <p>{customer.shipping_address?.address}</p>
-                  <p>{customer.shipping_address?.city}, {customer.shipping_address?.state} - {customer.shipping_address?.pincode}</p>
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Shipping & Dispatch */}
-        <Card className="lg:col-span-2">
-          <CardHeader className="pb-3"><CardTitle className="text-base">Shipping & Dispatch</CardTitle></CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <p className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Method</p>
-                <p className="capitalize mt-1">{order.shipping_method?.replace("_", " ") || "N/A"}</p>
-              </div>
-              {order.courier_name && (
-                <div>
-                  <p className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Courier</p>
-                  <p className="mt-1">{order.courier_name}</p>
-                </div>
-              )}
-              {order.transporter_name && (
-                <div>
-                  <p className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Transporter</p>
-                  <p className="mt-1">{order.transporter_name}</p>
-                </div>
-              )}
-            </div>
-            {(order.dispatch?.lr_no || order.dispatch?.dispatched_at) && (
-              <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800">
-                <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">Dispatch Info</p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
-                  {order.dispatch.courier_name && <div><span className="text-muted-foreground">Courier:</span> {order.dispatch.courier_name}</div>}
-                  {order.dispatch.transporter_name && <div><span className="text-muted-foreground">Transporter:</span> {order.dispatch.transporter_name}</div>}
-                  {order.dispatch.lr_no && <div><span className="text-muted-foreground">LR No:</span> <span className="font-mono">{order.dispatch.lr_no}</span></div>}
-                  {order.dispatch.dispatched_by && <div><span className="text-muted-foreground">Dispatched By:</span> {order.dispatch.dispatched_by}</div>}
-                  {order.dispatch.dispatched_at && <div><span className="text-muted-foreground">Date:</span> {new Date(order.dispatch.dispatched_at).toLocaleDateString("en-IN")}</div>}
-                </div>
-              </div>
-            )}
-            {order.purpose && (
-              <div>
-                <p className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Purpose</p>
-                <p className="mt-1">{order.purpose}</p>
-              </div>
-            )}
-            {order.remark && (
-              <div>
-                <p className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Remarks</p>
-                <p className="mt-1">{order.remark}</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Order Items */}
+      {/* Items */}
       <Card>
-        <CardHeader className="pb-3"><CardTitle className="text-base">Order Items</CardTitle></CardHeader>
+        <CardHeader className="pb-3"><CardTitle className="text-base">Items ({order.items?.length})</CardTitle></CardHeader>
         <CardContent>
-          <div className="space-y-3">
-            {order.items?.map((item, idx) => (
-              <div key={idx} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 rounded-lg border gap-2" data-testid={`detail-item-${idx}`}>
-                <div className="flex-1">
-                  <p className="font-medium">{item.product_name}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {item.qty} {item.unit !== "blank" ? item.unit : ""} @ {"\u20B9"}{item.rate?.toFixed(2)}
-                  </p>
-                  {item.formulation && (isAdmin || settings.show_formulation) && (
-                    <p className="text-xs mt-1 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded px-2 py-1 inline-block">
-                      Formulation: {item.formulation}
-                    </p>
-                  )}
-                </div>
-                <div className="text-right">
-                  <p className="font-mono font-medium">{"\u20B9"}{item.amount?.toFixed(2)}</p>
-                  {item.gst_amount > 0 && (
-                    <p className="text-xs text-muted-foreground">+{item.gst_rate}% GST: {"\u20B9"}{item.gst_amount?.toFixed(2)}</p>
-                  )}
-                </div>
-              </div>
-            ))}
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">#</TableHead>
+                  <TableHead className="text-xs">Product</TableHead>
+                  <TableHead className="text-xs text-right">Qty</TableHead>
+                  <TableHead className="text-xs">Unit</TableHead>
+                  <TableHead className="text-xs text-right">Rate</TableHead>
+                  <TableHead className="text-xs text-right">Amount</TableHead>
+                  {order.gst_applicable && <><TableHead className="text-xs text-right">GST%</TableHead><TableHead className="text-xs text-right">GST Amt</TableHead></>}
+                  <TableHead className="text-xs text-right">Total</TableHead>
+                  {showFormulations && <TableHead className="text-xs">Formulation</TableHead>}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {order.items?.map((item, i) => (
+                  <TableRow key={i} data-testid={`order-item-row-${i}`}>
+                    <TableCell className="text-sm">{i + 1}</TableCell>
+                    <TableCell className="text-sm">
+                      {item.product_name}
+                      {item.description && <p className="text-xs text-muted-foreground">{item.description}</p>}
+                    </TableCell>
+                    <TableCell className="text-sm text-right font-mono">{item.qty}</TableCell>
+                    <TableCell className="text-sm">{item.unit}</TableCell>
+                    <TableCell className="text-sm text-right font-mono">{item.rate?.toFixed(2)}</TableCell>
+                    <TableCell className="text-sm text-right font-mono">{item.amount?.toFixed(2)}</TableCell>
+                    {order.gst_applicable && (
+                      <><TableCell className="text-sm text-right">{item.gst_rate}%</TableCell><TableCell className="text-sm text-right font-mono">{item.gst_amount?.toFixed(2)}</TableCell></>
+                    )}
+                    <TableCell className="text-sm text-right font-mono font-medium">{item.total?.toFixed(2)}</TableCell>
+                    {showFormulations && <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">{item.formulation || "-"}</TableCell>}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
-          <Separator className="my-4" />
-          <div className="space-y-2 text-sm max-w-xs ml-auto">
+          <div className="mt-4 space-y-2 text-sm">
+            <Separator />
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">{"\u20B9"}{order.subtotal?.toFixed(2)}</span></div>
-            {order.total_gst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-mono">{"\u20B9"}{order.total_gst?.toFixed(2)}</span></div>}
+            {order.gst_applicable && <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-mono">{"\u20B9"}{order.total_gst?.toFixed(2)}</span></div>}
             {order.shipping_charge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping</span><span className="font-mono">{"\u20B9"}{order.shipping_charge?.toFixed(2)}</span></div>}
             {order.shipping_gst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST</span><span className="font-mono">{"\u20B9"}{order.shipping_gst?.toFixed(2)}</span></div>}
             <Separator />
-            <div className="flex justify-between text-base font-bold"><span>Grand Total</span><span className="font-mono">{"\u20B9"}{order.grand_total?.toFixed(2)}</span></div>
+            <div className="flex justify-between text-base font-bold"><span>Grand Total</span><span className="font-mono">{"\u20B9"}{order.grand_total}</span></div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Packaging Info */}
-      {(order.packaging?.order_images?.length > 0 || order.packaging?.packed_box_images?.length > 0 || Object.keys(order.packaging?.item_images || {}).length > 0 || order.packaging?.item_packed_by?.length > 0) && (
+      {/* Payment */}
+      <Card>
+        <CardHeader className="pb-3"><CardTitle className="text-base">Payment Details</CardTitle></CardHeader>
+        <CardContent className="space-y-2">
+          <div className="flex justify-between"><span className="text-sm text-muted-foreground">Status</span><Badge variant="outline">{order.payment_status}</Badge></div>
+          {order.amount_paid > 0 && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Amount Paid</span><span className="text-sm font-mono">{"\u20B9"}{order.amount_paid}</span></div>}
+          {order.balance_amount > 0 && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Balance</span><span className="text-sm font-mono text-red-500">{"\u20B9"}{order.balance_amount}</span></div>}
+        </CardContent>
+      </Card>
+
+      {/* Packaging, Dispatch, Remark */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Packaging */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Packaging Details</CardTitle>
-            <CardDescription className="space-y-1">
-              {order.packaging?.item_packed_by?.length > 0 && <span className="block">Item Packed By: {order.packaging.item_packed_by.join(", ")}</span>}
-              {order.packaging?.box_packed_by?.length > 0 && <span className="block">Box Packed By: {order.packaging.box_packed_by.join(", ")}</span>}
-              {order.packaging?.checked_by?.length > 0 && <span className="block">Checked By: {order.packaging.checked_by.join(", ")}</span>}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {Object.entries(order.packaging?.item_images || {}).map(([idx, urls]) => (
-                <div key={idx}>
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Item {+idx + 1}: {order.items?.[idx]?.product_name}</p>
-                  <div className="flex flex-wrap gap-2">
-                    {urls.map((url, i) => (
-                      <a key={i} href={`${backendUrl}${url}`} target="_blank" rel="noreferrer" className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-shadow">
-                        <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              ))}
-              {order.packaging?.order_images?.length > 0 && (
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Order Images</p>
-                  <div className="flex flex-wrap gap-2">
-                    {order.packaging.order_images.map((url, i) => (
-                      <a key={i} href={`${backendUrl}${url}`} target="_blank" rel="noreferrer" className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-shadow">
-                        <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {order.packaging?.packed_box_images?.length > 0 && (
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Packed Box</p>
-                  <div className="flex flex-wrap gap-2">
-                    {order.packaging.packed_box_images.map((url, i) => (
-                      <a key={i} href={`${backendUrl}${url}`} target="_blank" rel="noreferrer" className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-shadow">
-                        <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
-                      </a>
-                    ))}
-                  </div>
-                </div>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Packaging</CardTitle>
+              {["admin", "packaging"].includes(user?.role) && order.status !== "dispatched" && (
+                <Button variant="outline" size="sm" onClick={openPackaging} data-testid="update-packaging-btn"><Package className="w-4 h-4 mr-1" /> Update</Button>
               )}
             </div>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {order.packaging?.item_packed_by?.length > 0 && <div><span className="text-muted-foreground">Packed By:</span> {order.packaging.item_packed_by.join(", ")}</div>}
+            {order.packaging?.box_packed_by?.length > 0 && <div><span className="text-muted-foreground">Box Packed By:</span> {order.packaging.box_packed_by.join(", ")}</div>}
+            {order.packaging?.checked_by?.length > 0 && <div><span className="text-muted-foreground">Checked By:</span> {order.packaging.checked_by.join(", ")}</div>}
+            {order.packaging?.packed_at && <div><span className="text-muted-foreground">Packed At:</span> {new Date(order.packaging.packed_at).toLocaleString("en-IN")}</div>}
+            {!order.packaging?.packed_at && <p className="text-muted-foreground">Not yet packed.</p>}
           </CardContent>
+        </Card>
+
+        {/* Dispatch */}
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Dispatch</CardTitle>
+              {["admin", "dispatch"].includes(user?.role) && order.status === "packed" && (
+                <Button variant="outline" size="sm" onClick={openDispatch} data-testid="dispatch-order-btn"><Truck className="w-4 h-4 mr-1" /> Dispatch</Button>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {order.dispatch?.dispatched_at ? (
+              <>
+                <div><span className="text-muted-foreground">Dispatched:</span> {new Date(order.dispatch.dispatched_at).toLocaleString("en-IN")}</div>
+                {order.dispatch.courier_name && <div><span className="text-muted-foreground">Courier:</span> {order.dispatch.courier_name}</div>}
+                {order.dispatch.transporter_name && <div><span className="text-muted-foreground">Transporter:</span> {order.dispatch.transporter_name}</div>}
+                {order.dispatch.lr_no && <div><span className="text-muted-foreground">LR No:</span> {order.dispatch.lr_no}</div>}
+              </>
+            ) : <p className="text-muted-foreground">Not dispatched yet.</p>}
+          </CardContent>
+        </Card>
+      </div>
+
+      {order.remark && (
+        <Card>
+          <CardContent className="pt-6"><p className="text-sm"><span className="font-medium">Remarks:</span> {order.remark}</p></CardContent>
         </Card>
       )}
 
-      {/* Delete Confirmation 1 */}
-      <Dialog open={showDeleteConfirm1} onOpenChange={setShowDeleteConfirm1}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Delete Order {order.order_number}?</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">This will permanently delete the order and all its related data (items, payment details, dispatch details). This action cannot be undone.</p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDeleteConfirm1(false)}>No, Keep</Button>
-            <Button variant="destructive" onClick={() => { setShowDeleteConfirm1(false); setShowDeleteConfirm2(true); }} data-testid="delete-confirm-1">Yes, Delete</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirmation 2 */}
-      <Dialog open={showDeleteConfirm2} onOpenChange={setShowDeleteConfirm2}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Final Confirmation</DialogTitle></DialogHeader>
-          <p className="text-sm text-destructive font-medium">Order {order.order_number} and ALL related data will be PERMANENTLY deleted. This cannot be reversed. Are you absolutely sure?</p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDeleteConfirm2(false)}>Go Back</Button>
-            <Button variant="destructive" onClick={handleDelete} data-testid="delete-confirm-2">Yes, Permanently Delete</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Payment Edit Dialog */}
-      <Dialog open={showPaymentEdit} onOpenChange={setShowPaymentEdit}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Update Payment Status</DialogTitle></DialogHeader>
+      {/* Edit Dialog */}
+      <Dialog open={showEdit} onOpenChange={setShowEdit}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Edit Order</DialogTitle></DialogHeader>
           <div className="space-y-4">
-            <div>
-              <Label>Status</Label>
-              <Select value={paymentForm.payment_status} onValueChange={v => setPaymentForm(p => ({ ...p, payment_status: v }))}>
+            <div><Label>Purpose</Label><Textarea value={editData.purpose} onChange={(e) => setEditData({ ...editData, purpose: e.target.value })} /></div>
+            <div><Label>Payment Status</Label>
+              <Select value={editData.payment_status} onValueChange={(v) => setEditData({ ...editData, payment_status: v })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="unpaid">Unpaid</SelectItem>
-                  <SelectItem value="partial">Partial Paid</SelectItem>
-                  <SelectItem value="full">Full Paid</SelectItem>
-                </SelectContent>
+                <SelectContent><SelectItem value="unpaid">Unpaid</SelectItem><SelectItem value="partial">Partial</SelectItem><SelectItem value="full">Full</SelectItem></SelectContent>
               </Select>
             </div>
-            {paymentForm.payment_status === "partial" && (
-              <div>
-                <Label>Amount Paid</Label>
-                <Input type="number" value={paymentForm.amount_paid || ""} onChange={e => setPaymentForm(p => ({ ...p, amount_paid: +e.target.value }))} />
-                <p className="text-xs text-muted-foreground mt-1">Balance: {"\u20B9"}{Math.max(0, (order?.grand_total || 0) - paymentForm.amount_paid).toFixed(2)}</p>
-              </div>
+            {editData.payment_status === "partial" && (
+              <div><Label>Amount Paid</Label><Input type="number" value={editData.amount_paid || ""} onChange={(e) => setEditData({ ...editData, amount_paid: +e.target.value })} /></div>
             )}
+            <div><Label>Mode of Payment</Label>
+              <Select value={editData.mode_of_payment} onValueChange={(v) => setEditData({ ...editData, mode_of_payment: v })}>
+                <SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger>
+                <SelectContent><SelectItem value="Cash">Cash</SelectItem><SelectItem value="Online">Online</SelectItem><SelectItem value="Other">Other</SelectItem></SelectContent>
+              </Select>
+            </div>
+            {editData.mode_of_payment === "Other" && (
+              <div><Label>Payment Details</Label><Input value={editData.payment_mode_details} onChange={(e) => setEditData({ ...editData, payment_mode_details: e.target.value })} /></div>
+            )}
+            <div><Label>Remarks</Label><Textarea value={editData.remark} onChange={(e) => setEditData({ ...editData, remark: e.target.value })} /></div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowPaymentEdit(false)}>Cancel</Button>
-            <Button onClick={handlePaymentUpdate} data-testid="save-payment-btn">Save</Button>
+            <Button variant="outline" onClick={() => setShowEdit(false)}>Cancel</Button>
+            <Button onClick={saveEdit} disabled={saving}>{saving ? "Saving..." : "Save"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Formulation Dialog */}
+      <Dialog open={showFormulation} onOpenChange={setShowFormulation}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit Formulations</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            {formulationItems.map((item, i) => (
+              <div key={i} className="space-y-1">
+                <Label className="text-sm font-medium">{item.product_name}</Label>
+                <Textarea value={item.formulation} onChange={(e) => {
+                  const updated = [...formulationItems];
+                  updated[i] = { ...updated[i], formulation: e.target.value };
+                  setFormulationItems(updated);
+                }} placeholder="Enter formulation..." className="min-h-[80px]" data-testid={`formulation-input-${i}`} />
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowFormulation(false)}>Cancel</Button>
+            <Button onClick={saveFormulation} disabled={saving}>{saving ? "Saving..." : "Save Formulations"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Packaging Dialog - Simplified */}
+      <Dialog open={showPackaging} onOpenChange={setShowPackaging}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Update Packaging</DialogTitle></DialogHeader>
+          <PackagingForm order={order} staffList={packagingStaff} onSave={savePackaging} onCancel={() => setShowPackaging(false)} saving={saving} />
+        </DialogContent>
+      </Dialog>
+
+      {/* Dispatch Dialog */}
+      <Dialog open={showDispatch} onOpenChange={setShowDispatch}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Dispatch Order</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div><Label>Dispatch Type</Label>
+              <Select value={dispatchData.dispatch_type} onValueChange={(v) => setDispatchData({ ...dispatchData, dispatch_type: v })}>
+                <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
+                <SelectContent><SelectItem value="courier">Courier</SelectItem><SelectItem value="transport">Transport</SelectItem><SelectItem value="porter">Porter</SelectItem><SelectItem value="self_arranged">Self-Arranged</SelectItem><SelectItem value="office_collection">Office Collection</SelectItem></SelectContent>
+              </Select>
+            </div>
+            {dispatchData.dispatch_type === "courier" && (
+              <div><Label>Courier</Label>
+                <Select value={dispatchData.courier_name} onValueChange={(v) => setDispatchData({ ...dispatchData, courier_name: v })}>
+                  <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                  <SelectContent>{COURIER_OPTIONS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
+            {dispatchData.dispatch_type === "transport" && (
+              <div><Label>Transporter</Label><Input value={dispatchData.transporter_name} onChange={(e) => setDispatchData({ ...dispatchData, transporter_name: e.target.value })} /></div>
+            )}
+            <div><Label>LR / Tracking No.</Label><Input value={dispatchData.lr_no} onChange={(e) => setDispatchData({ ...dispatchData, lr_no: e.target.value })} /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowDispatch(false)}>Cancel</Button>
+            <Button onClick={saveDispatch} disabled={saving}>{saving ? "Dispatching..." : "Dispatch"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Dialog */}
+      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Delete Order</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground mb-2">Type <span className="font-bold text-foreground">{order.order_number}</span> to confirm deletion. This action is permanent.</p>
+          <Input value={deleteConfirmText} onChange={(e) => setDeleteConfirmText(e.target.value)} placeholder={order.order_number} data-testid="delete-confirm-input" />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmText(""); }}>Cancel</Button>
+            <Button variant="destructive" onClick={deleteOrder} disabled={deleteConfirmText !== order.order_number} data-testid="confirm-delete-order">Delete Permanently</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function PackagingForm({ order, staffList, onSave, onCancel, saving }) {
+  const [itemPackedBy, setItemPackedBy] = useState(order.packaging?.item_packed_by || []);
+  const [boxPackedBy, setBoxPackedBy] = useState(order.packaging?.box_packed_by || []);
+  const [checkedBy, setCheckedBy] = useState(order.packaging?.checked_by || []);
+
+  const toggleStaff = (list, setList, name) => {
+    setList(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
+  };
+
+  return (
+    <div className="space-y-4">
+      {[["Item Packed By", itemPackedBy, setItemPackedBy], ["Box Packed By", boxPackedBy, setBoxPackedBy], ["Checked By", checkedBy, setCheckedBy]].map(([label, list, setter]) => (
+        <div key={label}>
+          <Label className="text-sm">{label}</Label>
+          <div className="flex flex-wrap gap-2 mt-1">
+            {staffList.map(s => (
+              <Button key={s.id} variant={list.includes(s.name) ? "default" : "outline"} size="sm" onClick={() => toggleStaff(list, setter, s.name)}>
+                {s.name}
+              </Button>
+            ))}
+            {staffList.length === 0 && <p className="text-xs text-muted-foreground">No staff configured</p>}
+          </div>
+        </div>
+      ))}
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel}>Cancel</Button>
+        <Button onClick={() => onSave({ item_packed_by: itemPackedBy, box_packed_by: boxPackedBy, checked_by: checkedBy })} disabled={saving}>
+          {saving ? "Saving..." : "Save Packaging"}
+        </Button>
+      </DialogFooter>
     </div>
   );
 }

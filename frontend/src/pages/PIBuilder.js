@@ -1,33 +1,78 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import api, { API_BASE } from "@/lib/api";
+import api from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Plus, Trash2, Search, FileText, Download, ArrowRight, UserPlus, Eye } from "lucide-react";
+import { Plus, Trash2, Search, UserPlus, Download, MapPin, FileText, ArrowRight } from "lucide-react";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import { Link } from "react-router-dom";
 
 const UNITS = ["mL", "L", "g", "Kg", "pcs", ""];
 const GST_RATES = [0, 5, 18];
-const emptyItem = () => ({ product_name: "", qty: 0, unit: "", rate: 0, amount: 0, gst_rate: 0, gst_amount: 0, total: 0 });
+
+const emptyItem = () => ({ product_name: "", qty: 0, unit: "", rate: 0, amount: 0, gst_rate: 0, gst_amount: 0, total: 0, description: "" });
+const emptyAddress = () => ({ address_line: "", city: "", state: "", pincode: "", label: "" });
+
+function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNew }) {
+  const [addresses, setAddresses] = useState([]);
+  const [showPicker, setShowPicker] = useState(false);
+  useEffect(() => {
+    if (customerId) api.get(`/customers/${customerId}/addresses`).then(r => setAddresses(r.data)).catch(() => {});
+  }, [customerId]);
+  return (
+    <div className="space-y-2">
+      <Label className="text-sm font-medium">{label}</Label>
+      {selectedAddress ? (
+        <div className="flex items-start justify-between p-3 rounded-lg bg-secondary text-sm" data-testid={`pi-selected-${label.toLowerCase().replace(/\s/g, '-')}`}>
+          <div>
+            {selectedAddress.label && <span className="text-xs font-medium text-primary mr-2">[{selectedAddress.label}]</span>}
+            <span>{selectedAddress.address_line}, {selectedAddress.city}, {selectedAddress.state} - {selectedAddress.pincode}</span>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setShowPicker(true)}>Change</Button>
+        </div>
+      ) : (
+        <Button variant="outline" className="w-full justify-start text-muted-foreground" onClick={() => setShowPicker(true)} data-testid={`pi-select-${label.toLowerCase().replace(/\s/g, '-')}`}>
+          <MapPin className="w-4 h-4 mr-2" /> Select {label}
+        </Button>
+      )}
+      <Dialog open={showPicker} onOpenChange={setShowPicker}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Select {label}</DialogTitle></DialogHeader>
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {addresses.length === 0 ? <p className="text-sm text-muted-foreground py-4 text-center">No saved addresses.</p> :
+              addresses.map(a => (
+                <button key={a.id} className="w-full text-left p-3 rounded-lg border hover:bg-accent transition-colors" onClick={() => { onSelect(a); setShowPicker(false); }}>
+                  {a.label && <span className="text-xs font-medium text-primary mr-2">[{a.label}]</span>}
+                  <span className="text-sm">{a.address_line}, {a.city}, {a.state} - {a.pincode}</span>
+                </button>
+              ))
+            }
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowPicker(false)}>Cancel</Button>
+            <Button onClick={() => { setShowPicker(false); onAddNew(); }}><Plus className="w-4 h-4 mr-1" /> Add New</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
 
 export default function PIBuilder() {
-  const navigate = useNavigate();
-  const [pis, setPis] = useState([]);
+  const [piList, setPiList] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState("list");
-
-  // Form state
+  const [showBuilder, setShowBuilder] = useState(false);
+  const [editingPi, setEditingPi] = useState(null);
   const [customers, setCustomers] = useState([]);
   const [customerSearch, setCustomerSearch] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -37,27 +82,45 @@ export default function PIBuilder() {
   const [shippingCharge, setShippingCharge] = useState(0);
   const [remark, setRemark] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [editingPi, setEditingPi] = useState(null);
+  const [billingAddress, setBillingAddress] = useState(null);
+  const [shippingAddress, setShippingAddress] = useState(null);
+  const [sameAsBilling, setSameAsBilling] = useState(true);
+  const [showAddAddress, setShowAddAddress] = useState(false);
+  const [addressTarget, setAddressTarget] = useState("billing");
+  const [newAddr, setNewAddr] = useState(emptyAddress());
+  const [pincodeLoading, setPincodeLoading] = useState(false);
+  const [showNewCustomer, setShowNewCustomer] = useState(false);
+  const [newCust, setNewCust] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "" });
 
-  // Convert dialog
-  const [showConvert, setShowConvert] = useState(false);
-  const [convertPi, setConvertPi] = useState(null);
-  const [convertData, setConvertData] = useState({ shipping_method: "", courier_name: "", purpose: "", payment_status: "unpaid", amount_paid: 0 });
+  useEffect(() => { loadPIs(); loadCustomers(); }, []);
 
-  useEffect(() => { loadData(); }, []);
+  const loadPIs = async () => {
+    try { const res = await api.get("/proforma-invoices"); setPiList(res.data); }
+    catch { } finally { setLoading(false); }
+  };
 
-  const loadData = async () => {
-    try {
-      const [pisRes, custRes] = await Promise.all([api.get("/proforma-invoices"), api.get("/customers")]);
-      setPis(pisRes.data);
-      setCustomers(custRes.data);
-    } catch {} finally { setLoading(false); }
+  const loadCustomers = async () => {
+    try { const res = await api.get("/customers"); setCustomers(res.data); } catch { }
   };
 
   const filteredCustomers = customers.filter(c =>
     c.name?.toLowerCase().includes(customerSearch.toLowerCase()) ||
-    c.phone_numbers?.some(p => p.includes(customerSearch))
+    c.phone_numbers?.some(p => p.includes(customerSearch)) ||
+    c.gst_no?.toLowerCase().includes(customerSearch.toLowerCase())
   );
+
+  const createCustomer = async () => {
+    if (!newCust.name) return toast.error("Name required");
+    const phones = newCust.phone_numbers.filter(Boolean);
+    if (phones.length === 0) return toast.error("Phone number required");
+    try {
+      const res = await api.post("/customers", { ...newCust, phone_numbers: phones });
+      setSelectedCustomer(res.data);
+      setCustomers(prev => [res.data, ...prev]);
+      setShowNewCustomer(false);
+      toast.success("Customer created");
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+  };
 
   const updateItem = (idx, field, value) => {
     setItems(prev => {
@@ -84,11 +147,48 @@ export default function PIBuilder() {
   const subtotal = items.reduce((s, i) => s + i.amount, 0);
   const totalGst = items.reduce((s, i) => s + i.gst_amount, 0);
   const shippingGst = gstApplicable && shippingCharge > 0 ? +(shippingCharge * 0.18).toFixed(2) : 0;
-  const grandTotal = +(subtotal + totalGst + shippingCharge + shippingGst).toFixed(2);
+  const grandTotal = Math.ceil(subtotal + totalGst + shippingCharge + shippingGst);
 
-  const resetForm = () => {
-    setSelectedCustomer(null); setItems([emptyItem()]); setGstApplicable(false);
-    setShowRate(true); setShippingCharge(0); setRemark(""); setEditingPi(null); setCustomerSearch("");
+  const lookupPincode = async (pincode) => {
+    if (!/^\d{6}$/.test(pincode)) return;
+    setPincodeLoading(true);
+    try {
+      const res = await api.get(`/pincode/${pincode}`);
+      if (res.data.city || res.data.state) {
+        setNewAddr(p => ({ ...p, city: res.data.city || p.city, state: res.data.state || p.state }));
+        toast.success(`${res.data.city}, ${res.data.state}`);
+      }
+    } catch { } finally { setPincodeLoading(false); }
+  };
+
+  const saveNewAddress = async () => {
+    if (!newAddr.address_line || !newAddr.city || !newAddr.state || !newAddr.pincode) return toast.error("All address fields required");
+    if (!/^\d{6}$/.test(newAddr.pincode)) return toast.error("Pincode must be 6 digits");
+    try {
+      const res = await api.post(`/customers/${selectedCustomer.id}/addresses`, newAddr);
+      if (addressTarget === "billing") { setBillingAddress(res.data); if (sameAsBilling) setShippingAddress(res.data); }
+      else setShippingAddress(res.data);
+      setShowAddAddress(false); setNewAddr(emptyAddress()); toast.success("Address saved");
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+  };
+
+  const openNewPI = () => {
+    setEditingPi(null); setSelectedCustomer(null); setCustomerSearch(""); setItems([emptyItem()]);
+    setGstApplicable(false); setShowRate(true); setShippingCharge(0); setRemark("");
+    setBillingAddress(null); setShippingAddress(null); setSameAsBilling(true);
+    setShowBuilder(true);
+  };
+
+  const openEditPI = (pi) => {
+    setEditingPi(pi);
+    const cust = customers.find(c => c.id === pi.customer_id);
+    setSelectedCustomer(cust || { id: pi.customer_id, name: pi.customer_name });
+    setItems(pi.items.length ? pi.items.map(i => ({ ...i })) : [emptyItem()]);
+    setGstApplicable(pi.gst_applicable); setShowRate(pi.show_rate !== false);
+    setShippingCharge(pi.shipping_charge || 0); setRemark(pi.remark || "");
+    setBillingAddress(pi.billing_address || null); setShippingAddress(pi.shipping_address || null);
+    setSameAsBilling(pi.billing_address_id === pi.shipping_address_id);
+    setShowBuilder(true);
   };
 
   const handleSubmit = async () => {
@@ -96,207 +196,290 @@ export default function PIBuilder() {
     if (items.some(i => !i.product_name)) return toast.error("All items need a product name");
     setSubmitting(true);
     try {
-      const payload = { customer_id: selectedCustomer.id, items, gst_applicable: gstApplicable, show_rate: showRate, shipping_charge: shippingCharge, remark };
-      if (editingPi) {
-        await api.put(`/proforma-invoices/${editingPi.id}`, payload);
-        toast.success("PI updated");
-      } else {
-        await api.post("/proforma-invoices", payload);
-        toast.success("PI created");
-      }
-      resetForm(); setTab("list"); loadData();
+      const payload = {
+        customer_id: selectedCustomer.id,
+        items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description }) => ({
+          product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description
+        })),
+        gst_applicable: gstApplicable, show_rate: showRate, shipping_charge: shippingCharge, remark,
+        billing_address_id: billingAddress?.id || "",
+        shipping_address_id: sameAsBilling ? (billingAddress?.id || "") : (shippingAddress?.id || ""),
+      };
+      if (editingPi) { await api.put(`/proforma-invoices/${editingPi.id}`, payload); toast.success("PI updated"); }
+      else { await api.post("/proforma-invoices", payload); toast.success("PI created"); }
+      setShowBuilder(false); loadPIs();
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
     finally { setSubmitting(false); }
   };
 
-  const editPi = (pi) => {
-    setEditingPi(pi);
-    const cust = customers.find(c => c.id === pi.customer_id);
-    setSelectedCustomer(cust || { id: pi.customer_id, name: pi.customer_name });
-    setItems(pi.items.map(i => ({ ...i })));
-    setGstApplicable(pi.gst_applicable);
-    setShowRate(pi.show_rate);
-    setShippingCharge(pi.shipping_charge);
-    setRemark(pi.remark || "");
-    setTab("create");
+  const downloadPI = (pi) => {
+    const token = localStorage.getItem("token");
+    window.open(`${process.env.REACT_APP_BACKEND_URL}/api/proforma-invoices/${pi.id}/pdf?token=${token}`, "_blank");
   };
 
-  const downloadPdf = async (piId) => {
-    try {
-      const token = localStorage.getItem("token");
-      const res = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/proforma-invoices/${piId}/pdf`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = `PI.pdf`; a.click();
-      window.URL.revokeObjectURL(url);
-    } catch { toast.error("Failed to download PDF"); }
+  const deletePI = async (pi) => {
+    try { await api.delete(`/proforma-invoices/${pi.id}`); toast.success("PI deleted"); loadPIs(); }
+    catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
   };
-
-  const startConvert = (pi) => { setConvertPi(pi); setConvertData({ shipping_method: "", courier_name: "", purpose: "", payment_status: "unpaid", amount_paid: 0 }); setShowConvert(true); };
-
-  const handleConvert = async () => {
-    if (!convertPi) return;
-    try {
-      const res = await api.post(`/proforma-invoices/${convertPi.id}/convert`, convertData);
-      toast.success(`Order ${res.data.order_number} created from PI`);
-      setShowConvert(false); loadData();
-      navigate(`/orders/${res.data.id}`);
-    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
-  };
-
-  const STATUS_COLORS = { draft: "status-new", sent: "status-packaging", converted: "status-dispatched" };
 
   return (
-    <div className="space-y-6" data-testid="pi-builder">
+    <div className="space-y-6" data-testid="pi-builder-page">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">Proforma Invoices</h1>
-        <Button onClick={() => { resetForm(); setTab("create"); }} className="rounded-lg" data-testid="new-pi-btn">
-          <Plus className="w-4 h-4 mr-2" /> New PI
-        </Button>
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Proforma Invoices</h1>
+        <Button onClick={openNewPI} className="rounded-lg" data-testid="create-pi-btn"><Plus className="w-4 h-4 mr-2" /> New PI</Button>
       </div>
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList><TabsTrigger value="list">All PIs</TabsTrigger><TabsTrigger value="create">{editingPi ? "Edit PI" : "Create PI"}</TabsTrigger></TabsList>
+      {/* PI List */}
+      {!showBuilder && (
+        <Card>
+          <CardContent className="pt-6">
+            {loading ? <p className="text-center py-8 text-muted-foreground">Loading...</p> :
+             piList.length === 0 ? <p className="text-center py-8 text-muted-foreground">No proforma invoices yet.</p> : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-xs">PI No</TableHead>
+                    <TableHead className="text-xs">Customer</TableHead>
+                    <TableHead className="text-xs text-right">Amount</TableHead>
+                    <TableHead className="text-xs hidden sm:table-cell">Date</TableHead>
+                    <TableHead className="text-xs hidden sm:table-cell">Status</TableHead>
+                    <TableHead className="text-xs">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {piList.map(pi => (
+                    <TableRow key={pi.id} data-testid={`pi-row-${pi.id}`}>
+                      <TableCell className="font-mono text-sm font-medium">{pi.pi_number}</TableCell>
+                      <TableCell className="text-sm">{pi.customer_name}</TableCell>
+                      <TableCell className="text-sm text-right font-mono">{"\u20B9"}{pi.grand_total}</TableCell>
+                      <TableCell className="text-sm hidden sm:table-cell">{new Date(pi.created_at).toLocaleDateString("en-IN")}</TableCell>
+                      <TableCell className="hidden sm:table-cell"><Badge variant="secondary" className="text-xs">{pi.status}</Badge></TableCell>
+                      <TableCell>
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="icon" onClick={() => downloadPI(pi)} title="Download PDF" data-testid={`download-pi-${pi.id}`}><Download className="w-4 h-4" /></Button>
+                          <Button variant="ghost" size="icon" onClick={() => openEditPI(pi)} title="Edit" data-testid={`edit-pi-${pi.id}`}><FileText className="w-4 h-4" /></Button>
+                          {pi.status === "draft" && (
+                            <Link to={`/pi/${pi.id}/convert`}>
+                              <Button variant="ghost" size="icon" title="Convert to Order"><ArrowRight className="w-4 h-4" /></Button>
+                            </Link>
+                          )}
+                          <Button variant="ghost" size="icon" onClick={() => deletePI(pi)} title="Delete" data-testid={`delete-pi-${pi.id}`}><Trash2 className="w-4 h-4 text-destructive" /></Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
-        <TabsContent value="list">
+      {/* PI Builder */}
+      {showBuilder && (
+        <div className="space-y-4">
           <Card>
-            <CardContent className="pt-6">
-              {loading ? <p className="text-center py-8 text-muted-foreground">Loading...</p> : pis.length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground"><FileText className="w-12 h-12 mx-auto mb-3 opacity-30" /><p>No proforma invoices yet</p></div>
+            <CardHeader className="pb-3"><CardTitle className="text-base">Customer</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              {selectedCustomer ? (
+                <div className="flex items-center justify-between p-3 rounded-lg bg-secondary">
+                  <div>
+                    <p className="font-medium">{selectedCustomer.name}</p>
+                    <p className="text-sm text-muted-foreground">{selectedCustomer.phone_numbers?.join(", ")}</p>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => { setSelectedCustomer(null); setBillingAddress(null); setShippingAddress(null); }}>Change</Button>
+                </div>
               ) : (
-                <Table>
-                  <TableHeader><TableRow>
-                    <TableHead className="text-xs uppercase">PI #</TableHead><TableHead className="text-xs uppercase">Customer</TableHead>
-                    <TableHead className="text-xs uppercase">Items</TableHead><TableHead className="text-xs uppercase">Total</TableHead>
-                    <TableHead className="text-xs uppercase">GST</TableHead><TableHead className="text-xs uppercase">Status</TableHead>
-                    <TableHead className="text-xs uppercase">Date</TableHead><TableHead></TableHead>
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {pis.map(pi => (
-                      <TableRow key={pi.id} data-testid={`pi-row-${pi.pi_number}`}>
-                        <TableCell className="font-mono font-medium">{pi.pi_number}</TableCell>
-                        <TableCell>{pi.customer_name}</TableCell>
-                        <TableCell>{pi.items?.length}</TableCell>
-                        <TableCell className="font-mono">{"\u20B9"}{pi.grand_total?.toLocaleString("en-IN")}</TableCell>
-                        <TableCell>{pi.gst_applicable ? "Yes" : "No"}</TableCell>
-                        <TableCell><Badge variant="secondary" className={`${STATUS_COLORS[pi.status]} text-xs uppercase`}>{pi.status}</Badge></TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{new Date(pi.created_at).toLocaleDateString("en-IN")}</TableCell>
-                        <TableCell>
-                          <div className="flex gap-1">
-                            <Button variant="ghost" size="icon" onClick={() => downloadPdf(pi.id)} data-testid={`pdf-${pi.pi_number}`}><Download className="w-4 h-4" /></Button>
-                            <Button variant="ghost" size="icon" onClick={() => editPi(pi)} data-testid={`edit-pi-${pi.pi_number}`}><Eye className="w-4 h-4" /></Button>
-                            {pi.status !== "converted" && (
-                              <Button variant="outline" size="sm" onClick={() => startConvert(pi)} data-testid={`convert-${pi.pi_number}`}>
-                                <ArrowRight className="w-3 h-3 mr-1" /> Order
-                              </Button>
-                            )}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input placeholder="Search customers..." className="pl-9" value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} data-testid="pi-customer-search" />
+                    </div>
+                    <Button variant="outline" onClick={() => setShowNewCustomer(true)} data-testid="pi-new-customer-btn"><UserPlus className="w-4 h-4 mr-2" /> New</Button>
+                  </div>
+                  {customerSearch && (
+                    <div className="border rounded-lg max-h-48 overflow-y-auto">
+                      {filteredCustomers.length === 0 ? <p className="p-3 text-sm text-muted-foreground">No customers found</p> :
+                        filteredCustomers.map(c => (
+                          <button key={c.id} className="w-full text-left px-3 py-2 hover:bg-accent transition-colors border-b last:border-0"
+                            onClick={() => { setSelectedCustomer(c); setCustomerSearch(""); }}>
+                            <p className="text-sm font-medium">{c.name}</p>
+                            <p className="text-xs text-muted-foreground">{c.phone_numbers?.join(", ")}</p>
+                          </button>
+                        ))
+                      }
+                    </div>
+                  )}
+                </>
               )}
             </CardContent>
           </Card>
-        </TabsContent>
 
-        <TabsContent value="create">
-          <div className="max-w-5xl space-y-6">
-            {/* Customer */}
-            <Card><CardHeader className="pb-3"><CardTitle className="text-base">Customer</CardTitle></CardHeader>
-              <CardContent>
-                {selectedCustomer ? (
-                  <div className="flex items-center justify-between p-3 rounded-lg bg-secondary">
-                    <div><p className="font-medium">{selectedCustomer.name}</p><p className="text-sm text-muted-foreground">{selectedCustomer.phone_numbers?.join(", ")}</p></div>
-                    <Button variant="outline" size="sm" onClick={() => setSelectedCustomer(null)}>Change</Button>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                      <Input placeholder="Search customer..." className="pl-9" value={customerSearch} onChange={e => setCustomerSearch(e.target.value)} data-testid="pi-customer-search" /></div>
-                    {customerSearch && <div className="border rounded-lg max-h-40 overflow-y-auto">
-                      {filteredCustomers.map(c => (<button key={c.id} className="w-full text-left px-3 py-2 hover:bg-accent border-b last:border-0" onClick={() => { setSelectedCustomer(c); setCustomerSearch(""); }}>
-                        <p className="text-sm font-medium">{c.name}</p></button>))}
-                    </div>}
-                  </div>
+          {/* Addresses */}
+          {selectedCustomer && (
+            <Card>
+              <CardHeader className="pb-3"><CardTitle className="text-base">Addresses</CardTitle></CardHeader>
+              <CardContent className="space-y-4">
+                <AddressSelector customerId={selectedCustomer.id} label="Billing Address" selectedAddress={billingAddress}
+                  onSelect={(a) => { setBillingAddress(a); if (sameAsBilling) setShippingAddress(a); }}
+                  onAddNew={() => { setAddressTarget("billing"); setNewAddr(emptyAddress()); setShowAddAddress(true); }} />
+                <div className="flex items-center gap-2">
+                  <Checkbox id="piSameAddr" checked={sameAsBilling} onCheckedChange={(v) => { setSameAsBilling(v); if (v) setShippingAddress(billingAddress); }} />
+                  <Label htmlFor="piSameAddr" className="cursor-pointer text-sm">Shipping same as Billing</Label>
+                </div>
+                {!sameAsBilling && (
+                  <AddressSelector customerId={selectedCustomer.id} label="Shipping Address" selectedAddress={shippingAddress}
+                    onSelect={(a) => setShippingAddress(a)}
+                    onAddNew={() => { setAddressTarget("shipping"); setNewAddr(emptyAddress()); setShowAddAddress(true); }} />
                 )}
               </CardContent>
             </Card>
+          )}
 
-            {/* Toggles */}
-            <Card><CardContent className="pt-6 flex flex-wrap gap-6">
-              <div className="flex items-center gap-3"><Checkbox checked={gstApplicable} onCheckedChange={setGstApplicable} id="pi-gst" data-testid="pi-gst-toggle" /><Label htmlFor="pi-gst" className="cursor-pointer">GST Applicable</Label></div>
-              <div className="flex items-center gap-3"><Switch checked={showRate} onCheckedChange={setShowRate} id="pi-rate" data-testid="pi-rate-toggle" /><Label htmlFor="pi-rate" className="cursor-pointer">Show Rate in PDF</Label></div>
-            </CardContent></Card>
-
-            {/* Items */}
-            <Card><CardHeader className="pb-3"><div className="flex items-center justify-between"><CardTitle className="text-base">Items</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => setItems(p => [...p, emptyItem()])} data-testid="pi-add-item"><Plus className="w-4 h-4 mr-1" /> Add</Button></div></CardHeader>
-              <CardContent className="space-y-3">
-                {items.map((item, idx) => (
-                  <div key={idx} className="p-3 rounded-lg border bg-secondary/30 space-y-2" data-testid={`pi-item-${idx}`}>
-                    <div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">Item {idx + 1}</span>
-                      {items.length > 1 && <Button variant="ghost" size="icon" onClick={() => setItems(p => p.filter((_, i) => i !== idx))}><Trash2 className="w-4 h-4 text-destructive" /></Button>}
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
-                      <div className="col-span-2"><Label className="text-xs">Product</Label><Input value={item.product_name} onChange={e => updateItem(idx, "product_name", e.target.value)} /></div>
-                      <div><Label className="text-xs">Qty</Label><Input type="number" value={item.qty || ""} onChange={e => updateItem(idx, "qty", +e.target.value)} /></div>
-                      <div><Label className="text-xs">Unit</Label><Select value={item.unit} onValueChange={v => updateItem(idx, "unit", v)}><SelectTrigger><SelectValue placeholder="Unit" /></SelectTrigger><SelectContent>{UNITS.map(u => <SelectItem key={u || "blank"} value={u || "blank"}>{u || "(none)"}</SelectItem>)}</SelectContent></Select></div>
-                      <div><Label className="text-xs">Rate</Label><Input type="number" value={item.rate || ""} onChange={e => updateItem(idx, "rate", +e.target.value)} /></div>
-                      <div><Label className="text-xs">Amount</Label><Input type="number" value={item.amount || ""} onChange={e => updateItem(idx, "amount", +e.target.value)} /></div>
-                    </div>
-                    {gstApplicable && <div className="flex items-center gap-3">
-                      <div className="w-28"><Label className="text-xs">GST</Label><Select value={String(item.gst_rate)} onValueChange={v => updateItem(idx, "gst_rate", +v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{GST_RATES.map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}</SelectContent></Select></div>
-                      <p className="text-xs text-muted-foreground mt-4">GST: {"\u20B9"}{item.gst_amount.toFixed(2)} | Total: {"\u20B9"}{item.total.toFixed(2)}</p>
-                    </div>}
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-
-            <Card><CardContent className="pt-6 space-y-3">
-              <div className="grid grid-cols-2 gap-4">
-                <div><Label>Shipping Charge</Label><Input type="number" value={shippingCharge || ""} onChange={e => setShippingCharge(+e.target.value)} /></div>
-                <div><Label>Remarks</Label><Input value={remark} onChange={e => setRemark(e.target.value)} /></div>
+          {/* Options */}
+          <Card>
+            <CardContent className="pt-6 space-y-4">
+              <div className="flex flex-wrap gap-6">
+                <div className="flex items-center gap-2">
+                  <Checkbox id="piGst" checked={gstApplicable} onCheckedChange={setGstApplicable} data-testid="pi-gst-checkbox" />
+                  <Label htmlFor="piGst" className="cursor-pointer">GST Applicable</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox id="piRate" checked={showRate} onCheckedChange={setShowRate} />
+                  <Label htmlFor="piRate" className="cursor-pointer">Show Rate in PDF</Label>
+                </div>
               </div>
-              <Separator />
-              <div className="space-y-1 text-sm max-w-xs ml-auto">
+            </CardContent>
+          </Card>
+
+          {/* Items */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Items</CardTitle>
+                <Button variant="outline" size="sm" onClick={() => setItems(p => [...p, emptyItem()])} data-testid="pi-add-item-btn"><Plus className="w-4 h-4 mr-1" /> Add</Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {items.map((item, idx) => (
+                <div key={idx} className="p-3 rounded-lg border bg-secondary/30 space-y-2" data-testid={`pi-item-${idx}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-muted-foreground">Item {idx + 1}</span>
+                    {items.length > 1 && <Button variant="ghost" size="icon" onClick={() => setItems(p => p.filter((_, i) => i !== idx))}><Trash2 className="w-4 h-4 text-destructive" /></Button>}
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+                    <div className="col-span-2"><Label className="text-xs">Product</Label><Input value={item.product_name} onChange={e => updateItem(idx, "product_name", e.target.value)} data-testid={`pi-item-name-${idx}`} /></div>
+                    <div><Label className="text-xs">Qty</Label><Input type="number" value={item.qty || ""} onChange={e => updateItem(idx, "qty", +e.target.value)} /></div>
+                    <div><Label className="text-xs">Unit</Label>
+                      <Select value={item.unit} onValueChange={v => updateItem(idx, "unit", v)}>
+                        <SelectTrigger><SelectValue placeholder="Unit" /></SelectTrigger>
+                        <SelectContent>{UNITS.map(u => <SelectItem key={u || "blank"} value={u || "blank"}>{u || "(none)"}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    <div><Label className="text-xs">Rate</Label><Input type="number" value={item.rate || ""} onChange={e => updateItem(idx, "rate", +e.target.value)} /></div>
+                    <div><Label className="text-xs">Amount</Label><Input type="number" value={item.amount || ""} onChange={e => updateItem(idx, "amount", +e.target.value)} /></div>
+                  </div>
+                  <div><Label className="text-xs">Description (optional)</Label><Input value={item.description || ""} onChange={e => updateItem(idx, "description", e.target.value)} placeholder="Item description..." /></div>
+                  {gstApplicable && (
+                    <div className="flex items-center gap-3">
+                      <div className="w-24"><Label className="text-xs">GST%</Label>
+                        <Select value={String(item.gst_rate)} onValueChange={v => updateItem(idx, "gst_rate", +v)}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>{GST_RATES.map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}</SelectContent>
+                        </Select>
+                      </div>
+                      <div><Label className="text-xs">GST Amt</Label><p className="text-sm font-mono mt-1">{"\u20B9"}{item.gst_amount.toFixed(2)}</p></div>
+                      <div><Label className="text-xs">Total</Label><p className="text-sm font-mono font-medium mt-1">{"\u20B9"}{item.total.toFixed(2)}</p></div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Shipping & Remark */}
+          <Card>
+            <CardContent className="pt-6 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div><Label>Shipping Charge</Label><Input type="number" value={shippingCharge || ""} onChange={e => setShippingCharge(+e.target.value)} /></div>
+                <div><Label>Remarks</Label><Textarea value={remark} onChange={e => setRemark(e.target.value)} /></div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Summary */}
+          <Card>
+            <CardHeader className="pb-3"><CardTitle className="text-base">Summary</CardTitle></CardHeader>
+            <CardContent>
+              <div className="space-y-2 text-sm">
                 <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">{"\u20B9"}{subtotal.toFixed(2)}</span></div>
                 {gstApplicable && <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-mono">{"\u20B9"}{totalGst.toFixed(2)}</span></div>}
                 {shippingCharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping</span><span className="font-mono">{"\u20B9"}{shippingCharge.toFixed(2)}</span></div>}
-                {shippingGst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST</span><span className="font-mono">{"\u20B9"}{shippingGst.toFixed(2)}</span></div>}
-                <Separator /><div className="flex justify-between font-bold text-base"><span>Total</span><span className="font-mono">{"\u20B9"}{grandTotal.toFixed(2)}</span></div>
+                {shippingGst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST (18%)</span><span className="font-mono">{"\u20B9"}{shippingGst.toFixed(2)}</span></div>}
+                <Separator />
+                <div className="flex justify-between text-base font-bold"><span>Grand Total (Rounded Up)</span><span className="font-mono">{"\u20B9"}{grandTotal}</span></div>
               </div>
-            </CardContent></Card>
+            </CardContent>
+          </Card>
 
-            <div className="flex justify-end gap-3">
-              <Button variant="outline" onClick={() => { resetForm(); setTab("list"); }}>Cancel</Button>
-              <Button onClick={handleSubmit} disabled={submitting} data-testid="save-pi-btn">{submitting ? "Saving..." : editingPi ? "Update PI" : "Create PI"}</Button>
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={() => setShowBuilder(false)}>Cancel</Button>
+            <Button onClick={handleSubmit} disabled={submitting} className="min-w-[140px]" data-testid="save-pi-btn">
+              {submitting ? "Saving..." : editingPi ? "Update PI" : "Create PI"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* New Customer Dialog */}
+      <Dialog open={showNewCustomer} onOpenChange={setShowNewCustomer}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>New Customer</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div><Label>Name *</Label><Input value={newCust.name} onChange={e => setNewCust({ ...newCust, name: e.target.value })} data-testid="pi-new-cust-name" /></div>
+            <div><Label>GST No.</Label><Input value={newCust.gst_no} onChange={e => setNewCust({ ...newCust, gst_no: e.target.value.toUpperCase() })} /></div>
+            {newCust.phone_numbers.map((ph, i) => (
+              <div key={i} className="flex gap-2">
+                <div className="flex items-center gap-1 flex-1">
+                  <span className="text-sm text-muted-foreground">+91</span>
+                  <Input value={ph} onChange={e => { const phones = [...newCust.phone_numbers]; phones[i] = e.target.value; setNewCust({ ...newCust, phone_numbers: phones }); }} placeholder="10-digit number" />
+                </div>
+                {i === newCust.phone_numbers.length - 1 && <Button variant="outline" size="icon" onClick={() => setNewCust({ ...newCust, phone_numbers: [...newCust.phone_numbers, ""] })}>+</Button>}
+              </div>
+            ))}
+            <div><Label>Email (optional)</Label><Input type="email" value={newCust.email} onChange={e => setNewCust({ ...newCust, email: e.target.value })} /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowNewCustomer(false)}>Cancel</Button>
+            <Button onClick={createCustomer} data-testid="pi-save-customer-btn">Save Customer</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Address Dialog */}
+      <Dialog open={showAddAddress} onOpenChange={setShowAddAddress}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Add New Address</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div><Label>Label</Label><Input value={newAddr.label} onChange={e => setNewAddr({ ...newAddr, label: e.target.value })} placeholder="e.g. Office" /></div>
+            <div><Label>Address Line *</Label><Input value={newAddr.address_line} onChange={e => setNewAddr({ ...newAddr, address_line: e.target.value })} /></div>
+            <div><Label>Pincode *</Label>
+              <Input value={newAddr.pincode} onChange={e => {
+                const v = e.target.value.replace(/\D/g, "").slice(0, 6);
+                setNewAddr({ ...newAddr, pincode: v });
+                if (v.length === 6) lookupPincode(v);
+              }} maxLength={6} />
+              {pincodeLoading && <p className="text-xs text-muted-foreground mt-1">Looking up...</p>}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label>City *</Label><Input value={newAddr.city} onChange={e => setNewAddr({ ...newAddr, city: e.target.value })} /></div>
+              <div><Label>State *</Label><Input value={newAddr.state} onChange={e => setNewAddr({ ...newAddr, state: e.target.value })} /></div>
             </div>
           </div>
-        </TabsContent>
-      </Tabs>
-
-      {/* Convert Dialog */}
-      <Dialog open={showConvert} onOpenChange={setShowConvert}>
-        <DialogContent><DialogHeader><DialogTitle>Convert {convertPi?.pi_number} to Order</DialogTitle></DialogHeader>
-          <div className="space-y-4">
-            <div><Label>Shipping Method</Label><Select value={convertData.shipping_method} onValueChange={v => setConvertData(p => ({ ...p, shipping_method: v }))}><SelectTrigger data-testid="convert-shipping"><SelectValue placeholder="Select" /></SelectTrigger><SelectContent>
-              <SelectItem value="transport">Transport</SelectItem><SelectItem value="courier">Courier</SelectItem><SelectItem value="porter">Porter</SelectItem>
-              <SelectItem value="self_arranged">Self-Arranged</SelectItem><SelectItem value="office_collection">Office Collection</SelectItem>
-            </SelectContent></Select></div>
-            {convertData.shipping_method === "courier" && <div><Label>Courier Name</Label><Input value={convertData.courier_name} onChange={e => setConvertData(p => ({ ...p, courier_name: e.target.value }))} /></div>}
-            <div><Label>Purpose</Label><Input value={convertData.purpose} onChange={e => setConvertData(p => ({ ...p, purpose: e.target.value }))} /></div>
-            <div><Label>Payment Status</Label><Select value={convertData.payment_status} onValueChange={v => setConvertData(p => ({ ...p, payment_status: v }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>
-              <SelectItem value="unpaid">Unpaid</SelectItem><SelectItem value="partial">Partial</SelectItem><SelectItem value="full">Full Paid</SelectItem>
-            </SelectContent></Select></div>
-            {convertData.payment_status === "partial" && <div><Label>Amount Paid</Label><Input type="number" value={convertData.amount_paid || ""} onChange={e => setConvertData(p => ({ ...p, amount_paid: +e.target.value }))} /></div>}
-          </div>
-          <DialogFooter><Button variant="outline" onClick={() => setShowConvert(false)}>Cancel</Button>
-            <Button onClick={handleConvert} data-testid="confirm-convert-btn"><ArrowRight className="w-4 h-4 mr-1" /> Convert to Order</Button>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddAddress(false)}>Cancel</Button>
+            <Button onClick={saveNewAddress}>Save Address</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
