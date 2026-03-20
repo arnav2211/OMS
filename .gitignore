@@ -90,3 +90,5 @@ android-sdk/ frontend/node_modules/.cache/default-development/0.pack
 # Environment files
 *.env
 *.env.*
+full_project.zip
+frontend/node_modules/.cache/default-development/0.pack
