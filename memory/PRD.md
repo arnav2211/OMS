@@ -1,83 +1,91 @@
 # CitSpray Order Management System - PRD
 
 ## Original Problem Statement
-Build a comprehensive Order Management System for "CitSpray" company with roles: Admin, Telecaller, Packaging, Dispatch.
+Build a comprehensive Order Management System for "CitSpray" (aroma sciences company) with multi-role access, customer management, order lifecycle, proforma invoices, packaging/dispatch workflows, and analytics.
+
+## Core Requirements
+- **Authentication:** JWT-based auth with 4 roles (Admin, Telecaller, Packaging, Dispatch)
+- **Customer Management:** CRUD with phone/GST/email validation, Address Directory
+- **Orders:** Full lifecycle (create → packaging → packed → dispatched), formulations, payment tracking
+- **Proforma Invoices:** PDF generation with bank details and UPI QR codes
+- **Dashboard Analytics:** Company-wide and per-executive performance reports
+- **Role-Based Access:** Strict formulation visibility rules per role
 
 ## Tech Stack
-- **Backend**: FastAPI + Motor (async MongoDB)
-- **Frontend**: React + Tailwind CSS + Shadcn/UI
-- **Database**: MongoDB
-- **PDF**: ReportLab
+- Backend: FastAPI + Motor (async MongoDB)
+- Frontend: React + Tailwind CSS + Shadcn/UI
+- Database: MongoDB
+- PDF: ReportLab + QR Code generation (qrcode/pillow)
+- Validation: phonenumbers, pydantic
 
-## User Roles
-- **Admin**: Full access, formulation management, user/staff management, reports
-- **Telecaller (Executive)**: Create orders, manage customers, view own sales
-- **Packaging**: Pack orders, upload images, view formulations (if enabled globally)
-- **Dispatch**: Mark orders as dispatched, enter courier/transport details
+## User Personas
+1. **Admin** - Full access, analytics, user management, settings
+2. **Telecaller (Executive)** - Customer/order CRUD, own sales reports
+3. **Packaging** - View/update packaging, formulations (when toggle ON)
+4. **Dispatch** - View packed orders, mark as dispatched
 
-## Phase 1 (MVP) - COMPLETED
-- [x] JWT auth with 4 roles
-- [x] Customer CRUD with duplicate checks
-- [x] Order lifecycle (create, edit, track status)
-- [x] Dark/light theme toggle
-- [x] Green CitSpray branding
+## What's Been Implemented
 
-## Phase 2 (Enhancements) - COMPLETED
-- [x] Payment tracking (Unpaid, Partial, Full)
-- [x] Proforma Invoice builder with PDF generation
-- [x] Item Sales Analytics
-- [x] Telecaller sales dashboard with period filters
-- [x] Global formulation visibility toggle
+### Phase 1-2: Foundation
+- Authentication system with JWT
+- Customer CRUD
+- Order CRUD with full lifecycle
+- Basic dashboard
 
-## Phase 3 (Restructure) - COMPLETED (March 19, 2026)
-- [x] Data reset for fresh start
-- [x] Removed per-item formulation visibility (global control only)
-- [x] Dashboard shows recent orders only
-- [x] Packaging: 3 mandatory multi-select fields (Item Packed By, Box Packed By, Checked By)
-- [x] Admin-manageable packaging staff list
-- [x] Dispatch logic: Porter/Self-arranged/Office Collection = no LR needed
-- [x] Transport: LR mandatory for dispatch, transporter name optional for telecallers
-- [x] Courier: predefined dropdown (DTDC, Anjani, Professional, India Post)
-- [x] Order print (PDF) for packaging/admin with formulations always included
-- [x] Formulation history for admin/packaging
+### Phase 3: Packaging & Dispatch
+- Packaging module with multi-select staff fields
+- Dispatch workflow with shipping types
+- Printable order sheet for packaging
+- Role-based navigation
 
-## Phase 4 (Fixes & Restructure) - COMPLETED (March 19, 2026)
-- [x] Print auth fix: token passed via query param for new-tab PDF access
-- [x] Replace Cancel Order with Delete Order (permanent deletion, 2 confirmations)
-- [x] New "All Orders" sidebar nav item for ALL roles
-- [x] All Orders page with payment status filter (Fully Paid, Partial, Unpaid)
-- [x] Role-based visibility: non-admin can't see executive name, telecaller/dispatch can't see formulations in All Orders
-- [x] Dashboard now shows Recent Orders only (latest 10), not all
-- [x] Custom date range filter in Executive Reports (admin)
-- [x] Custom date range filter in telecaller's own sales dashboard
-- [x] Data reset (testing cleanup) - preserved users and config
+### Phase 4: Restructuring
+- Auth fix for print endpoints (token query param)
+- Order deletion with double confirmation
+- Dedicated "All Orders" page
+- Custom date range filters for reports
+- 100% test pass rate
 
-## Key API Endpoints
-- POST /api/auth/login
-- GET/POST /api/users
-- GET/POST /api/customers
-- GET/POST /api/orders (view_all param for all-orders view)
-- DELETE /api/orders/{id} (permanent delete)
-- PUT /api/orders/{id}/formulation
-- PUT /api/orders/{id}/packaging
-- PUT /api/orders/{id}/dispatch
-- GET /api/orders/{id}/print?token=JWT (PDF with auth via query param)
-- GET /api/packaging-staff, POST, DELETE
-- GET /api/courier-options
-- GET/PUT /api/settings
-- GET /api/reports/sales, /dashboard, /telecaller-sales (with date_from, date_to), /telecaller-dashboard/{id}, /item-sales
-- GET /api/orders/formulation-history/{customer_id}
-- POST /api/admin/reset-data
-- POST/GET /api/proforma-invoices, /pdf
+### Phase 5: Major Overhaul (CURRENT - COMPLETED)
+1. **Customer Validation** - Phone normalization to +91XXXXXXXXXX, 6-digit pincode validation, GST format validation, optional email validation
+2. **Address Directory** - Multiple addresses per customer with CRUD, pincode auto-fill (city/state), selection during order/PI creation with "Same as Billing" checkbox
+3. **Order Enhancements** - Item description field, Mode of Payment (Cash/Online/Other), mandatory Math.ceil rounding on totals
+4. **Dispatch Lock** - Editing disabled after dispatch (except formulation and payment)
+5. **PI Improvements** - Customer creation within PI module, address handling, improved PDF layout with phone number
+6. **PI Payment Details** - Bank details (GST: Mangalam Agro PNB, Non-GST: Arnav Mukul Agrawal PNB), dynamic UPI QR codes
+7. **All Orders Filter** - Admin filters by executive, Telecaller toggle for own/all
+8. **Formulation Visibility** - Telecaller: NEVER, Packaging: toggle-dependent, Admin: ALWAYS, Dispatch: NEVER
+9. **Admin Dashboard** - Company analytics with period/GST/shipping filters, My Report tab, Executive Reports tab, removed Sales Report
+10. **Order PDF Fix** - Formulation displayed beside each item (not at bottom)
 
-## Credentials
-- Admin: admin / admin123
+## Testing Status
+- Phase 5 Backend: 100% (25/25 tests passed)
+- Phase 5 Frontend: 95% (all features functional, minor navigation flash)
+- Test reports: /app/test_reports/iteration_5.json
 
-## Future / Backlog
-- [ ] Object storage integration for images
-- [ ] GST external API verification (currently format check only)
-- [ ] Dashboard charts with Recharts
-- [ ] Bulk order operations / CSV export
+## Mocked APIs
+- GST Verification: /api/gst-verify/{gst_no} (returns state based on first 2 digits)
+- Pincode Lookup: External API with local fallback mapping
+
+## Key Endpoints
+- POST /api/auth/token - Login
+- GET/POST/PUT/DELETE /api/customers - Customer CRUD
+- GET/POST/PUT/DELETE /api/customers/{id}/addresses - Address Directory
+- GET /api/pincode/{pincode} - Pincode auto-fill
+- GET/POST /api/orders - Order CRUD
+- PUT /api/orders/{id}/formulation - Update formulations
+- PUT /api/orders/{id}/packaging - Update packaging
+- PUT /api/orders/{id}/dispatch - Dispatch order
+- DELETE /api/orders/{id}/delete - Delete order
+- GET /api/orders/{id}/print?token= - Print order PDF
+- GET/POST/PUT/DELETE /api/proforma-invoices - PI CRUD
+- GET /api/proforma-invoices/{id}/pdf?token= - Download PI PDF with bank details & QR
+- GET /api/reports/admin-analytics - Company-wide analytics
+- GET /api/reports/telecaller-sales/{id} - Executive report
+
+## Backlog (P2/P3)
+- [ ] Pagination on all list endpoints (deployment agent warning)
+- [ ] Export to CSV/Excel
 - [ ] WhatsApp integration for dispatch notifications
 - [ ] Audit log for all changes
 - [ ] Customer payment history ledger
+- [ ] Server-side search/filtering optimization

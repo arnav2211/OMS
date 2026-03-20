@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import api from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -168,8 +168,8 @@ export default function Customers() {
               </TableHeader>
               <TableBody>
                 {customers.map((c) => (
-                  <>
-                    <TableRow key={c.id} data-testid={`customer-row-${c.id}`}>
+                  <React.Fragment key={c.id}>
+                    <TableRow data-testid={`customer-row-${c.id}`}>
                       <TableCell className="font-medium">{c.name}</TableCell>
                       <TableCell className="text-sm hidden sm:table-cell">{c.phone_numbers?.join(", ")}</TableCell>
                       <TableCell className="text-sm font-mono hidden sm:table-cell">{c.gst_no || "-"}</TableCell>
@@ -238,7 +238,7 @@ export default function Customers() {
                         </TableCell>
                       </TableRow>
                     )}
-                  </>
+                  </React.Fragment>
                 ))}
               </TableBody>
             </Table>
