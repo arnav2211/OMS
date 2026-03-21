@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import api from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -96,6 +96,8 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
 
 export default function CreateOrder() {
   const navigate = useNavigate();
+  const { piId } = useParams(); // For PI conversion mode
+  const [piConverting, setPiConverting] = useState(false);
   const [customers, setCustomers] = useState([]);
   const [customerSearch, setCustomerSearch] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -131,6 +133,38 @@ export default function CreateOrder() {
   useEffect(() => {
     api.get("/customers").then((r) => setCustomers(r.data)).catch(() => {});
   }, []);
+
+  // Load PI data for conversion
+  useEffect(() => {
+    if (!piId) return;
+    setPiConverting(true);
+    api.get(`/proforma-invoices/${piId}`).then(r => {
+      const pi = r.data;
+      setPurpose(pi.purpose || "");
+      setItems(pi.items?.length ? pi.items.map(i => ({ ...i, formulation: "" })) : [emptyItem()]);
+      setGstApplicable(pi.gst_applicable || false);
+      setShippingMethod(pi.shipping_method || "");
+      setCourierName(pi.courier_name || "");
+      setTransporterName(pi.transporter_name || "");
+      setShippingCharge(pi.shipping_charge || 0);
+      setRemark(pi.remark || "");
+      setFreeSamples(pi.free_samples || []);
+      // Pre-select customer
+      if (pi.customer_id) {
+        api.get(`/customers/${pi.customer_id}`).then(cr => {
+          setSelectedCustomer(cr.data);
+          setCustomerSearch(cr.data.name || "");
+        }).catch(() => {});
+      }
+      // Pre-select addresses
+      if (pi.billing_address) setBillingAddress(pi.billing_address);
+      if (pi.shipping_address) setShippingAddress(pi.shipping_address);
+      if (pi.billing_address_id && pi.shipping_address_id) {
+        setSameAsBilling(pi.billing_address_id === pi.shipping_address_id);
+      }
+      toast.success("PI data loaded - review and create order");
+    }).catch(() => toast.error("Failed to load PI data"));
+  }, [piId]);
 
   const filteredCustomers = customers.filter(
     (c) =>
@@ -292,6 +326,10 @@ export default function CreateOrder() {
       };
       const res = await api.post("/orders", payload);
       toast.success(`Order ${res.data.order_number} created!`);
+      if (piId) {
+        // Mark PI as converted
+        await api.put(`/proforma-invoices/${piId}`, { status: "converted" }).catch(() => {});
+      }
       navigate(`/orders/${res.data.id}`);
     } catch (err) { toast.error(err.response?.data?.detail || "Failed to create order"); }
     finally { setSubmitting(false); }
@@ -299,7 +337,12 @@ export default function CreateOrder() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6 px-1 sm:px-0" data-testid="create-order-page">
-      <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Create New Order</h1>
+      <div className="flex items-center gap-3">
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight">
+          {piConverting ? "Convert PI to Order" : "Create New Order"}
+        </h1>
+        {piConverting && <span className="text-xs px-2 py-1 bg-blue-100 text-blue-800 rounded-full font-medium">From PI</span>}
+      </div>
 
       {/* Customer Selection */}
       <Card>
@@ -578,7 +621,7 @@ export default function CreateOrder() {
       <div className="flex justify-end gap-3">
         <Button variant="outline" onClick={() => navigate(-1)} data-testid="cancel-order-btn">Cancel</Button>
         <Button onClick={handleSubmit} disabled={submitting} className="rounded-lg min-w-[140px]" data-testid="submit-order-btn">
-          {submitting ? "Creating..." : "Create Order"}
+          {submitting ? "Creating..." : piId ? "Convert to Order" : "Create Order"}
         </Button>
       </div>
 

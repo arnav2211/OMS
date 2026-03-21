@@ -13,6 +13,7 @@ import DispatchDashboard from "@/pages/dispatch/DispatchDashboard";
 import AdminDashboard from "@/pages/admin/AdminDashboard";
 import UserManagement from "@/pages/admin/UserManagement";
 import OrderDetail from "@/pages/OrderDetail";
+import EditOrder from "@/pages/EditOrder";
 import PIBuilder from "@/pages/PIBuilder";
 import ItemAnalytics from "@/pages/ItemAnalytics";
 import AllOrders from "@/pages/AllOrders";
@@ -51,7 +52,9 @@ function AppRoutes() {
       <Route path="/packaging" element={<ProtectedRoute allowedRoles={["packaging", "admin"]}><PackagingDashboard /></ProtectedRoute>} />
       <Route path="/dispatch" element={<ProtectedRoute allowedRoles={["dispatch", "packaging", "admin"]}><DispatchDashboard /></ProtectedRoute>} />
       <Route path="/all-orders" element={<ProtectedRoute><AllOrders /></ProtectedRoute>} />
+      <Route path="/orders/:orderId/edit" element={<ProtectedRoute><EditOrder /></ProtectedRoute>} />
       <Route path="/orders/:orderId" element={<ProtectedRoute><OrderDetail /></ProtectedRoute>} />
+      <Route path="/pi/:piId/convert" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><CreateOrder /></ProtectedRoute>} />
       <Route path="/proforma" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><PIBuilder /></ProtectedRoute>} />
       <Route path="/item-analytics" element={<ProtectedRoute allowedRoles={["admin"]}><ItemAnalytics /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute allowedRoles={["admin"]}><UserManagement /></ProtectedRoute>} />

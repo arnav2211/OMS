@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText } from "lucide-react";
+import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X } from "lucide-react";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
@@ -26,8 +26,8 @@ export default function OrderDetail() {
   const navigate = useNavigate();
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [showEdit, setShowEdit] = useState(false);
-  const [editData, setEditData] = useState({});
+  const [showEdit, ] = useState(false);
+  const [editData, ] = useState({});
   const [saving, setSaving] = useState(false);
   const [showPackaging, setShowPackaging] = useState(false);
   const [showDispatch, setShowDispatch] = useState(false);
@@ -51,37 +51,12 @@ export default function OrderDetail() {
   const canEditOrder = user?.role === "admin" || (user?.role === "telecaller" && order?.telecaller_id === user?.id);
   const canEditFormulation = user?.role === "admin" || user?.role === "packaging";
   const showFormulations = user?.role === "admin" || user?.role === "packaging";
+  const canEditPackaging = ["admin", "packaging"].includes(user?.role) && !isDispatched;
+  const canEditDispatch = ["admin", "dispatch"].includes(user?.role);
 
   const openEdit = () => {
     if (isDispatched) return toast.error("Cannot edit dispatched order");
-    setEditData({
-      purpose: order.purpose || "",
-      remark: order.remark || "",
-      payment_status: order.payment_status || "unpaid",
-      amount_paid: order.amount_paid || 0,
-      mode_of_payment: order.mode_of_payment || "",
-      payment_mode_details: order.payment_mode_details || "",
-    });
-    setShowEdit(true);
-  };
-
-  const saveEdit = async () => {
-    setSaving(true);
-    try {
-      let updatePayload = { ...editData };
-      if (updatePayload.payment_status === "full") {
-        updatePayload.amount_paid = order.grand_total;
-        updatePayload.balance_amount = 0;
-      } else if (updatePayload.payment_status === "partial") {
-        updatePayload.balance_amount = Math.max(0, order.grand_total - updatePayload.amount_paid);
-      } else {
-        updatePayload.amount_paid = 0;
-        updatePayload.balance_amount = order.grand_total;
-      }
-      await api.put(`/orders/${id}`, updatePayload);
-      toast.success("Order updated"); setShowEdit(false); loadOrder();
-    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
-    finally { setSaving(false); }
+    navigate(`/orders/${id}/edit`);
   };
 
   const openFormulation = () => {
@@ -152,7 +127,9 @@ export default function OrderDetail() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={handlePrint} data-testid="print-order-btn"><Printer className="w-4 h-4 mr-1" /> Print</Button>
-          {canEditOrder && !isDispatched && <Button variant="outline" size="sm" onClick={openEdit} data-testid="edit-order-btn"><Edit className="w-4 h-4 mr-1" /> Edit</Button>}
+          {(canEditOrder || canEditPackaging || canEditDispatch) && !isDispatched && (
+            <Button variant="outline" size="sm" onClick={openEdit} data-testid="edit-order-btn"><Edit className="w-4 h-4 mr-1" /> Edit</Button>
+          )}
           {canEditFormulation && <Button variant="outline" size="sm" onClick={openFormulation} data-testid="formulation-btn"><FileText className="w-4 h-4 mr-1" /> Formulation</Button>}
           {user?.role === "admin" && <Button variant="destructive" size="sm" onClick={() => setShowDeleteConfirm(true)} data-testid="delete-order-btn"><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>}
         </div>
@@ -244,9 +221,23 @@ export default function OrderDetail() {
               <p className="text-sm font-medium mb-2">Payment Proof</p>
               <div className="flex flex-wrap gap-2" data-testid="payment-proof-images">
                 {order.payment_screenshots.map((url, i) => (
-                  <button key={i} className="w-20 h-20 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-all" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
-                    <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Payment proof ${i + 1}`} className="w-full h-full object-cover" />
-                  </button>
+                  <div key={i} className="relative w-20 h-20 rounded-lg border overflow-hidden group">
+                    <button className="w-full h-full" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
+                      <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Payment proof ${i + 1}`} className="w-full h-full object-cover" />
+                    </button>
+                    {!isDispatched && (canEditOrder) && (
+                      <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={async () => {
+                          try {
+                            await api.delete(`/orders/${id}/images?image_type=payment&image_url=${encodeURIComponent(url)}`);
+                            toast.success("Image removed"); loadOrder();
+                          } catch { toast.error("Failed to remove"); }
+                        }}
+                        data-testid={`delete-payment-img-${i}`}>
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
             </div>
@@ -283,9 +274,22 @@ export default function OrderDetail() {
                   <p className="text-xs font-medium text-muted-foreground uppercase mb-2">Item: {key}</p>
                   <div className="flex flex-wrap gap-2">
                     {urls.map((url, i) => (
-                      <button key={i} className="w-20 h-20 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-all" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
-                        <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Item ${key}`} className="w-full h-full object-cover" />
-                      </button>
+                      <div key={i} className="relative w-20 h-20 rounded-lg border overflow-hidden group">
+                        <button className="w-full h-full" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
+                          <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Item ${key}`} className="w-full h-full object-cover" />
+                        </button>
+                        {!isDispatched && canEditPackaging && (
+                          <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={async () => {
+                              try {
+                                await api.delete(`/orders/${id}/images?image_type=item_image&image_url=${encodeURIComponent(url)}&item_name=${encodeURIComponent(key)}`);
+                                toast.success("Image removed"); loadOrder();
+                              } catch { toast.error("Failed"); }
+                            }}>
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -296,9 +300,17 @@ export default function OrderDetail() {
                 <p className="text-xs font-medium text-muted-foreground uppercase mb-2">Full Order Images</p>
                 <div className="flex flex-wrap gap-2">
                   {order.packaging.order_images.map((url, i) => (
-                    <button key={i} className="w-20 h-20 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-all" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
-                      <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Order img ${i + 1}`} className="w-full h-full object-cover" />
-                    </button>
+                    <div key={i} className="relative w-20 h-20 rounded-lg border overflow-hidden group">
+                      <button className="w-full h-full" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
+                        <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Order img ${i + 1}`} className="w-full h-full object-cover" />
+                      </button>
+                      {!isDispatched && canEditPackaging && (
+                        <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={async () => { try { await api.delete(`/orders/${id}/images?image_type=order_image&image_url=${encodeURIComponent(url)}`); toast.success("Image removed"); loadOrder(); } catch { toast.error("Failed"); } }}>
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>
@@ -308,9 +320,17 @@ export default function OrderDetail() {
                 <p className="text-xs font-medium text-muted-foreground uppercase mb-2">Packed Box Images</p>
                 <div className="flex flex-wrap gap-2">
                   {order.packaging.packed_box_images.map((url, i) => (
-                    <button key={i} className="w-20 h-20 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-all" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
-                      <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Box img ${i + 1}`} className="w-full h-full object-cover" />
-                    </button>
+                    <div key={i} className="relative w-20 h-20 rounded-lg border overflow-hidden group">
+                      <button className="w-full h-full" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
+                        <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Box img ${i + 1}`} className="w-full h-full object-cover" />
+                      </button>
+                      {!isDispatched && canEditPackaging && (
+                        <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={async () => { try { await api.delete(`/orders/${id}/images?image_type=packed_box_image&image_url=${encodeURIComponent(url)}`); toast.success("Image removed"); loadOrder(); } catch { toast.error("Failed"); } }}>
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>
@@ -368,39 +388,6 @@ export default function OrderDetail() {
           <CardContent className="pt-6"><p className="text-sm"><span className="font-medium">Remarks:</span> {order.remark}</p></CardContent>
         </Card>
       )}
-
-      {/* Edit Dialog */}
-      <Dialog open={showEdit} onOpenChange={setShowEdit}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Edit Order</DialogTitle></DialogHeader>
-          <div className="space-y-4">
-            <div><Label>Purpose</Label><Textarea value={editData.purpose} onChange={(e) => setEditData({ ...editData, purpose: e.target.value })} /></div>
-            <div><Label>Payment Status</Label>
-              <Select value={editData.payment_status} onValueChange={(v) => setEditData({ ...editData, payment_status: v })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="unpaid">Unpaid</SelectItem><SelectItem value="partial">Partial</SelectItem><SelectItem value="full">Full</SelectItem></SelectContent>
-              </Select>
-            </div>
-            {editData.payment_status === "partial" && (
-              <div><Label>Amount Paid</Label><Input type="number" value={editData.amount_paid || ""} onChange={(e) => setEditData({ ...editData, amount_paid: +e.target.value })} /></div>
-            )}
-            <div><Label>Mode of Payment</Label>
-              <Select value={editData.mode_of_payment} onValueChange={(v) => setEditData({ ...editData, mode_of_payment: v })}>
-                <SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger>
-                <SelectContent><SelectItem value="Cash">Cash</SelectItem><SelectItem value="Online">Online</SelectItem><SelectItem value="Other">Other</SelectItem></SelectContent>
-              </Select>
-            </div>
-            {editData.mode_of_payment === "Other" && (
-              <div><Label>Payment Details</Label><Input value={editData.payment_mode_details} onChange={(e) => setEditData({ ...editData, payment_mode_details: e.target.value })} /></div>
-            )}
-            <div><Label>Remarks</Label><Textarea value={editData.remark} onChange={(e) => setEditData({ ...editData, remark: e.target.value })} /></div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowEdit(false)}>Cancel</Button>
-            <Button onClick={saveEdit} disabled={saving}>{saving ? "Saving..." : "Save"}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Formulation Dialog */}
       <Dialog open={showFormulation} onOpenChange={setShowFormulation}>

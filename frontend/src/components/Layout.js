@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -10,8 +10,10 @@ import {
 import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
-  FileText, TrendingUp,
+  FileText, TrendingUp, Bell,
 } from "lucide-react";
+import api from "@/lib/api";
+import { toast } from "sonner";
 
 const NAV_ITEMS = {
   telecaller: [
@@ -51,6 +53,8 @@ export default function Layout({ children }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [notifCount, setNotifCount] = useState(0);
+  const lastCheckRef = useRef(localStorage.getItem("citspray_last_notif_check") || new Date(Date.now() - 86400000).toISOString());
 
   const navItems = NAV_ITEMS[user?.role] || [];
 
@@ -58,6 +62,47 @@ export default function Layout({ children }) {
     logout();
     navigate("/login");
   };
+
+  const playNotifSound = () => {
+    try {
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = "sine"; osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(660, ctx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.4, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.5);
+    } catch { /* audio context not available */ }
+  };
+
+  useEffect(() => {
+    if (user?.role !== "telecaller") return;
+    const poll = async () => {
+      try {
+        const since = lastCheckRef.current;
+        const res = await api.get(`/orders/my-notifications?since=${encodeURIComponent(since)}`);
+        const notifs = res.data || [];
+        if (notifs.length > 0) {
+          const newSince = new Date().toISOString();
+          lastCheckRef.current = newSince;
+          localStorage.setItem("citspray_last_notif_check", newSince);
+          setNotifCount(c => c + notifs.length);
+          notifs.forEach(n => {
+            const msg = n.status === "packed"
+              ? `Order ${n.order_number} is Packed and ready!`
+              : `Order ${n.order_number} has been Dispatched!`;
+            toast.success(msg, { duration: 6000, description: n.customer_name });
+          });
+          playNotifSound();
+        }
+      } catch { /* silent */ }
+    };
+    poll(); // immediate check on mount
+    const interval = setInterval(poll, 30000);
+    return () => clearInterval(interval);
+  }, [user?.role]);
 
   return (
     <div className="flex h-screen overflow-hidden" data-testid="app-layout">
@@ -139,6 +184,19 @@ export default function Layout({ children }) {
           </Button>
 
           <div className="flex-1" />
+
+          {user?.role === "telecaller" && notifCount > 0 && (
+            <button
+              className="relative p-2 rounded-lg hover:bg-accent transition-colors"
+              onClick={() => setNotifCount(0)}
+              data-testid="notification-bell"
+            >
+              <Bell className="w-5 h-5" />
+              <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold">
+                {notifCount > 9 ? "9+" : notifCount}
+              </span>
+            </button>
+          )}
 
           <Button
             variant="ghost" size="icon"

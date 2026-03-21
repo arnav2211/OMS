@@ -790,6 +790,28 @@ async def list_orders(
 
     return orders
 
+@api_router.get("/orders/my-notifications")
+async def get_my_notifications(since: str = "", user=Depends(get_current_user)):
+    """Return packed/dispatched orders for the current telecaller since the given timestamp."""
+    if user["role"] != "telecaller":
+        return []
+    since_dt = since if since else (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    fields = {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "status": 1, "shipping_method": 1}
+    # Packed: only for porter, office_collection, self_arranged
+    packed = await db.orders.find({
+        "telecaller_id": user["id"],
+        "status": "packed",
+        "shipping_method": {"$in": ["porter", "office_collection", "self_arranged"]},
+        "packaging.packed_at": {"$gt": since_dt}
+    }, fields).to_list(50)
+    # Dispatched: all shipping methods
+    dispatched = await db.orders.find({
+        "telecaller_id": user["id"],
+        "status": "dispatched",
+        "dispatch.dispatched_at": {"$gt": since_dt}
+    }, fields).to_list(50)
+    return packed + dispatched
+
 @api_router.get("/orders/{order_id}")
 async def get_order(order_id: str, user=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
@@ -853,11 +875,15 @@ async def update_formulation(order_id: str, req: FormulationUpdate, user=Depends
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     items = order["items"]
-    for update_item in req.items:
+    for i, update_item in enumerate(req.items):
         idx = update_item.get("index")
         if idx is not None and 0 <= idx < len(items):
             if "formulation" in update_item:
                 items[idx]["formulation"] = update_item["formulation"]
+        elif i < len(items):
+            # Match by position if no index provided
+            if "formulation" in update_item:
+                items[i]["formulation"] = update_item["formulation"]
     await db.orders.update_one(
         {"id": order_id},
         {"$set": {"items": items, "updated_at": datetime.now(timezone.utc).isoformat()}}
@@ -947,6 +973,132 @@ async def delete_order(order_id: str, user=Depends(get_current_user)):
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Order not found")
     return {"message": f"Order {order.get('order_number', '')} permanently deleted"}
+
+# Delete a single image from an order
+@api_router.delete("/orders/{order_id}/images")
+async def delete_order_image(
+    order_id: str,
+    image_type: str = Query(..., description="payment | order_image | packed_box_image | item_image"),
+    image_url: str = Query(...),
+    item_name: str = Query(""),
+    user=Depends(get_current_user)
+):
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("status") == "dispatched":
+        raise HTTPException(status_code=400, detail="Cannot modify a dispatched order")
+
+    if image_type == "payment":
+        if user["role"] not in ["admin", "telecaller"]:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        if user["role"] == "telecaller" and order.get("telecaller_id") != user["id"]:
+            raise HTTPException(status_code=403, detail="Not your order")
+        screenshots = [s for s in order.get("payment_screenshots", []) if s != image_url]
+        await db.orders.update_one({"id": order_id}, {"$set": {"payment_screenshots": screenshots, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    elif image_type in ["order_image", "packed_box_image", "item_image"]:
+        if user["role"] not in ["admin", "packaging"]:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        packaging = order.get("packaging", {})
+        if image_type == "order_image":
+            packaging["order_images"] = [u for u in packaging.get("order_images", []) if u != image_url]
+        elif image_type == "packed_box_image":
+            packaging["packed_box_images"] = [u for u in packaging.get("packed_box_images", []) if u != image_url]
+        elif image_type == "item_image":
+            item_imgs = packaging.get("item_images", {})
+            if item_name in item_imgs:
+                item_imgs[item_name] = [u for u in item_imgs[item_name] if u != image_url]
+            packaging["item_images"] = item_imgs
+        await db.orders.update_one({"id": order_id}, {"$set": {"packaging": packaging, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    else:
+        raise HTTPException(status_code=400, detail="Invalid image_type")
+
+    updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    return updated
+
+# Bulk Shipping Address Print
+@api_router.post("/orders/print-addresses")
+async def print_order_addresses(body: dict, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "packaging"]:
+        raise HTTPException(status_code=403, detail="Admin or packaging only")
+    order_ids = body.get("order_ids", [])
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="No orders selected")
+
+    orders = []
+    for oid in order_ids:
+        o = await db.orders.find_one({"id": oid}, {"_id": 0})
+        if o:
+            orders.append(o)
+    if not orders:
+        raise HTTPException(status_code=404, detail="No valid orders found")
+
+    customer_ids = list(set(o.get("customer_id", "") for o in orders))
+    customers_list = await db.customers.find({"id": {"$in": customer_ids}}, {"_id": 0}).to_list(500)
+    customers = {c["id"]: c for c in customers_list}
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm)
+    styles = getSampleStyleSheet()
+
+    addr_normal = ParagraphStyle('AddrN', parent=styles['Normal'], fontSize=10, leading=15, fontName='Helvetica')
+    addr_bold = ParagraphStyle('AddrB', parent=styles['Normal'], fontSize=11, leading=16, fontName='Helvetica-Bold')
+    addr_to = ParagraphStyle('AddrTo', parent=styles['Normal'], fontSize=10, leading=14, fontName='Helvetica', textColor=colors.HexColor('#666666'))
+    addr_mob = ParagraphStyle('AddrMob', parent=styles['Normal'], fontSize=10, leading=14, fontName='Helvetica-Bold')
+
+    def make_address_cell(order, customer):
+        name = order.get("customer_name", "Unknown")
+        sa = order.get("shipping_address") or {}
+        phones = customer.get("phone_numbers", []) if customer else []
+
+        lines = [f"<b>To</b>", f"<b>{name}</b>", ""]
+        if sa.get("address_line"):
+            lines.append(sa["address_line"])
+        city_line = ""
+        if sa.get("city") and sa.get("pincode"):
+            city_line = f"{sa['city']} - {sa['pincode']}"
+        elif sa.get("city"):
+            city_line = sa["city"]
+        if city_line:
+            lines.append(city_line)
+        if sa.get("state"):
+            lines.append(sa["state"])
+        if phones:
+            clean_phones = [p.replace("+91", "").replace("+", "").strip() for p in phones]
+            mob_str = ", ".join(clean_phones)
+            lines.append("")
+            lines.append(f"<b>Mob no.-{mob_str}</b>")
+
+        return Paragraph("<br/>".join(lines), addr_normal)
+
+    pw = A4[0] - 24*mm
+    col_w = (pw - 8*mm) / 2
+
+    row_data = []
+    for i in range(0, len(orders), 2):
+        left = make_address_cell(orders[i], customers.get(orders[i].get("customer_id", "")))
+        right = make_address_cell(orders[i + 1], customers.get(orders[i + 1].get("customer_id", ""))) if i + 1 < len(orders) else Paragraph("", addr_normal)
+        row_data.append([left, right])
+
+    table = Table(row_data, colWidths=[col_w, col_w], spaceBefore=2*mm, spaceAfter=2*mm)
+    table.setStyle(TableStyle([
+        ('BOX', (0, 0), (0, -1), 1, colors.black),
+        ('BOX', (1, 0), (1, -1), 1, colors.black),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+        ('LEFTPADDING', (0, 0), (-1, -1), 10),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+        ('LINEBELOW', (0, 0), (-1, -2), 0.5, colors.HexColor('#DDDDDD')),
+    ]))
+
+    doc.build([table])
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline; filename=shipping_addresses.pdf"}
+    )
 
 # Packaging Staff Management
 @api_router.get("/packaging-staff")

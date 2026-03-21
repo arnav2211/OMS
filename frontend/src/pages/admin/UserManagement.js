@@ -141,9 +141,6 @@ export default function UserManagement() {
                         <Button variant="ghost" size="icon" onClick={() => openEdit(u)} data-testid={`edit-user-${u.username}`}>
                           <Edit className="w-4 h-4" />
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={() => deleteUser(u)} data-testid={`delete-user-${u.username}`}>
-                          <Trash2 className="w-4 h-4 text-destructive" />
-                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
