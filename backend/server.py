@@ -1471,138 +1471,215 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
 
     page_size = A5 if size == "A5" else A4
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=page_size, leftMargin=12*mm, rightMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm)
+    doc = SimpleDocTemplate(buffer, pagesize=page_size,
+                            leftMargin=12*mm, rightMargin=12*mm,
+                            topMargin=10*mm, bottomMargin=12*mm)
     styles = getSampleStyleSheet()
     elements = []
+    pw = page_size[0] - 24*mm
 
-    title_style = ParagraphStyle('Title', parent=styles['Title'], fontSize=14, spaceAfter=4, alignment=TA_CENTER)
-    header_style = ParagraphStyle('Header', parent=styles['Normal'], fontSize=9, leading=12)
-    bold_style = ParagraphStyle('Bold', parent=styles['Normal'], fontSize=10, leading=14)
-    small_style = ParagraphStyle('Small', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.grey)
-    form_style = ParagraphStyle('Formulation', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#B45309'), backColor=colors.HexColor('#FEF3C7'))
+    # ── Shared Styles ──
+    GREEN  = colors.HexColor('#15803D')
+    LGREEN = colors.HexColor('#F0FDF4')
+    DGREEN = colors.HexColor('#14532D')
+    BGRAY  = colors.HexColor('#F8FAFC')
+    SGRAY  = colors.HexColor('#E5E7EB')
+    AMBER  = colors.HexColor('#B45309')
+    LAMBER = colors.HexColor('#FFFBEB')
 
-    # Company Header
+    def sep(thickness=0.5, col=SGRAY):
+        t = Table([['']], colWidths=[pw])
+        t.setStyle(TableStyle([('LINEBELOW', (0,0),(0,0), thickness, col)]))
+        return t
+
+    lbl  = ParagraphStyle('Lbl',  parent=styles['Normal'], fontSize=8,  leading=11, textColor=colors.HexColor('#6B7280'))
+    val  = ParagraphStyle('Val',  parent=styles['Normal'], fontSize=9,  leading=12)
+    valb = ParagraphStyle('ValB', parent=styles['Normal'], fontSize=9,  leading=12, fontName='Helvetica-Bold')
+    sm   = ParagraphStyle('Sm',   parent=styles['Normal'], fontSize=7.5,leading=10, textColor=colors.HexColor('#374151'))
+    itm  = ParagraphStyle('Itm',  parent=styles['Normal'], fontSize=8,  leading=10)
+    form_sty = ParagraphStyle('Form', parent=styles['Normal'], fontSize=7.5, leading=10,
+                              textColor=AMBER, backColor=LAMBER)
+    tot_sty  = ParagraphStyle('Tot',  parent=styles['Normal'], fontSize=9, leading=12, alignment=TA_RIGHT)
+    totb_sty = ParagraphStyle('TotB', parent=styles['Normal'], fontSize=10, leading=13,
+                              fontName='Helvetica-Bold', alignment=TA_RIGHT)
+
+    # ── 1. HEADER ──
+    logo_cell = ''
     if LOGO_PATH.exists():
         try:
-            logo = Image(str(LOGO_PATH), width=40*mm, height=20*mm)
-            logo.hAlign = 'LEFT'
-            elements.append(logo)
+            tmp = Image(str(LOGO_PATH))
+            aspect = tmp.imageHeight / tmp.imageWidth
+            logo_h = 28*mm * aspect
+            logo_cell = Image(str(LOGO_PATH), width=28*mm, height=logo_h)
         except Exception:
             pass
 
-    elements.append(Paragraph(f"<b>{COMPANY['name']}</b>", ParagraphStyle('CoName', parent=styles['Normal'], fontSize=12, leading=16)))
-    elements.append(Paragraph(f"<i>{COMPANY['brand']}</i>", ParagraphStyle('CoBrand', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#16A34A'))))
+    co_info = Paragraph(
+        f"<b><font size=11>{COMPANY['name']}</font></b><br/>"
+        f"<font size=8 color='#15803D'><i>{COMPANY['brand']}</i></font><br/>"
+        f"<font size=7 color='#6B7280'>{COMPANY['address']}</font><br/>"
+        f"<font size=7 color='#6B7280'>Ph: {COMPANY['mobile']} | {COMPANY['email']}</font>",
+        ParagraphStyle('CoInfo', parent=styles['Normal'], fontSize=9, leading=12)
+    )
+    header_tbl = Table([[logo_cell, co_info]], colWidths=[32*mm, pw - 32*mm])
+    header_tbl.setStyle(TableStyle([
+        ('VALIGN',       (0,0),(-1,-1), 'MIDDLE'),
+        ('LEFTPADDING',  (0,0),(0,0),   0),
+        ('RIGHTPADDING', (1,0),(1,0),   0),
+        ('TOPPADDING',   (0,0),(-1,-1), 2),
+        ('BOTTOMPADDING',(0,0),(-1,-1), 2),
+    ]))
+    elements.append(header_tbl)
+    elements.append(Spacer(1, 3*mm))
+    elements.append(sep(1.2, GREEN))
+    elements.append(Spacer(1, 3*mm))
+
+    # ── 2. DOCUMENT TITLE ──
+    title_box_data = [[
+        Paragraph(f"<b><font size=13>ORDER PACKING SHEET</font></b>", ParagraphStyle('T', parent=styles['Normal'], alignment=TA_CENTER)),
+        Paragraph(f"<b><font size=11>{order['order_number']}</font></b>", ParagraphStyle('N', parent=styles['Normal'], alignment=TA_RIGHT, textColor=GREEN)),
+    ]]
+    title_box = Table(title_box_data, colWidths=[pw*0.6, pw*0.4])
+    title_box.setStyle(TableStyle([
+        ('VALIGN',       (0,0),(-1,-1), 'MIDDLE'),
+        ('BACKGROUND',   (0,0),(-1,-1), LGREEN),
+        ('TOPPADDING',   (0,0),(-1,-1), 5),
+        ('BOTTOMPADDING',(0,0),(-1,-1), 5),
+        ('LEFTPADDING',  (0,0),(-1,-1), 8),
+        ('RIGHTPADDING', (0,0),(-1,-1), 8),
+        ('LINEBELOW',    (0,0),(-1,-1), 1, GREEN),
+    ]))
+    elements.append(title_box)
     elements.append(Spacer(1, 4*mm))
-    elements.append(Paragraph(f"<b>ORDER: {order['order_number']}</b>", title_style))
-    elements.append(Spacer(1, 3*mm))
 
-    # Order info
-    created_date = datetime.fromisoformat(order['created_at']).strftime('%d/%m/%Y %I:%M %p')
+    # ── 3. ORDER INFO (2×2 grid) ──
+    created_date = datetime.fromisoformat(order['created_at']).strftime('%d %b %Y, %I:%M %p')
     info_data = [
-        [Paragraph(f"<b>Date:</b> {created_date}", header_style),
-         Paragraph(f"<b>Executive:</b> {order.get('telecaller_name', 'N/A')}", header_style)],
-        [Paragraph(f"<b>Status:</b> {order.get('status', '').upper()}", header_style),
-         Paragraph(f"<b>Shipping:</b> {order.get('shipping_method', '').replace('_', ' ').title()}", header_style)],
+        [Paragraph(f"<font color='#6B7280'>Date</font><br/><b>{created_date}</b>", itm),
+         Paragraph(f"<font color='#6B7280'>Executive</font><br/><b>{order.get('telecaller_name','N/A')}</b>", itm)],
+        [Paragraph(f"<font color='#6B7280'>Status</font><br/><b>{order.get('status','').upper()}</b>", itm),
+         Paragraph(f"<font color='#6B7280'>Shipping</font><br/><b>{order.get('shipping_method','').replace('_',' ').title()}</b>", itm)],
     ]
-    pw = page_size[0] - 24*mm
-    info_t = Table(info_data, colWidths=[pw/2, pw/2])
-    info_t.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('BOTTOMPADDING', (0, 0), (-1, -1), 2)]))
-    elements.append(info_t)
-    elements.append(Spacer(1, 3*mm))
+    info_tbl = Table(info_data, colWidths=[pw/2, pw/2])
+    info_tbl.setStyle(TableStyle([
+        ('BOX',          (0,0),(-1,-1), 0.5, SGRAY),
+        ('INNERGRID',    (0,0),(-1,-1), 0.3, SGRAY),
+        ('VALIGN',       (0,0),(-1,-1), 'TOP'),
+        ('TOPPADDING',   (0,0),(-1,-1), 5),
+        ('BOTTOMPADDING',(0,0),(-1,-1), 5),
+        ('LEFTPADDING',  (0,0),(-1,-1), 7),
+    ]))
+    elements.append(info_tbl)
+    elements.append(Spacer(1, 4*mm))
 
-    # Customer info
+    # ── 4. CUSTOMER ──
     if customer:
-        elements.append(Paragraph("<b>Customer:</b>", bold_style))
-        cust_info = f"{customer.get('name', '')}"
+        cust_lines = [f"<b>{customer.get('name','')}</b>"]
         if customer.get('phone_numbers'):
-            cust_info += f" | Ph: {', '.join(customer['phone_numbers'])}"
-        elements.append(Paragraph(cust_info, header_style))
+            cust_lines.append(f"<font color='#6B7280'>Ph:</font> {', '.join(customer['phone_numbers'])}")
         sa = order.get("shipping_address")
         if sa and sa.get("address_line"):
-            elements.append(Paragraph(f"Ship To: {sa['address_line']}, {sa.get('city','')}, {sa.get('state','')} - {sa.get('pincode','')}", small_style))
+            cust_lines.append(f"<font color='#6B7280'>Ship To:</font> {sa['address_line']}, {sa.get('city','')}, {sa.get('state','')} – {sa.get('pincode','')}")
         if customer.get("gst_no"):
-            elements.append(Paragraph(f"GSTIN: {customer['gst_no']}", small_style))
-    elements.append(Spacer(1, 4*mm))
+            cust_lines.append(f"<font color='#6B7280'>GSTIN:</font> {customer['gst_no']}")
+        cust_p = Paragraph("<br/>".join(cust_lines), ParagraphStyle('Cust', parent=styles['Normal'], fontSize=8.5, leading=12))
+        cust_tbl = Table([[Paragraph("<b>CUSTOMER DETAILS</b>", ParagraphStyle('CustHdr', parent=styles['Normal'], fontSize=8, textColor=colors.white, fontName='Helvetica-Bold'))],
+                          [cust_p]], colWidths=[pw])
+        cust_tbl.setStyle(TableStyle([
+            ('BACKGROUND',   (0,0),(0,0), GREEN),
+            ('TEXTCOLOR',    (0,0),(0,0), colors.white),
+            ('TOPPADDING',   (0,0),(0,0), 4), ('BOTTOMPADDING',(0,0),(0,0), 4),
+            ('LEFTPADDING',  (0,0),(-1,-1), 7),
+            ('TOPPADDING',   (0,1),(0,1), 5), ('BOTTOMPADDING',(0,1),(0,1), 5),
+            ('BOX',          (0,0),(-1,-1), 0.5, SGRAY),
+        ]))
+        elements.append(cust_tbl)
+        elements.append(Spacer(1, 5*mm))
 
-    # Items table with formulations beside each item
-    headers = ['#', 'Item', 'Qty', 'Unit', 'Amount', 'Formulation']
-    col_widths = [8*mm, pw*0.22, 14*mm, 14*mm, 20*mm, pw*0.35]
-    table_data = [headers]
+    # ── 5. ITEMS TABLE ──
+    headers = ['#', 'Item / Description', 'Qty', 'Unit', 'Amount', 'Formulation']
+    col_widths = [7*mm, pw*0.22, 12*mm, 12*mm, 20*mm, pw - 7*mm - pw*0.22 - 12*mm - 12*mm - 20*mm]
+    hdr_style = ParagraphStyle('IH', parent=styles['Normal'], fontSize=8, fontName='Helvetica-Bold',
+                               textColor=colors.white, alignment=TA_CENTER)
+    table_data = [[Paragraph(h, hdr_style) for h in headers]]
     for i, item in enumerate(order.get("items", [])):
         desc_text = item.get("product_name", "")
         if item.get("description"):
-            desc_text += f"\n{item['description']}"
+            desc_text += f"<br/><font color='#6B7280' size=7>{item['description']}</font>"
         formulation_text = item.get("formulation", "") or ""
         row = [
-            str(i + 1),
-            Paragraph(desc_text.replace("\n", "<br/>"), ParagraphStyle('ItemP', parent=styles['Normal'], fontSize=8, leading=10)),
-            str(item.get("qty", 0)),
-            item.get("unit", ""),
-            f"{item.get('amount', 0):.2f}",
-            Paragraph(formulation_text, form_style) if formulation_text else "",
+            Paragraph(str(i + 1), ParagraphStyle('Num', parent=styles['Normal'], fontSize=8, alignment=TA_CENTER)),
+            Paragraph(desc_text, itm),
+            Paragraph(str(item.get("qty", 0)), ParagraphStyle('Qty', parent=styles['Normal'], fontSize=8, alignment=TA_RIGHT)),
+            Paragraph(item.get("unit", ""), ParagraphStyle('Unit', parent=styles['Normal'], fontSize=8, alignment=TA_CENTER)),
+            Paragraph(f"{item.get('amount', 0):.2f}", ParagraphStyle('Amt', parent=styles['Normal'], fontSize=8, alignment=TA_RIGHT, fontName='Helvetica-Bold')),
+            Paragraph(formulation_text, form_sty) if formulation_text else Paragraph("", sm),
         ]
         table_data.append(row)
-    t = Table(table_data, colWidths=col_widths, repeatRows=1)
-    t.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#16A34A')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-        ('ALIGN', (2, 1), (4, -1), 'RIGHT'),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F0FDF4')]),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+    items_t = Table(table_data, colWidths=col_widths, repeatRows=1)
+    items_t.setStyle(TableStyle([
+        ('BACKGROUND',   (0,0),(-1,0),  GREEN),
+        ('TEXTCOLOR',    (0,0),(-1,0),  colors.white),
+        ('FONTSIZE',     (0,0),(-1,-1), 8),
+        ('GRID',         (0,0),(-1,-1), 0.4, colors.HexColor('#D1D5DB')),
+        ('ROWBACKGROUNDS',(0,1),(-1,-1), [colors.white, LGREEN]),
+        ('VALIGN',       (0,0),(-1,-1), 'TOP'),
+        ('TOPPADDING',   (0,0),(-1,-1), 4),
+        ('BOTTOMPADDING',(0,0),(-1,-1), 4),
+        ('LEFTPADDING',  (0,0),(-1,-1), 5),
+        ('RIGHTPADDING', (0,0),(-1,-1), 5),
     ]))
-    elements.append(t)
-    elements.append(Spacer(1, 3*mm))
-
-    # Totals
-    total_style = ParagraphStyle('TotalRight', parent=styles['Normal'], fontSize=9, alignment=TA_RIGHT)
-    totals = []
-    totals.append([Paragraph("Subtotal:", total_style), Paragraph(f"{order.get('subtotal', 0):.2f}", total_style)])
-    if order.get("total_gst", 0) > 0:
-        totals.append([Paragraph("GST:", total_style), Paragraph(f"{order['total_gst']:.2f}", total_style)])
-    if order.get("shipping_charge", 0) > 0:
-        totals.append([Paragraph("Shipping:", total_style), Paragraph(f"{order['shipping_charge']:.2f}", total_style)])
-    total_bold = ParagraphStyle('TotalBold', parent=styles['Normal'], fontSize=10, alignment=TA_RIGHT)
-    totals.append([Paragraph("<b>Grand Total:</b>", total_bold), Paragraph(f"<b>INR {order.get('grand_total', 0):.2f}</b>", total_bold)])
-    tt = Table(totals, colWidths=[pw - 50*mm, 50*mm])
-    tt.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'RIGHT'), ('LINEABOVE', (0, -1), (-1, -1), 1, colors.black)]))
-    elements.append(tt)
+    elements.append(items_t)
     elements.append(Spacer(1, 5*mm))
 
-    # Mode of Payment
+    # ── 6. TOTALS ──
+    totals = []
+    totals.append([Paragraph("Subtotal:", tot_sty), Paragraph(f"₹ {order.get('subtotal', 0):.2f}", tot_sty)])
+    if order.get("total_gst", 0) > 0:
+        totals.append([Paragraph("GST:", tot_sty), Paragraph(f"₹ {order['total_gst']:.2f}", tot_sty)])
+    if order.get("shipping_charge", 0) > 0:
+        totals.append([Paragraph("Shipping:", tot_sty), Paragraph(f"₹ {order['shipping_charge']:.2f}", tot_sty)])
+    totals.append([Paragraph("Grand Total:", totb_sty), Paragraph(f"<b>₹ {order.get('grand_total', 0):.0f}</b>", totb_sty)])
+    tt = Table(totals, colWidths=[pw - 55*mm, 55*mm])
+    tt.setStyle(TableStyle([
+        ('ALIGN',        (0,0),(-1,-1), 'RIGHT'),
+        ('LINEABOVE',    (0,-1),(-1,-1), 1.2, GREEN),
+        ('BACKGROUND',   (0,-1),(-1,-1), LGREEN),
+        ('TOPPADDING',   (0,-1),(-1,-1), 5),
+        ('BOTTOMPADDING',(0,-1),(-1,-1), 5),
+        ('TOPPADDING',   (0,0),(-1,-2), 3),
+        ('BOTTOMPADDING',(0,0),(-1,-2), 3),
+    ]))
+    elements.append(tt)
+
+    # ── 7. PAYMENT / SAMPLES / DISPATCH / REMARKS ──
+    extras = []
     if order.get("mode_of_payment"):
-        mop_text = f"<b>Mode of Payment:</b> {order['mode_of_payment']}"
+        mop = f"<b>Mode of Payment:</b> {order['mode_of_payment']}"
         if order.get("payment_mode_details"):
-            mop_text += f" ({order['payment_mode_details']})"
-        elements.append(Paragraph(mop_text, header_style))
-        elements.append(Spacer(1, 2*mm))
-
-    # Free Samples
+            mop += f" ({order['payment_mode_details']})"
+        extras.append(mop)
     if order.get("free_samples"):
-        elements.append(Spacer(1, 3*mm))
-        elements.append(Paragraph("<b>FREE SAMPLES:</b>", bold_style))
+        extras.append("<b>Free Samples:</b>")
         for s in order["free_samples"]:
-            sample_text = s.get("item_name", "")
-            if s.get("description"):
-                sample_text += f" - {s['description']}"
-            elements.append(Paragraph(f"  - {sample_text}", header_style))
-
-    # Dispatch info
+            t = s.get("item_name", "")
+            if s.get("description"): t += f" – {s['description']}"
+            extras.append(f"  · {t}")
     if order.get("shipping_method"):
-        elements.append(Spacer(1, 3*mm))
-        elements.append(Paragraph(f"<b>Dispatch Type:</b> {order['shipping_method'].replace('_', ' ').title()}", header_style))
-        if order.get("courier_name"):
-            elements.append(Paragraph(f"<b>Courier:</b> {order['courier_name']}", header_style))
-        if order.get("transporter_name"):
-            elements.append(Paragraph(f"<b>Transporter:</b> {order['transporter_name']}", header_style))
-
+        dispatch_parts = [f"<b>Dispatch:</b> {order['shipping_method'].replace('_',' ').title()}"]
+        if order.get("courier_name"):    dispatch_parts.append(f"Courier: {order['courier_name']}")
+        if order.get("transporter_name"): dispatch_parts.append(f"Transporter: {order['transporter_name']}")
+        extras.append("  |  ".join(dispatch_parts))
     if order.get("remark"):
+        extras.append(f"<b>Remarks:</b> {order['remark']}")
+
+    if extras:
+        elements.append(Spacer(1, 4*mm))
+        elements.append(sep())
         elements.append(Spacer(1, 3*mm))
-        elements.append(Paragraph(f"<b>Remarks:</b> {order['remark']}", header_style))
+        for line in extras:
+            elements.append(Paragraph(line, ParagraphStyle('Ex', parent=styles['Normal'], fontSize=8, leading=12)))
+            elements.append(Spacer(1, 1.5*mm))
 
     doc.build(elements)
     buffer.seek(0)
@@ -1823,163 +1900,332 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     if not pi:
         raise HTTPException(status_code=404, detail="PI not found")
     customer = await db.customers.find_one({"id": pi["customer_id"]}, {"_id": 0})
+
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=15*mm, rightMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm)
+    doc = SimpleDocTemplate(buffer, pagesize=A4,
+                            leftMargin=15*mm, rightMargin=15*mm,
+                            topMargin=12*mm, bottomMargin=15*mm)
     styles = getSampleStyleSheet()
     elements = []
     pw = A4[0] - 30*mm
+    is_gst = pi.get("gst_applicable", False)
 
-    title_style = ParagraphStyle('Title', parent=styles['Title'], fontSize=16, spaceAfter=6, alignment=TA_CENTER)
-    header_style = ParagraphStyle('Header', parent=styles['Normal'], fontSize=9, leading=12)
-    bold_style = ParagraphStyle('Bold', parent=styles['Normal'], fontSize=10, leading=14)
-    small_style = ParagraphStyle('Small', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.grey)
-    bank_style = ParagraphStyle('Bank', parent=styles['Normal'], fontSize=8, leading=11)
+    # ── Colours & shared styles ──
+    GREEN   = colors.HexColor('#15803D')
+    LGREEN  = colors.HexColor('#F0FDF4')
+    SGRAY   = colors.HexColor('#E5E7EB')
+    DGRAY   = colors.HexColor('#374151')
+    MGRAY   = colors.HexColor('#6B7280')
+    BGRAY   = colors.HexColor('#F9FAFB')
 
-    # Company header with logo
-    if pi.get("gst_applicable"):
-        logo_cell = Paragraph("", header_style)
+    def sep(thickness=0.5, col=SGRAY, width=None):
+        t = Table([['']], colWidths=[width or pw])
+        t.setStyle(TableStyle([('LINEBELOW',(0,0),(0,0), thickness, col)]))
+        return t
+
+    def sty(name, **kw):
+        return ParagraphStyle(name, parent=styles['Normal'], **kw)
+
+    body    = sty('B',  fontSize=9,  leading=13)
+    small   = sty('S',  fontSize=8,  leading=11, textColor=MGRAY)
+    bold9   = sty('B9', fontSize=9,  leading=13, fontName='Helvetica-Bold')
+    label   = sty('L',  fontSize=7.5,leading=10, textColor=MGRAY)
+    tr      = sty('TR', fontSize=9,  leading=12, alignment=TA_RIGHT)
+    trb     = sty('TRB',fontSize=11, leading=14, fontName='Helvetica-Bold', alignment=TA_RIGHT)
+    hdr_tbl = sty('HT', fontSize=8,  leading=11, fontName='Helvetica-Bold',
+                  textColor=colors.white)
+
+    # ─────────────────────────────────────────────────────────────
+    # ── A. GST PROFORMA INVOICE ──────────────────────────────────
+    # ─────────────────────────────────────────────────────────────
+    if is_gst:
+        # 1. HEADER: logo (aspect-ratio corrected) + company info
+        logo_cell = Paragraph('', body)
         if LOGO_PATH.exists():
             try:
-                logo_cell = Image(str(LOGO_PATH), width=40*mm, height=20*mm)
+                tmp = Image(str(LOGO_PATH))
+                aspect = tmp.imageHeight / tmp.imageWidth
+                logo_cell = Image(str(LOGO_PATH), width=30*mm, height=30*mm * aspect)
             except Exception:
                 pass
-        company_info = Paragraph(
-            f"<b>{COMPANY['name']}</b><br/>"
-            f"<i>{COMPANY['brand']}</i><br/>"
-            f"<font size=7>{COMPANY['address']}</font><br/>"
-            f"<font size=7>Mobile: {COMPANY['mobile']} | Email: {COMPANY['email']} | Web: {COMPANY['website']}</font><br/>"
-            f"<font size=7>GSTIN: {COMPANY['gstin']}</font>",
-            ParagraphStyle('CoInfo', parent=styles['Normal'], fontSize=10, leading=13)
+
+        co_para = Paragraph(
+            f"<b><font size=13>{COMPANY['name']}</font></b><br/>"
+            f"<font size=8 color='#15803D'><i>{COMPANY['brand']}</i></font><br/>"
+            f"<font size=7.5 color='#374151'>{COMPANY['address']}</font><br/>"
+            f"<font size=7.5 color='#6B7280'>"
+            f"Ph: {COMPANY['mobile']}  |  {COMPANY['email']}  |  {COMPANY['website']}</font><br/>"
+            f"<font size=7.5 color='#374151'><b>GSTIN:</b> {COMPANY['gstin']}</font>",
+            sty('CoP', fontSize=9, leading=13)
         )
-        header_t = Table([[logo_cell, company_info]], colWidths=[45*mm, pw - 45*mm])
-        header_t.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (0, 0), 0)]))
-        elements.append(header_t)
-        elements.append(Spacer(1, 6*mm))
-    else:
-        elements.append(Paragraph(f"<b>{COMPANY['brand']}</b>", ParagraphStyle('BrandOnly', parent=styles['Normal'], fontSize=12, leading=16)))
+        head = Table([[logo_cell, co_para]], colWidths=[34*mm, pw - 34*mm])
+        head.setStyle(TableStyle([
+            ('VALIGN',      (0,0),(-1,-1), 'MIDDLE'),
+            ('LEFTPADDING', (0,0),(0,0),   0),
+            ('RIGHTPADDING',(1,0),(1,0),   0),
+            ('TOPPADDING',  (0,0),(-1,-1), 0),
+            ('BOTTOMPADDING',(0,0),(-1,-1),0),
+        ]))
+        elements.append(head)
         elements.append(Spacer(1, 4*mm))
+        elements.append(sep(1.5, GREEN))
+        elements.append(Spacer(1, 3*mm))
 
-    elements.append(Paragraph("PROFORMA INVOICE", title_style))
-    elements.append(Spacer(1, 3*mm))
+        # 2. TITLE + PI META
+        pi_date = datetime.fromisoformat(pi['created_at']).strftime('%d %b %Y')
+        title_row = Table([[
+            Paragraph('<b><font size=15>PROFORMA INVOICE</font></b>',
+                      sty('PT', fontSize=15, fontName='Helvetica-Bold')),
+            Paragraph(
+                f"<font color='#6B7280' size=8>PI No.</font><br/>"
+                f"<b><font size=11>{pi['pi_number']}</font></b><br/>"
+                f"<font color='#6B7280' size=8>Date: {pi_date}</font>",
+                sty('PN', fontSize=9, leading=13, alignment=TA_RIGHT)
+            ),
+        ]], colWidths=[pw*0.55, pw*0.45])
+        title_row.setStyle(TableStyle([
+            ('VALIGN',      (0,0),(-1,-1), 'MIDDLE'),
+            ('TOPPADDING',  (0,0),(-1,-1), 0),
+            ('BOTTOMPADDING',(0,0),(-1,-1),0),
+        ]))
+        elements.append(title_row)
+        elements.append(Spacer(1, 5*mm))
 
-    pi_info = [[
-        Paragraph(f"<b>PI No:</b> {pi['pi_number']}", header_style),
-        Paragraph(f"<b>Date:</b> {datetime.fromisoformat(pi['created_at']).strftime('%d/%m/%Y')}", header_style),
-    ]]
-    t = Table(pi_info, colWidths=[pw/2, pw/2])
-    t.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP')]))
-    elements.append(t)
-    elements.append(Spacer(1, 4*mm))
+        # 3. BILL TO / SHIP TO
+        if customer:
+            def addr_block(title_text, name, phones, addr, gst_no, email):
+                lines = [
+                    Paragraph(title_text, sty('AHdr', fontSize=7.5, fontName='Helvetica-Bold',
+                                              textColor=colors.white)),
+                ]
+                name_p = Paragraph(f"<b>{name}</b>", sty('AN', fontSize=9.5, leading=13))
+                details = []
+                if phones:
+                    details.append(f"<b>Ph:</b> {', '.join(phones)}")
+                if addr and addr.get('address_line'):
+                    details.append(addr['address_line'])
+                    city_st = f"{addr.get('city','')}, {addr.get('state','')} – {addr.get('pincode','')}"
+                    if city_st.strip(', –'):
+                        details.append(city_st)
+                if gst_no:
+                    details.append(f"<b>GSTIN:</b> {gst_no}")
+                if email:
+                    details.append(f"<b>Email:</b> {email}")
+                details_p = Paragraph("<br/>".join(details), sty('AD', fontSize=8, leading=12))
+                inner = Table([[name_p], [details_p]], colWidths=[None])
+                inner.setStyle(TableStyle([
+                    ('TOPPADDING',(0,0),(-1,-1),2),('BOTTOMPADDING',(0,0),(-1,-1),2),
+                    ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+                ]))
+                outer = Table([
+                    [Paragraph(title_text, sty('ATH', fontSize=7.5, fontName='Helvetica-Bold', textColor=colors.white))],
+                    [inner],
+                ], colWidths=[None])
+                outer.setStyle(TableStyle([
+                    ('BACKGROUND',  (0,0),(0,0), GREEN),
+                    ('TOPPADDING',  (0,0),(0,0), 4), ('BOTTOMPADDING',(0,0),(0,0), 4),
+                    ('LEFTPADDING', (0,0),(-1,-1),7),
+                    ('TOPPADDING',  (0,1),(0,1), 5), ('BOTTOMPADDING',(0,1),(0,1), 7),
+                    ('BOX',         (0,0),(-1,-1), 0.5, SGRAY),
+                    ('RIGHTPADDING',(0,0),(-1,-1),7),
+                ]))
+                return outer
 
-    if customer:
-        elements.append(Paragraph("<b>Bill To:</b>", bold_style))
-        cust_line = customer.get("name", "")
-        if customer.get("phone_numbers"):
-            cust_line += f" | Ph: {', '.join(customer['phone_numbers'])}"
-        elements.append(Paragraph(cust_line, header_style))
-        # Use billing address from PI or customer addresses
-        ba = pi.get("billing_address")
-        if ba and ba.get("address_line"):
-            elements.append(Paragraph(f"{ba['address_line']}, {ba.get('city','')}, {ba.get('state','')} - {ba.get('pincode','')}", small_style))
-        if customer.get("gst_no"):
-            elements.append(Paragraph(f"GSTIN: {customer['gst_no']}", small_style))
-        if customer.get("email"):
-            elements.append(Paragraph(f"Email: {customer['email']}", small_style))
-    elements.append(Spacer(1, 5*mm))
+            ba = pi.get('billing_address') or {}
+            sa = pi.get('shipping_address') or {}
+            bill_blk = addr_block("BILL TO", customer.get('name',''),
+                                  customer.get('phone_numbers',[]),
+                                  ba, customer.get('gst_no',''), customer.get('email',''))
+            ship_blk = addr_block("SHIP TO", customer.get('name',''),
+                                  customer.get('phone_numbers',[]),
+                                  sa or ba, None, None)
+            addr_tbl = Table([[bill_blk, ship_blk]], colWidths=[(pw-5*mm)/2, (pw-5*mm)/2],
+                             spaceBefore=0)
+            addr_tbl.setStyle(TableStyle([
+                ('VALIGN',      (0,0),(-1,-1), 'TOP'),
+                ('LEFTPADDING', (0,0),(0,0),   0),
+                ('RIGHTPADDING',(0,0),(0,0),   2.5*mm),
+                ('LEFTPADDING', (1,0),(1,0),   2.5*mm),
+                ('RIGHTPADDING',(1,0),(1,0),   0),
+            ]))
+            elements.append(addr_tbl)
+            elements.append(Spacer(1, 6*mm))
 
-    # Items table
-    if pi.get("gst_applicable"):
+    # ─────────────────────────────────────────────────────────────
+    # ── B. NON-GST → QUOTATION ───────────────────────────────────
+    # ─────────────────────────────────────────────────────────────
+    else:
+        # No logo, no company name — just "QUOTATION" title
+        pi_date = datetime.fromisoformat(pi['created_at']).strftime('%d %b %Y')
+        quot_row = Table([[
+            Paragraph('<b><font size=18>QUOTATION</font></b>',
+                      sty('QT', fontSize=18, fontName='Helvetica-Bold', textColor=DGRAY)),
+            Paragraph(
+                f"<font color='#6B7280' size=8>Ref No.</font><br/>"
+                f"<b><font size=11>{pi['pi_number']}</font></b><br/>"
+                f"<font color='#6B7280' size=8>Date: {pi_date}</font>",
+                sty('QN', fontSize=9, leading=13, alignment=TA_RIGHT)
+            ),
+        ]], colWidths=[pw*0.5, pw*0.5])
+        quot_row.setStyle(TableStyle([
+            ('VALIGN',      (0,0),(-1,-1), 'MIDDLE'),
+            ('TOPPADDING',  (0,0),(-1,-1), 0),
+            ('BOTTOMPADDING',(0,0),(-1,-1),0),
+        ]))
+        elements.append(quot_row)
+        elements.append(Spacer(1, 2*mm))
+        elements.append(sep(1.5, DGRAY))
+        elements.append(Spacer(1, 5*mm))
+
+        # Customer "To:" block
+        if customer:
+            ba = pi.get('billing_address') or {}
+            cust_lines = [f"<b>{customer.get('name','')}</b>"]
+            if customer.get('phone_numbers'):
+                cust_lines.append(f"Ph: {', '.join(customer['phone_numbers'])}")
+            if ba.get('address_line'):
+                cust_lines.append(ba['address_line'])
+                city_st = f"{ba.get('city','')}, {ba.get('state','')} – {ba.get('pincode','')}"
+                if city_st.strip(', –'):
+                    cust_lines.append(city_st)
+            if customer.get('email'):
+                cust_lines.append(f"Email: {customer['email']}")
+            to_tbl = Table([
+                [Paragraph("TO", sty('ToH', fontSize=7.5, fontName='Helvetica-Bold', textColor=colors.white))],
+                [Paragraph("<br/>".join(cust_lines), sty('ToD', fontSize=9, leading=13))],
+            ], colWidths=[pw])
+            to_tbl.setStyle(TableStyle([
+                ('BACKGROUND',  (0,0),(0,0), DGRAY),
+                ('TOPPADDING',  (0,0),(0,0), 4), ('BOTTOMPADDING',(0,0),(0,0), 4),
+                ('LEFTPADDING', (0,0),(-1,-1),8),
+                ('TOPPADDING',  (0,1),(0,1), 6), ('BOTTOMPADDING',(0,1),(0,1), 6),
+                ('BOX',         (0,0),(-1,-1), 0.5, SGRAY),
+                ('RIGHTPADDING',(0,0),(-1,-1),8),
+            ]))
+            elements.append(to_tbl)
+            elements.append(Spacer(1, 6*mm))
+
+    # ─────────────────────────────────────────────────────────────
+    # ── C. ITEMS TABLE (shared, logic unchanged) ─────────────────
+    # ─────────────────────────────────────────────────────────────
+    if is_gst:
         if pi.get("show_rate"):
-            headers = ['#', 'Item Name', 'Qty', 'Rate', 'Amount', 'GST%', 'GST Amt', 'Total']
-            col_widths = [8*mm, 48*mm, 18*mm, 22*mm, 25*mm, 15*mm, 22*mm, 25*mm]
+            headers = ['#', 'Item / Description', 'Qty', 'Rate', 'Amount', 'GST %', 'GST Amt', 'Total']
+            col_widths = [8*mm, 46*mm, 16*mm, 22*mm, 23*mm, 14*mm, 20*mm, 22*mm]
         else:
-            headers = ['#', 'Item Name', 'Qty', 'Amount', 'GST%', 'GST Amt', 'Total']
-            col_widths = [8*mm, 60*mm, 20*mm, 28*mm, 18*mm, 25*mm, 28*mm]
+            headers = ['#', 'Item / Description', 'Qty', 'Amount', 'GST %', 'GST Amt', 'Total']
+            col_widths = [8*mm, 60*mm, 18*mm, 26*mm, 16*mm, 24*mm, 29*mm]
     else:
         if pi.get("show_rate"):
-            headers = ['#', 'Item Name', 'Qty', 'Rate', 'Amount']
-            col_widths = [10*mm, 70*mm, 25*mm, 35*mm, 40*mm]
+            headers = ['#', 'Item / Description', 'Qty', 'Rate', 'Amount']
+            col_widths = [10*mm, 72*mm, 24*mm, 32*mm, 43*mm]
         else:
-            headers = ['#', 'Item Name', 'Qty', 'Amount']
-            col_widths = [10*mm, 85*mm, 30*mm, 55*mm]
-    table_data = [headers]
+            headers = ['#', 'Item / Description', 'Qty', 'Amount']
+            col_widths = [10*mm, 90*mm, 28*mm, 53*mm]
+
+    itm_p  = sty('IP', fontSize=8, leading=11)
+    tbl_hdr= sty('TH', fontSize=8, fontName='Helvetica-Bold', textColor=colors.white, alignment=TA_CENTER)
+    tbl_num= sty('TN', fontSize=8, alignment=TA_RIGHT)
+    tbl_ctr= sty('TC', fontSize=8, alignment=TA_CENTER)
+
+    table_data = [[Paragraph(h, tbl_hdr) for h in headers]]
     for i, item in enumerate(pi.get("items", [])):
         item_name = item.get("product_name", "")
         if item.get("description"):
-            item_name += f"\n{item['description']}"
-        row = [str(i + 1), Paragraph(item_name.replace("\n", "<br/>"), ParagraphStyle('ItemP', parent=styles['Normal'], fontSize=8, leading=10)), str(item.get("qty", 0))]
+            item_name += f"<br/><font size=7 color='#6B7280'>{item['description']}</font>"
+        row = [
+            Paragraph(str(i + 1), tbl_ctr),
+            Paragraph(item_name, itm_p),
+            Paragraph(str(item.get("qty", 0)), tbl_num),
+        ]
         if pi.get("show_rate"):
-            row.append(f"{item.get('rate', 0):.2f}")
-        row.append(f"{item.get('amount', 0):.2f}")
-        if pi.get("gst_applicable"):
-            row.append(f"{item.get('gst_rate', 0)}%")
-            row.append(f"{item.get('gst_amount', 0):.2f}")
-            row.append(f"{item.get('total', 0):.2f}")
+            row.append(Paragraph(f"{item.get('rate', 0):.2f}", tbl_num))
+        row.append(Paragraph(f"{item.get('amount', 0):.2f}", tbl_num))
+        if is_gst:
+            row.append(Paragraph(f"{item.get('gst_rate', 0)}%", tbl_ctr))
+            row.append(Paragraph(f"{item.get('gst_amount', 0):.2f}", tbl_num))
+            row.append(Paragraph(f"{item.get('total', 0):.2f}", tbl_num))
         table_data.append(row)
-    t = Table(table_data, colWidths=col_widths, repeatRows=1)
-    t.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#16A34A')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('FONTSIZE', (0, 0), (-1, 0), 9),
-        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-        ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F0FDF4')]),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+
+    items_t = Table(table_data, colWidths=col_widths, repeatRows=1)
+    items_t.setStyle(TableStyle([
+        ('BACKGROUND',    (0,0),(-1,0),   GREEN if is_gst else DGRAY),
+        ('TEXTCOLOR',     (0,0),(-1,0),   colors.white),
+        ('FONTSIZE',      (0,0),(-1,-1),  8),
+        ('GRID',          (0,0),(-1,-1),  0.4, SGRAY),
+        ('ROWBACKGROUNDS',(0,1),(-1,-1),  [colors.white, BGRAY]),
+        ('VALIGN',        (0,0),(-1,-1),  'MIDDLE'),
+        ('TOPPADDING',    (0,0),(-1,-1),  4),
+        ('BOTTOMPADDING', (0,0),(-1,-1),  4),
+        ('LEFTPADDING',   (0,0),(-1,-1),  5),
+        ('RIGHTPADDING',  (0,0),(-1,-1),  5),
     ]))
-    elements.append(t)
+    elements.append(items_t)
     elements.append(Spacer(1, 5*mm))
 
-    # Totals
-    total_style = ParagraphStyle('TotalRight', parent=styles['Normal'], fontSize=9, alignment=TA_RIGHT)
-    total_bold = ParagraphStyle('TotalBold', parent=styles['Normal'], fontSize=11, alignment=TA_RIGHT)
+    # ─────────────────────────────────────────────────────────────
+    # ── D. TOTALS (logic unchanged, layout improved) ─────────────
+    # ─────────────────────────────────────────────────────────────
     totals = []
-    totals.append([Paragraph("Subtotal:", total_style), Paragraph(f"{pi.get('subtotal', 0):.2f}", total_style)])
-    if pi.get("gst_applicable"):
+    totals.append([Paragraph("Subtotal", tr), Paragraph(f"{pi.get('subtotal', 0):.2f}", tr)])
+    if is_gst:
         cust_state = ""
         if pi.get("billing_address"):
             cust_state = pi["billing_address"].get("state", "")
-        if not cust_state and customer:
-            # Fallback: check customer addresses
-            cust_state = ""
-        if cust_state.lower() in ["maharashtra"]:
+        if cust_state.lower() == "maharashtra":
             cgst = round(pi.get("total_gst", 0) / 2, 2)
-            totals.append([Paragraph("CGST:", total_style), Paragraph(f"{cgst:.2f}", total_style)])
-            totals.append([Paragraph("SGST:", total_style), Paragraph(f"{cgst:.2f}", total_style)])
+            totals.append([Paragraph("CGST", tr), Paragraph(f"{cgst:.2f}", tr)])
+            totals.append([Paragraph("SGST", tr), Paragraph(f"{cgst:.2f}", tr)])
         else:
-            totals.append([Paragraph("IGST:", total_style), Paragraph(f"{pi.get('total_gst', 0):.2f}", total_style)])
+            totals.append([Paragraph("IGST", tr), Paragraph(f"{pi.get('total_gst', 0):.2f}", tr)])
     if pi.get("shipping_charge", 0) > 0:
-        totals.append([Paragraph("Shipping:", total_style), Paragraph(f"{pi['shipping_charge']:.2f}", total_style)])
+        totals.append([Paragraph("Shipping Charges", tr), Paragraph(f"{pi['shipping_charge']:.2f}", tr)])
         if pi.get("shipping_gst", 0) > 0:
-            totals.append([Paragraph("Shipping GST (18%):", total_style), Paragraph(f"{pi['shipping_gst']:.2f}", total_style)])
-    totals.append([Paragraph("<b>Grand Total:</b>", total_bold), Paragraph(f"<b>INR {pi.get('grand_total', 0):.0f}</b>", total_bold)])
-    tt = Table(totals, colWidths=[pw - 60*mm, 60*mm])
-    tt.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'RIGHT'), ('LINEABOVE', (0, -1), (-1, -1), 1, colors.black)]))
+            totals.append([Paragraph("Shipping GST (18%)", tr), Paragraph(f"{pi['shipping_gst']:.2f}", tr)])
+    totals.append([Paragraph("<b>GRAND TOTAL</b>", trb), Paragraph(f"<b>INR {pi.get('grand_total', 0):.0f}</b>", trb)])
+
+    tt = Table(totals, colWidths=[pw - 62*mm, 62*mm])
+    tt.setStyle(TableStyle([
+        ('ALIGN',         (0,0),(-1,-1), 'RIGHT'),
+        ('LINEABOVE',     (0,-1),(-1,-1), 1.5, GREEN if is_gst else DGRAY),
+        ('BACKGROUND',    (0,-1),(-1,-1), LGREEN if is_gst else BGRAY),
+        ('TOPPADDING',    (0,-1),(-1,-1), 6),
+        ('BOTTOMPADDING', (0,-1),(-1,-1), 6),
+        ('TOPPADDING',    (0,0),(-1,-2),  3),
+        ('BOTTOMPADDING', (0,0),(-1,-2),  3),
+        ('LEFTPADDING',   (0,0),(-1,-1),  5),
+        ('RIGHTPADDING',  (0,0),(-1,-1),  5),
+    ]))
     elements.append(tt)
 
+    # ─────────────────────────────────────────────────────────────
+    # ── E. REMARKS + FREE SAMPLES ────────────────────────────────
+    # ─────────────────────────────────────────────────────────────
+    extras = []
     if pi.get("remark"):
-        elements.append(Spacer(1, 5*mm))
-        elements.append(Paragraph(f"<b>Remarks:</b> {pi['remark']}", header_style))
-
-    # Free Samples
+        extras.append(f"<b>Remarks:</b>  {pi['remark']}")
     if pi.get("free_samples"):
-        elements.append(Spacer(1, 4*mm))
-        elements.append(Paragraph("<b>Free Samples:</b>", bold_style))
+        extras.append("<b>Free Samples:</b>")
         for s in pi["free_samples"]:
-            sample_text = s.get("item_name", "")
+            st = s.get("item_name", "")
             if s.get("description"):
-                sample_text += f" - {s['description']}"
-            elements.append(Paragraph(f"  - {sample_text}", header_style))
+                st += f" – {s['description']}"
+            extras.append(f"   · {st}")
+    if extras:
+        elements.append(Spacer(1, 5*mm))
+        elements.append(sep())
+        elements.append(Spacer(1, 3*mm))
+        for line in extras:
+            elements.append(Paragraph(line, sty('Ex', fontSize=8.5, leading=13)))
+            elements.append(Spacer(1, 1*mm))
 
-    # Bank Details & UPI QR Code
-    elements.append(Spacer(1, 8*mm))
-    bank = BANK_GST if pi.get("gst_applicable") else BANK_NON_GST
+    # ─────────────────────────────────────────────────────────────
+    # ── F. BANK DETAILS + QR CODE (logic unchanged) ──────────────
+    # ─────────────────────────────────────────────────────────────
+    elements.append(Spacer(1, 7*mm))
+    bank = BANK_GST if is_gst else BANK_NON_GST
     upi_string = bank["upi_string"].format(amount=int(pi.get("grand_total", 0)))
 
-    # Generate QR code
     qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=6, border=2)
     qr.add_data(upi_string)
     qr.make(fit=True)
@@ -1987,33 +2233,45 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     qr_buffer = io.BytesIO()
     qr_img.save(qr_buffer, format='PNG')
     qr_buffer.seek(0)
-    qr_image = Image(qr_buffer, width=30*mm, height=30*mm)
+    qr_image = Image(qr_buffer, width=32*mm, height=32*mm)
 
-    bank_text = Paragraph(
-        f"<b>Bank Details:</b><br/>"
-        f"A/c Name: {bank['account_name']}<br/>"
-        f"A/c No.: {bank['account_no']}<br/>"
-        f"IFSC: {bank['ifsc']}<br/>"
-        f"Bank: {bank['bank']}<br/>"
-        f"Branch: {bank['branch']}",
-        bank_style
+    bank_detail_style = sty('Bk', fontSize=8.5, leading=13)
+    bank_para = Paragraph(
+        f"<b>A/c Name:</b>  {bank['account_name']}<br/>"
+        f"<b>A/c No.:</b>   {bank['account_no']}<br/>"
+        f"<b>IFSC:</b>      {bank['ifsc']}<br/>"
+        f"<b>Bank:</b>      {bank['bank']}<br/>"
+        f"<b>Branch:</b>    {bank['branch']}",
+        bank_detail_style
+    )
+    qr_label = Paragraph(
+        "<b>Scan to Pay</b><br/><font size=7 color='#6B7280'>UPI / PhonePe / GPay / Paytm</font>",
+        sty('QL', fontSize=8, leading=11, alignment=TA_CENTER)
+    )
+    acc_label = Paragraph(
+        "<b>PAYMENT DETAILS</b>",
+        sty('PH', fontSize=8, fontName='Helvetica-Bold', textColor=colors.white)
     )
 
-    payment_table = Table(
-        [[bank_text, qr_image]],
-        colWidths=[pw - 40*mm, 40*mm]
-    )
-    payment_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('ALIGN', (1, 0), (1, 0), 'CENTER'),
-        ('BOX', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+    pay_hdr_row  = [acc_label, Paragraph("<b>SCAN & PAY</b>",
+                    sty('SH', fontSize=8, fontName='Helvetica-Bold', textColor=colors.white, alignment=TA_CENTER))]
+    pay_data_row = [bank_para, Table([[qr_image],[qr_label]], colWidths=[36*mm])]
+
+    pay_tbl = Table([pay_hdr_row, pay_data_row], colWidths=[pw - 40*mm, 40*mm])
+    pay_tbl.setStyle(TableStyle([
+        ('BACKGROUND',   (0,0),(-1,0),  GREEN if is_gst else DGRAY),
+        ('TEXTCOLOR',    (0,0),(-1,0),  colors.white),
+        ('VALIGN',       (0,0),(-1,-1), 'TOP'),
+        ('ALIGN',        (1,1),(1,1),   'CENTER'),
+        ('BOX',          (0,0),(-1,-1), 0.5, SGRAY),
+        ('LINEBELOW',    (0,0),(-1,0),  0.5, SGRAY),
+        ('LINEAFTER',    (0,0),(0,-1),  0.5, SGRAY),
+        ('TOPPADDING',   (0,0),(-1,0),  4), ('BOTTOMPADDING',(0,0),(-1,0), 4),
+        ('TOPPADDING',   (0,1),(-1,1),  6), ('BOTTOMPADDING',(0,1),(-1,1), 6),
+        ('LEFTPADDING',  (0,0),(-1,-1), 8),
+        ('RIGHTPADDING', (0,0),(-1,-1), 8),
     ]))
-    elements.append(Paragraph("<b>Payment Information</b>", bold_style))
-    elements.append(Spacer(1, 2*mm))
-    elements.append(payment_table)
+    elements.append(pay_tbl)
 
     doc.build(elements)
     buffer.seek(0)

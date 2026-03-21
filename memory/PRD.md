@@ -37,7 +37,11 @@ Build a comprehensive Order Management System for "CitSpray" (aroma sciences com
 6. Order Detail Images all visible with clickable preview
 7. Admin Account Protection against deactivation
 
-### Phase 7: Critical Fixes & Major Features (COMPLETED - 2026-03-21)
+### PDF Design Overhaul (2026-03-21)
+- **Order Sheet**: Professional redesign with logo (correct 1:1 aspect ratio), green-themed header with company info, boxed order info grid, bordered customer section, improved item table, right-aligned totals with green grand total row, clean extras section
+- **GST Proforma Invoice**: Logo with correct aspect ratio, two-column header (logo + company), "PROFORMA INVOICE" title row with PI number right-aligned, side-by-side BILL TO / SHIP TO boxes, improved items table, better totals, professional Payment Details section with bank info + QR code
+- **Non-GST PI → "QUOTATION"**: No logo, no company name — clean "QUOTATION" title with dark grey separator, "TO:" customer box, items table with no GST columns, standard totals, bank details + QR
+
 1. **Full Order Edit Control** - New `/orders/:orderId/edit` page (EditOrder.js)
    - Admin: full form (customer, items, pricing, addresses, payment, shipping)
    - Telecaller: own orders only, full form
