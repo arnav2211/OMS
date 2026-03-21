@@ -21,7 +21,7 @@ const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-
 const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
 
 export default function OrderDetail() {
-  const { id } = useParams();
+  const { orderId: id } = useParams();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [order, setOrder] = useState(null);
@@ -37,6 +37,7 @@ export default function OrderDetail() {
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [packagingStaff, setPackagingStaff] = useState([]);
   const [dispatchData, setDispatchData] = useState({ courier_name: "", transporter_name: "", lr_no: "", dispatch_type: "" });
+  const [previewImage, setPreviewImage] = useState(null);
 
   useEffect(() => { loadOrder(); }, [id]);
 
@@ -234,12 +235,89 @@ export default function OrderDetail() {
       {/* Payment */}
       <Card>
         <CardHeader className="pb-3"><CardTitle className="text-base">Payment Details</CardTitle></CardHeader>
-        <CardContent className="space-y-2">
+        <CardContent className="space-y-3">
           <div className="flex justify-between"><span className="text-sm text-muted-foreground">Status</span><Badge variant="outline">{order.payment_status}</Badge></div>
           {order.amount_paid > 0 && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Amount Paid</span><span className="text-sm font-mono">{"\u20B9"}{order.amount_paid}</span></div>}
           {order.balance_amount > 0 && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Balance</span><span className="text-sm font-mono text-red-500">{"\u20B9"}{order.balance_amount}</span></div>}
+          {order.payment_screenshots?.length > 0 && (
+            <div>
+              <p className="text-sm font-medium mb-2">Payment Proof</p>
+              <div className="flex flex-wrap gap-2" data-testid="payment-proof-images">
+                {order.payment_screenshots.map((url, i) => (
+                  <button key={i} className="w-20 h-20 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-all" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
+                    <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Payment proof ${i + 1}`} className="w-full h-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
+
+      {/* Free Samples */}
+      {order.free_samples?.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3"><CardTitle className="text-base">Free Samples</CardTitle></CardHeader>
+          <CardContent>
+            <div className="space-y-1" data-testid="free-samples-list">
+              {order.free_samples.map((s, i) => (
+                <div key={i} className="flex items-center gap-2 text-sm p-2 rounded bg-secondary/50">
+                  <span className="text-xs font-mono text-muted-foreground">{i + 1}.</span>
+                  <span className="font-medium">{s.item_name}</span>
+                  {s.description && <span className="text-muted-foreground">- {s.description}</span>}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Packing Images */}
+      {(order.packaging?.item_images && Object.keys(order.packaging.item_images).length > 0) || order.packaging?.order_images?.length > 0 || order.packaging?.packed_box_images?.length > 0 ? (
+        <Card>
+          <CardHeader className="pb-3"><CardTitle className="text-base">Packing Images</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            {order.packaging?.item_images && Object.entries(order.packaging.item_images).map(([key, urls]) => (
+              urls?.length > 0 && (
+                <div key={key}>
+                  <p className="text-xs font-medium text-muted-foreground uppercase mb-2">Item: {key}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {urls.map((url, i) => (
+                      <button key={i} className="w-20 h-20 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-all" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
+                        <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Item ${key}`} className="w-full h-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            ))}
+            {order.packaging?.order_images?.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground uppercase mb-2">Full Order Images</p>
+                <div className="flex flex-wrap gap-2">
+                  {order.packaging.order_images.map((url, i) => (
+                    <button key={i} className="w-20 h-20 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-all" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
+                      <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Order img ${i + 1}`} className="w-full h-full object-cover" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {order.packaging?.packed_box_images?.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground uppercase mb-2">Packed Box Images</p>
+                <div className="flex flex-wrap gap-2">
+                  {order.packaging.packed_box_images.map((url, i) => (
+                    <button key={i} className="w-20 h-20 rounded-lg border overflow-hidden hover:ring-2 ring-primary transition-all" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
+                      <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Box img ${i + 1}`} className="w-full h-full object-cover" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {/* Packaging, Dispatch, Remark */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -396,6 +474,14 @@ export default function OrderDetail() {
             <Button variant="outline" onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmText(""); }}>Cancel</Button>
             <Button variant="destructive" onClick={deleteOrder} disabled={deleteConfirmText !== order.order_number} data-testid="confirm-delete-order">Delete Permanently</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Image Preview Modal */}
+      <Dialog open={!!previewImage} onOpenChange={() => setPreviewImage(null)}>
+        <DialogContent className="max-w-3xl p-2">
+          <DialogHeader><DialogTitle className="sr-only">Image Preview</DialogTitle></DialogHeader>
+          {previewImage && <img src={previewImage} alt="Preview" className="w-full h-auto rounded-lg max-h-[80vh] object-contain" />}
         </DialogContent>
       </Dialog>
     </div>

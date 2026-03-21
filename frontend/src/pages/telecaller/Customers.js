@@ -80,9 +80,16 @@ export default function Customers() {
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return toast.error("Invalid email format");
     const payload = { ...form, phone_numbers: phones };
     try {
-      if (editingId) { await api.put(`/customers/${editingId}`, payload); toast.success("Customer updated"); }
-      else { await api.post("/customers", payload); toast.success("Customer created"); }
-      setShowDialog(false); loadCustomers();
+      if (editingId) { await api.put(`/customers/${editingId}`, payload); toast.success("Customer updated"); setShowDialog(false); }
+      else {
+        const res = await api.post("/customers", payload);
+        toast.success("Customer created. Add an address for this customer.");
+        setShowDialog(false);
+        setShowAddresses(res.data.id);
+        loadAddresses(res.data.id);
+        openNewAddr(res.data.id);
+      }
+      loadCustomers();
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
   };
 

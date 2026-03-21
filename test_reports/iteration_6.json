@@ -1,0 +1,88 @@
+{
+  "summary": "Phase 6 testing complete. All major features working: Admin Dashboard My Report and Executive Reports with period filters (This Month/This Week/Today/Custom), Free Samples in Order and PI creation, Order Detail page bug fix (Order not found resolved), Customer address management after creation, Payment proof and packing images visible in Order Detail, Formulation access control working for admin.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase6.py",
+    "/app/test_reports/pytest/pytest_phase6_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "OrderDetail.js correctly uses `const { orderId: id } = useParams()` to match route param :orderId - bug fixed",
+    "AdminDashboard.js correctly uses query param `/reports/telecaller-sales?telecaller_id=${execId}&period=month` for executive reports",
+    "FreeSampleModel added to backend and free_samples field properly handled in Order and PI creation",
+    "Payment proof images and packing images display with preview modal working in OrderDetail"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase6.py (new test file)"
+  ],
+  "success_rate": {
+    "backend": "100% (20/20 tests passed)",
+    "frontend": "100% (all features working)"
+  },
+  "test_credentials": {
+    "admin": {"username": "admin", "password": "admin123"}
+  },
+  "seed_data_creation": "Created test customers and orders with free samples during backend testing",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 6 features fully implemented and tested. Key features verified: 1) Admin Dashboard My Report tab with period filters (today/week/month/custom) - uses /reports/telecaller-sales?telecaller_id=X&period=Y API, 2) Admin Dashboard Executive Reports tab with executive selection dropdown and period filters, 3) Order Detail page loads correctly (Order not found bug fixed by changing useParams from {id} to {orderId: id}), 4) Free Samples section in Create Order page with Add Sample button, 5) Free Samples section in PI Builder page, 6) Customer address management - can add addresses after customer creation, 7) Payment proof images visible in Order Detail payment section, 8) Formulation column visible for admin in Order Detail items table, 9) Dispatch lock working for dispatched orders. Route for PI Builder is /proforma not /pi.",
+  "features_tested": {
+    "admin_dashboard_my_report": {
+      "period_filters": "Working - today/week/month/custom",
+      "api_endpoint": "/reports/telecaller-sales?telecaller_id=X&period=Y",
+      "metrics_displayed": "Orders, Revenue, Product Sales"
+    },
+    "admin_dashboard_executive_reports": {
+      "executive_selection": "Working - dropdown with all telecallers/admins",
+      "period_filters": "Working - today/week/month/custom",
+      "api_endpoint": "/reports/telecaller-sales?telecaller_id=X&period=Y"
+    },
+    "order_detail_bug_fix": {
+      "issue": "Order not found error when navigating from All Orders",
+      "fix": "Changed useParams from {id} to {orderId: id} to match route :orderId",
+      "status": "FIXED - Order Detail loads correctly"
+    },
+    "free_samples_order": {
+      "add_sample_button": "Working",
+      "sample_fields": "item_name and description",
+      "persistence": "Verified - samples saved and displayed in Order Detail"
+    },
+    "free_samples_pi": {
+      "add_sample_button": "Working",
+      "sample_fields": "item_name and description",
+      "route": "/proforma"
+    },
+    "customer_address_management": {
+      "add_address_after_creation": "Working",
+      "address_directory": "Working - shows addresses per customer",
+      "pincode_autofill": "Working"
+    },
+    "order_detail_images": {
+      "payment_proof_images": "Working - visible in payment section with preview",
+      "packing_images": "Working - item_images, order_images, packed_box_images"
+    },
+    "formulation_access_control": {
+      "admin": "Can see and edit formulations",
+      "packaging": "Can see/edit only when global toggle is ON",
+      "telecaller": "Never sees formulations",
+      "dispatch": "Never sees formulations"
+    },
+    "dispatch_lock": {
+      "blocks_general_edit": "Working - cannot edit dispatched orders",
+      "allows_payment_update": "Working",
+      "allows_formulation_update": "Working"
+    }
+  },
+  "mocked_apis": {
+    "gst_verification": "/api/gst-verify/{gst_no} - returns state name based on first 2 digits",
+    "pincode_lookup": "External API with local fallback mapping for common pincodes"
+  }
+}

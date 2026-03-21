@@ -138,10 +138,15 @@ class OrderItemModel(BaseModel):
     formulation: str = ""
     description: str = ""
 
+class FreeSampleModel(BaseModel):
+    item_name: str = ""
+    description: str = ""
+
 class OrderCreate(BaseModel):
     customer_id: str
     purpose: str = ""
     items: List[OrderItemModel]
+    free_samples: List[FreeSampleModel] = []
     gst_applicable: bool = False
     shipping_method: str = ""
     courier_name: str = ""
@@ -169,6 +174,7 @@ class DispatchUpdate(BaseModel):
 class PICreate(BaseModel):
     customer_id: str
     items: List[OrderItemModel]
+    free_samples: List[FreeSampleModel] = []
     gst_applicable: bool = False
     show_rate: bool = True
     shipping_charge: float = 0
@@ -604,7 +610,6 @@ async def lookup_pincode(pincode: str, user=Depends(get_current_user)):
             "78": ("Guwahati", "Assam"),
             "80": ("Patna", "Bihar"), "81": ("Patna", "Bihar"), "82": ("Ranchi", "Jharkhand"),
             "83": ("Ranchi", "Jharkhand"),
-            "40": ("Goa", "Goa"),
         }
         prefix2 = pincode[:2]
         if prefix2 in prefix_map:
@@ -684,6 +689,7 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "shipping_address_id": req.shipping_address_id,
         "billing_address": billing_addr,
         "shipping_address": shipping_addr,
+        "free_samples": [s.model_dump() for s in req.free_samples],
         "telecaller_id": user["id"],
         "telecaller_name": user["name"],
         "packaging": {
@@ -1423,6 +1429,16 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
         elements.append(Paragraph(mop_text, header_style))
         elements.append(Spacer(1, 2*mm))
 
+    # Free Samples
+    if order.get("free_samples"):
+        elements.append(Spacer(1, 3*mm))
+        elements.append(Paragraph("<b>FREE SAMPLES:</b>", bold_style))
+        for s in order["free_samples"]:
+            sample_text = s.get("item_name", "")
+            if s.get("description"):
+                sample_text += f" - {s['description']}"
+            elements.append(Paragraph(f"  - {sample_text}", header_style))
+
     # Dispatch info
     if order.get("shipping_method"):
         elements.append(Spacer(1, 3*mm))
@@ -1504,6 +1520,7 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
         "shipping_address_id": req.shipping_address_id,
         "billing_address": billing_addr,
         "shipping_address": shipping_addr,
+        "free_samples": [s.model_dump() for s in req.free_samples],
         "created_by": user["id"],
         "created_by_name": user["name"],
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1579,6 +1596,7 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
         "shipping_address_id": req.shipping_address_id,
         "billing_address": billing_addr,
         "shipping_address": shipping_addr,
+        "free_samples": [s.model_dump() for s in req.free_samples],
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     await db.proforma_invoices.update_one({"id": pi_id}, {"$set": update_data})
@@ -1627,6 +1645,7 @@ async def convert_pi_to_order(pi_id: str, body: dict, user=Depends(get_current_u
         "shipping_address_id": pi.get("shipping_address_id", ""),
         "billing_address": pi.get("billing_address"),
         "shipping_address": pi.get("shipping_address"),
+        "free_samples": pi.get("free_samples", []),
         "telecaller_id": user["id"],
         "telecaller_name": user["name"],
         "packaging": {"item_images": {}, "order_images": [], "packed_box_images": [], "item_packed_by": [], "box_packed_by": [], "checked_by": [], "packed_at": ""},
@@ -1647,7 +1666,7 @@ async def convert_pi_to_order(pi_id: str, body: dict, user=Depends(get_current_u
 async def generate_pi_pdf(pi_id: str, token: str = ""):
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    user = await get_user_from_token_param(token)
+    await get_user_from_token_param(token)
     pi = await db.proforma_invoices.find_one({"id": pi_id}, {"_id": 0})
     if not pi:
         raise HTTPException(status_code=404, detail="PI not found")
@@ -1792,6 +1811,16 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     if pi.get("remark"):
         elements.append(Spacer(1, 5*mm))
         elements.append(Paragraph(f"<b>Remarks:</b> {pi['remark']}", header_style))
+
+    # Free Samples
+    if pi.get("free_samples"):
+        elements.append(Spacer(1, 4*mm))
+        elements.append(Paragraph("<b>Free Samples:</b>", bold_style))
+        for s in pi["free_samples"]:
+            sample_text = s.get("item_name", "")
+            if s.get("description"):
+                sample_text += f" - {s['description']}"
+            elements.append(Paragraph(f"  - {sample_text}", header_style))
 
     # Bank Details & UPI QR Code
     elements.append(Spacer(1, 8*mm))

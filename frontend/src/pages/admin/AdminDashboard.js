@@ -49,6 +49,7 @@ export default function AdminDashboard() {
   // Executive reports
   const [executiveReport, setExecutiveReport] = useState(null);
   const [selectedExec, setSelectedExec] = useState(null);
+  const [execPeriod, setExecPeriod] = useState("month");
   const [execDateFrom, setExecDateFrom] = useState("");
   const [execDateTo, setExecDateTo] = useState("");
   const [execExcludeGst, setExecExcludeGst] = useState(false);
@@ -56,6 +57,7 @@ export default function AdminDashboard() {
 
   // Admin self report
   const [adminReport, setAdminReport] = useState(null);
+  const [adminPeriod, setAdminPeriod] = useState("month");
   const [adminDateFrom, setAdminDateFrom] = useState("");
   const [adminDateTo, setAdminDateTo] = useState("");
   const [adminExcludeGst, setAdminExcludeGst] = useState(false);
@@ -145,11 +147,16 @@ export default function AdminDashboard() {
     setSelectedExec(execId);
     try {
       const params = new URLSearchParams();
-      if (execDateFrom) params.set("date_from", execDateFrom);
-      if (execDateTo) params.set("date_to", execDateTo);
+      params.set("telecaller_id", execId);
+      if (execPeriod === "custom") {
+        if (execDateFrom) params.set("date_from", execDateFrom);
+        if (execDateTo) params.set("date_to", execDateTo);
+      } else {
+        params.set("period", execPeriod);
+      }
       params.set("exclude_gst", execExcludeGst.toString());
       params.set("exclude_shipping", execExcludeShipping.toString());
-      const res = await api.get(`/reports/telecaller-sales/${execId}?${params.toString()}`);
+      const res = await api.get(`/reports/telecaller-sales?${params.toString()}`);
       setExecutiveReport(res.data);
     } catch { toast.error("Failed to load report"); }
   };
@@ -158,16 +165,21 @@ export default function AdminDashboard() {
   const loadAdminReport = async () => {
     try {
       const params = new URLSearchParams();
-      if (adminDateFrom) params.set("date_from", adminDateFrom);
-      if (adminDateTo) params.set("date_to", adminDateTo);
+      params.set("telecaller_id", user.id);
+      if (adminPeriod === "custom") {
+        if (adminDateFrom) params.set("date_from", adminDateFrom);
+        if (adminDateTo) params.set("date_to", adminDateTo);
+      } else {
+        params.set("period", adminPeriod);
+      }
       params.set("exclude_gst", adminExcludeGst.toString());
       params.set("exclude_shipping", adminExcludeShipping.toString());
-      const res = await api.get(`/reports/telecaller-sales/${user.id}?${params.toString()}`);
+      const res = await api.get(`/reports/telecaller-sales?${params.toString()}`);
       setAdminReport(res.data);
     } catch { }
   };
 
-  useEffect(() => { if (activeTab === "my-report") loadAdminReport(); }, [activeTab, adminDateFrom, adminDateTo, adminExcludeGst, adminExcludeShipping]);
+  useEffect(() => { if (activeTab === "my-report") loadAdminReport(); }, [activeTab, adminPeriod, adminDateFrom, adminDateTo, adminExcludeGst, adminExcludeShipping]);
 
   const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 
@@ -316,8 +328,19 @@ export default function AdminDashboard() {
             <CardHeader className="pb-3">
               <CardTitle className="text-base">My Performance Report</CardTitle>
               <div className="flex flex-wrap gap-3 items-end mt-2">
-                <div><Label className="text-xs">From</Label><Input type="date" value={adminDateFrom} onChange={e => setAdminDateFrom(e.target.value)} className="w-36" /></div>
-                <div><Label className="text-xs">To</Label><Input type="date" value={adminDateTo} onChange={e => setAdminDateTo(e.target.value)} className="w-36" /></div>
+                <div>
+                  <Label className="text-xs">Period</Label>
+                  <Select value={adminPeriod} onValueChange={setAdminPeriod}>
+                    <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+                    <SelectContent>{PERIOD_OPTIONS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                {adminPeriod === "custom" && (
+                  <>
+                    <div><Label className="text-xs">From</Label><Input type="date" value={adminDateFrom} onChange={e => setAdminDateFrom(e.target.value)} className="w-36" /></div>
+                    <div><Label className="text-xs">To</Label><Input type="date" value={adminDateTo} onChange={e => setAdminDateTo(e.target.value)} className="w-36" /></div>
+                  </>
+                )}
                 <div className="flex items-center gap-2"><Checkbox id="admExGst" checked={adminExcludeGst} onCheckedChange={setAdminExcludeGst} /><Label htmlFor="admExGst" className="text-xs cursor-pointer">Excl. GST</Label></div>
                 <div className="flex items-center gap-2"><Checkbox id="admExShip" checked={adminExcludeShipping} onCheckedChange={setAdminExcludeShipping} /><Label htmlFor="admExShip" className="text-xs cursor-pointer">Excl. Shipping</Label></div>
               </div>
@@ -373,8 +396,19 @@ export default function AdminDashboard() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div><Label className="text-xs">From</Label><Input type="date" value={execDateFrom} onChange={e => { setExecDateFrom(e.target.value); if (selectedExec) loadExecReport(selectedExec); }} className="w-36" /></div>
-                <div><Label className="text-xs">To</Label><Input type="date" value={execDateTo} onChange={e => { setExecDateTo(e.target.value); if (selectedExec) loadExecReport(selectedExec); }} className="w-36" /></div>
+                <div>
+                  <Label className="text-xs">Period</Label>
+                  <Select value={execPeriod} onValueChange={v => { setExecPeriod(v); if (selectedExec) setTimeout(() => loadExecReport(selectedExec), 0); }}>
+                    <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+                    <SelectContent>{PERIOD_OPTIONS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                {execPeriod === "custom" && (
+                  <>
+                    <div><Label className="text-xs">From</Label><Input type="date" value={execDateFrom} onChange={e => { setExecDateFrom(e.target.value); if (selectedExec) loadExecReport(selectedExec); }} className="w-36" /></div>
+                    <div><Label className="text-xs">To</Label><Input type="date" value={execDateTo} onChange={e => { setExecDateTo(e.target.value); if (selectedExec) loadExecReport(selectedExec); }} className="w-36" /></div>
+                  </>
+                )}
                 <div className="flex items-center gap-2"><Checkbox id="execExGst" checked={execExcludeGst} onCheckedChange={v => { setExecExcludeGst(v); if (selectedExec) setTimeout(() => loadExecReport(selectedExec), 0); }} /><Label htmlFor="execExGst" className="text-xs cursor-pointer">Excl. GST</Label></div>
                 <div className="flex items-center gap-2"><Checkbox id="execExShip" checked={execExcludeShipping} onCheckedChange={v => { setExecExcludeShipping(v); if (selectedExec) setTimeout(() => loadExecReport(selectedExec), 0); }} /><Label htmlFor="execExShip" className="text-xs cursor-pointer">Excl. Shipping</Label></div>
               </div>

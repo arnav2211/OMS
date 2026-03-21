@@ -32,6 +32,7 @@ const emptyItem = () => ({
 });
 
 const emptyAddress = () => ({ address_line: "", city: "", state: "", pincode: "", label: "" });
+const emptySample = () => ({ item_name: "", description: "" });
 
 function normalizePhone(phone) {
   const cleaned = phone.replace(/[\s\-\(\)]/g, "");
@@ -116,6 +117,7 @@ export default function CreateOrder() {
   const [gstLoading, setGstLoading] = useState(false);
   const [modeOfPayment, setModeOfPayment] = useState("");
   const [paymentModeDetails, setPaymentModeDetails] = useState("");
+  const [freeSamples, setFreeSamples] = useState([]);
 
   // Address selection
   const [billingAddress, setBillingAddress] = useState(null);
@@ -284,6 +286,7 @@ export default function CreateOrder() {
         payment_screenshots: paymentScreenshots,
         mode_of_payment: modeOfPayment,
         payment_mode_details: paymentModeDetails,
+        free_samples: freeSamples.filter(s => s.item_name),
         billing_address_id: billingAddress?.id || "",
         shipping_address_id: sameAsBilling ? (billingAddress?.id || "") : (shippingAddress?.id || ""),
       };
@@ -432,6 +435,29 @@ export default function CreateOrder() {
             </div>
           ))}
         </CardContent>
+      </Card>
+
+      {/* Free Samples */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">Free Samples (Optional)</CardTitle>
+            <Button variant="outline" size="sm" onClick={() => setFreeSamples(p => [...p, emptySample()])} data-testid="add-sample-btn"><Plus className="w-4 h-4 mr-1" /> Add Sample</Button>
+          </div>
+        </CardHeader>
+        {freeSamples.length > 0 && (
+          <CardContent className="space-y-3">
+            {freeSamples.map((sample, idx) => (
+              <div key={idx} className="flex gap-2 items-start" data-testid={`free-sample-${idx}`}>
+                <div className="flex-1 grid grid-cols-2 gap-2">
+                  <div><Label className="text-xs">Sample Item</Label><Input value={sample.item_name} onChange={e => { const s = [...freeSamples]; s[idx] = { ...s[idx], item_name: e.target.value }; setFreeSamples(s); }} placeholder="e.g. Citronella Oil Sample - 10ml" data-testid={`sample-name-${idx}`} /></div>
+                  <div><Label className="text-xs">Description</Label><Input value={sample.description} onChange={e => { const s = [...freeSamples]; s[idx] = { ...s[idx], description: e.target.value }; setFreeSamples(s); }} placeholder="Additional details" data-testid={`sample-desc-${idx}`} /></div>
+                </div>
+                <Button variant="ghost" size="icon" className="mt-5" onClick={() => setFreeSamples(p => p.filter((_, i) => i !== idx))}><Trash2 className="w-4 h-4 text-destructive" /></Button>
+              </div>
+            ))}
+          </CardContent>
+        )}
       </Card>
 
       {/* Shipping */}
