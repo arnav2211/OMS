@@ -352,6 +352,11 @@ async def list_users(admin=Depends(require_admin)):
 
 @api_router.put("/users/{user_id}")
 async def update_user(user_id: str, req: UserUpdate, admin=Depends(require_admin)):
+    # Protect the admin account from being deactivated
+    if req.active is not None and req.active is False:
+        target_user = await db.users.find_one({"id": user_id}, {"_id": 0})
+        if target_user and target_user.get("username") == "admin":
+            raise HTTPException(status_code=400, detail="The primary admin account cannot be deactivated")
     update = {}
     if req.name is not None:
         update["name"] = req.name

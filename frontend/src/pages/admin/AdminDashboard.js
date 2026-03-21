@@ -437,9 +437,11 @@ export default function AdminDashboard() {
                       <TableCell><Badge variant="secondary" className="text-xs">{u.role}</Badge></TableCell>
                       <TableCell><Badge variant={u.active ? "default" : "destructive"} className="text-xs">{u.active ? "Active" : "Inactive"}</Badge></TableCell>
                       <TableCell>
-                        <Button variant="ghost" size="icon" onClick={() => toggleUserActive(u)} data-testid={`toggle-user-${u.id}`}>
-                          {u.active ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </Button>
+                        {u.username !== "admin" && (
+                          <Button variant="ghost" size="icon" onClick={() => toggleUserActive(u)} data-testid={`toggle-user-${u.id}`}>
+                            {u.active ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
