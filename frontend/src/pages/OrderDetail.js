@@ -26,7 +26,10 @@ export default function OrderDetail() {
   const navigate = useNavigate();
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
+  // These are kept for backwards compatibility but no longer used (edit now navigates to /orders/:id/edit)
+  // eslint-disable-next-line
   const [showEdit, ] = useState(false);
+  // eslint-disable-next-line
   const [editData, ] = useState({});
   const [saving, setSaving] = useState(false);
   const [showPackaging, setShowPackaging] = useState(false);
