@@ -36,6 +36,7 @@ function DashboardRouter() {
     case "packaging": return <PackagingDashboard />;
     case "dispatch": return <DispatchDashboard />;
     case "accounts": return <AccountsDashboard />;
+    case "field_manager": return <TelecallerDashboard />;
     default: return <TelecallerDashboard />;
   }
 }
@@ -49,15 +50,15 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginPage />} />
       <Route path="/" element={<ProtectedRoute><DashboardRouter /></ProtectedRoute>} />
-      <Route path="/create-order" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><CreateOrder /></ProtectedRoute>} />
-      <Route path="/customers" element={<ProtectedRoute allowedRoles={["telecaller", "admin", "accounts"]}><Customers /></ProtectedRoute>} />
+      <Route path="/create-order" element={<ProtectedRoute allowedRoles={["telecaller", "admin", "field_manager"]}><CreateOrder /></ProtectedRoute>} />
+      <Route path="/customers" element={<ProtectedRoute allowedRoles={["telecaller", "admin", "accounts", "field_manager"]}><Customers /></ProtectedRoute>} />
       <Route path="/packaging" element={<ProtectedRoute allowedRoles={["packaging", "admin"]}><PackagingDashboard /></ProtectedRoute>} />
       <Route path="/dispatch" element={<ProtectedRoute allowedRoles={["dispatch", "packaging", "admin"]}><DispatchDashboard /></ProtectedRoute>} />
       <Route path="/all-orders" element={<ProtectedRoute><AllOrders /></ProtectedRoute>} />
       <Route path="/orders/:orderId/edit" element={<ProtectedRoute><EditOrder /></ProtectedRoute>} />
       <Route path="/orders/:orderId" element={<ProtectedRoute><OrderDetail /></ProtectedRoute>} />
-      <Route path="/pi/:piId/convert" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><CreateOrder /></ProtectedRoute>} />
-      <Route path="/proforma" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><PIBuilder /></ProtectedRoute>} />
+      <Route path="/pi/:piId/convert" element={<ProtectedRoute allowedRoles={["telecaller", "admin", "field_manager"]}><CreateOrder /></ProtectedRoute>} />
+      <Route path="/proforma" element={<ProtectedRoute allowedRoles={["telecaller", "admin", "field_manager"]}><PIBuilder /></ProtectedRoute>} />
       <Route path="/item-analytics" element={<ProtectedRoute allowedRoles={["admin"]}><ItemAnalytics /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute allowedRoles={["admin"]}><UserManagement /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />

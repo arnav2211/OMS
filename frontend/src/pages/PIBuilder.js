@@ -11,11 +11,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Plus, Trash2, Search, UserPlus, Download, MapPin, FileText, ArrowRight } from "lucide-react";
+import { Plus, Trash2, Search, UserPlus, Download, MapPin, FileText, ArrowRight, Share2 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Link } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
 
 const UNITS = ["mL", "L", "g", "Kg", "pcs", ""];
 const GST_RATES = [0, 5, 18];
@@ -70,6 +71,7 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
 }
 
 export default function PIBuilder() {
+  const { user } = useAuth();
   const [piList, setPiList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showBuilder, setShowBuilder] = useState(false);
@@ -93,6 +95,9 @@ export default function PIBuilder() {
   const [pincodeLoading, setPincodeLoading] = useState(false);
   const [showNewCustomer, setShowNewCustomer] = useState(false);
   const [newCust, setNewCust] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "" });
+  const [sharing, setSharing] = useState({});
+
+  const canShare = ["admin", "telecaller", "field_manager"].includes(user?.role);
 
   useEffect(() => { loadPIs(); loadCustomers(); }, []);
 
@@ -226,6 +231,46 @@ export default function PIBuilder() {
     catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
   };
 
+  const sharePI = async (pi) => {
+    setSharing(p => ({ ...p, [pi.id]: true }));
+    try {
+      const token = localStorage.getItem("token");
+      const pdfUrl = `${process.env.REACT_APP_BACKEND_URL}/api/proforma-invoices/${pi.id}/pdf?token=${token}`;
+      const response = await fetch(pdfUrl);
+      if (!response.ok) throw new Error("Failed to fetch PDF");
+      const blob = await response.blob();
+      const fileName = `${pi.pi_number}.pdf`;
+      const file = new File([blob], fileName, { type: "application/pdf" });
+
+      // Get customer phone for WhatsApp
+      const cust = customers.find(c => c.id === pi.customer_id);
+      const phone = cust?.phone_numbers?.[0]?.replace(/[^0-9]/g, "") || "";
+      const waPhone = phone.startsWith("91") ? phone : `91${phone}`;
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: `Proforma Invoice - ${pi.pi_number}` });
+      } else {
+        // Desktop fallback: download file + open WhatsApp
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast.success("PDF downloaded. Opening WhatsApp...");
+        if (phone) {
+          setTimeout(() => window.open(`https://wa.me/${waPhone}`, "_blank"), 500);
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") toast.error("Share failed");
+    } finally {
+      setSharing(p => ({ ...p, [pi.id]: false }));
+    }
+  };
+
   return (
     <div className="space-y-6" data-testid="pi-builder-page">
       <div className="flex items-center justify-between">
@@ -261,6 +306,11 @@ export default function PIBuilder() {
                       <TableCell>
                         <div className="flex gap-1">
                           <Button variant="ghost" size="icon" onClick={() => downloadPI(pi)} title="Download PDF" data-testid={`download-pi-${pi.id}`}><Download className="w-4 h-4" /></Button>
+                          {canShare && (
+                            <Button variant="ghost" size="icon" onClick={() => sharePI(pi)} title="Share via WhatsApp" disabled={sharing[pi.id]} data-testid={`share-pi-${pi.id}`}>
+                              <Share2 className={`w-4 h-4 ${sharing[pi.id] ? "animate-pulse" : "text-green-600"}`} />
+                            </Button>
+                          )}
                           <Button variant="ghost" size="icon" onClick={() => openEditPI(pi)} title="Edit" data-testid={`edit-pi-${pi.id}`}><FileText className="w-4 h-4" /></Button>
                           {pi.status === "draft" && (
                             <Link to={`/pi/${pi.id}/convert`}>

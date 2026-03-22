@@ -334,7 +334,7 @@ async def get_me(user=Depends(get_current_user)):
 # User Management (Admin)
 @api_router.post("/users")
 async def create_user(req: UserCreate, admin=Depends(require_admin)):
-    if req.role not in ["admin", "telecaller", "packaging", "dispatch", "accounts"]:
+    if req.role not in ["admin", "telecaller", "packaging", "dispatch", "accounts", "field_manager"]:
         raise HTTPException(status_code=400, detail="Invalid role")
     existing = await db.users.find_one({"username": req.username})
     if existing:
@@ -733,7 +733,7 @@ async def list_orders(
     query = {}
     # Role-based filtering
     if not view_all:
-        if user["role"] == "telecaller":
+        if user["role"] in ["telecaller", "field_manager"]:
             query["telecaller_id"] = user["id"]
         elif user["role"] == "packaging":
             query["status"] = {"$in": ["new", "packaging", "packed", "dispatched"]}
@@ -745,6 +745,8 @@ async def list_orders(
         # Telecaller viewing all: default to own, but if view_all=true, show all
         if user["role"] == "telecaller" and telecaller_id:
             query["telecaller_id"] = telecaller_id
+        elif user["role"] == "field_manager":
+            query["telecaller_id"] = user["id"]  # Field manager always sees own orders only
 
     if status:
         query["status"] = status
@@ -779,8 +781,8 @@ async def list_orders(
                 o.pop("telecaller_id", None)
 
         # Strict formulation visibility rules
-        if user["role"] == "telecaller":
-            # Telecallers NEVER see formulations
+        if user["role"] in ["telecaller", "field_manager"]:
+            # Telecallers/Field Managers NEVER see formulations
             for item in o.get("items", []):
                 item.pop("formulation", None)
         elif user["role"] == "packaging":
@@ -788,8 +790,8 @@ async def list_orders(
             if not show_formulation_global:
                 for item in o.get("items", []):
                     item.pop("formulation", None)
-        elif user["role"] == "dispatch":
-            # Dispatch: never see formulations
+        elif user["role"] in ["dispatch", "accounts"]:
+            # Dispatch/Accounts: never see formulations
             for item in o.get("items", []):
                 item.pop("formulation", None)
         # Admin: always sees formulations (no stripping)
@@ -799,7 +801,7 @@ async def list_orders(
 @api_router.get("/orders/my-notifications")
 async def get_my_notifications(since: str = "", user=Depends(get_current_user)):
     """Return packed/dispatched orders for the current telecaller since the given timestamp."""
-    if user["role"] != "telecaller":
+    if user["role"] not in ["telecaller", "field_manager"]:
         return []
     since_dt = since if since else (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     fields = {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "status": 1, "shipping_method": 1}
@@ -830,20 +832,20 @@ async def get_order(order_id: str, user=Depends(get_current_user)):
     # Strict formulation visibility
     settings = await db.settings.find_one({"_id": "global"})
     show_formulation_global = settings.get("show_formulation", False) if settings else False
-    if user["role"] == "telecaller":
+    if user["role"] in ["telecaller", "field_manager"]:
         for item in order.get("items", []):
             item.pop("formulation", None)
     elif user["role"] == "packaging" and not show_formulation_global:
         for item in order.get("items", []):
             item.pop("formulation", None)
-    elif user["role"] == "dispatch":
+    elif user["role"] in ["dispatch", "accounts"]:
         for item in order.get("items", []):
             item.pop("formulation", None)
     return order
 
 @api_router.put("/orders/{order_id}")
 async def update_order(order_id: str, updates: dict, user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "telecaller"]:
+    if user["role"] not in ["admin", "telecaller", "field_manager"]:
         raise HTTPException(status_code=403, detail="Only admin or telecaller can edit orders")
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
@@ -854,8 +856,8 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
         non_allowed = set(updates.keys()) - allowed_dispatched - {"id", "order_number", "updated_at"}
         if non_allowed:
             raise HTTPException(status_code=400, detail="Order is dispatched. Only payment details can be updated. Use formulation endpoint for formulation changes.")
-    # Telecaller can only edit their own orders
-    if user["role"] == "telecaller" and order.get("telecaller_id") != user["id"]:
+    # Telecaller/field_manager can only edit their own orders
+    if user["role"] in ["telecaller", "field_manager"] and order.get("telecaller_id") != user["id"]:
         raise HTTPException(status_code=403, detail="You can only edit your own orders")
     updates.pop("id", None)
     updates.pop("order_number", None)
@@ -1057,8 +1059,8 @@ async def delete_order_invoice(order_id: str, user=Depends(get_current_user)):
 # ── Payment Check ─────────────────────────────────────────────────────────────
 @api_router.put("/orders/{order_id}/payment-check")
 async def update_payment_check(order_id: str, body: dict, user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "accounts"]:
-        raise HTTPException(status_code=403, detail="Accounts or admin only")
+    if user["role"] != "accounts":
+        raise HTTPException(status_code=403, detail="Only accounts can update payment check status")
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -1283,7 +1285,7 @@ async def sales_report(date_from: Optional[str] = None, date_to: Optional[str] =
 @api_router.get("/reports/dashboard")
 async def dashboard_stats(user=Depends(get_current_user)):
     query = {}
-    if user["role"] == "telecaller":
+    if user["role"] in ["telecaller", "field_manager"]:
         query["telecaller_id"] = user["id"]
     total = await db.orders.count_documents(query)
     new_q = {**query, "status": "new"}
@@ -1837,7 +1839,7 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
 # Proforma Invoice
 @api_router.post("/proforma-invoices")
 async def create_pi(req: PICreate, user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "telecaller"]:
+    if user["role"] not in ["admin", "telecaller", "field_manager"]:
         raise HTTPException(status_code=403, detail="Admin or telecaller only")
     counter = await db.counters.find_one_and_update(
         {"_id": "pi_number"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True
@@ -1907,7 +1909,7 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
 @api_router.get("/proforma-invoices")
 async def list_pis(user=Depends(get_current_user)):
     query = {}
-    if user["role"] == "telecaller":
+    if user["role"] in ["telecaller", "field_manager"]:
         query["created_by"] = user["id"]
     pis = await db.proforma_invoices.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
     return pis
@@ -1921,7 +1923,7 @@ async def get_pi(pi_id: str, user=Depends(get_current_user)):
 
 @api_router.put("/proforma-invoices/{pi_id}")
 async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "telecaller"]:
+    if user["role"] not in ["admin", "telecaller", "field_manager"]:
         raise HTTPException(status_code=403, detail="Admin or telecaller only")
     pi = await db.proforma_invoices.find_one({"id": pi_id}, {"_id": 0})
     if not pi:
@@ -1979,7 +1981,7 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
 
 @api_router.post("/proforma-invoices/{pi_id}/convert")
 async def convert_pi_to_order(pi_id: str, body: dict, user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "telecaller"]:
+    if user["role"] not in ["admin", "telecaller", "field_manager"]:
         raise HTTPException(status_code=403, detail="Admin or telecaller only")
     pi = await db.proforma_invoices.find_one({"id": pi_id}, {"_id": 0})
     if not pi:
@@ -2024,6 +2026,10 @@ async def convert_pi_to_order(pi_id: str, body: dict, user=Depends(get_current_u
         "telecaller_name": user["name"],
         "packaging": {"item_images": {}, "order_images": [], "packed_box_images": [], "item_packed_by": [], "box_packed_by": [], "checked_by": [], "packed_at": ""},
         "dispatch": {"courier_name": "", "transporter_name": "", "lr_no": "", "dispatched_by": "", "dispatched_at": ""},
+        "tax_invoice_url": "",
+        "payment_check_status": "pending",
+        "payment_checked_by": "",
+        "payment_checked_at": "",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat()
     }

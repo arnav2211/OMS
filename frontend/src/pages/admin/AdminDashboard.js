@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import {
   BarChart3, Users, Settings, ShoppingCart, IndianRupee, Package, TrendingUp,
-  Eye, EyeOff, UserPlus, UserX, Trash2, RefreshCw, ChevronDown,
+  Eye, EyeOff, UserPlus, UserX, Trash2, RefreshCw, ChevronDown, CheckCircle,
 } from "lucide-react";
 
 const PERIOD_OPTIONS = [
@@ -62,6 +62,15 @@ export default function AdminDashboard() {
   const [adminDateTo, setAdminDateTo] = useState("");
   const [adminExcludeGst, setAdminExcludeGst] = useState(false);
   const [adminExcludeShipping, setAdminExcludeShipping] = useState(false);
+
+  // Payment-received sales
+  const [paymentSalesPeriod, setPaymentSalesPeriod] = useState("today");
+  const [paymentSalesData, setPaymentSalesData] = useState(null);
+  const [paymentSalesExGst, setPaymentSalesExGst] = useState(false);
+  const [paymentSalesExShip, setPaymentSalesExShip] = useState(false);
+  const [paymentSalesDateFrom, setPaymentSalesDateFrom] = useState("");
+  const [paymentSalesDateTo, setPaymentSalesDateTo] = useState("");
+  const [paymentSalesExecId, setPaymentSalesExecId] = useState("");
 
   useEffect(() => { loadAnalytics(); loadRecentOrders(); loadUsers(); loadSettings(); loadPackagingStaff(); }, []);
   useEffect(() => { loadAnalytics(); }, [period, dateFrom, dateTo, excludeGst, excludeShipping]);
@@ -181,6 +190,25 @@ export default function AdminDashboard() {
 
   useEffect(() => { if (activeTab === "my-report") loadAdminReport(); }, [activeTab, adminPeriod, adminDateFrom, adminDateTo, adminExcludeGst, adminExcludeShipping]);
 
+  // Load payment-received sales
+  const loadPaymentSales = async () => {
+    try {
+      const params = new URLSearchParams();
+      params.set("period", paymentSalesPeriod);
+      params.set("exclude_gst", paymentSalesExGst.toString());
+      params.set("exclude_shipping", paymentSalesExShip.toString());
+      if (paymentSalesExecId) params.set("telecaller_id", paymentSalesExecId);
+      if (paymentSalesPeriod === "custom") {
+        if (paymentSalesDateFrom) params.set("date_from", paymentSalesDateFrom);
+        if (paymentSalesDateTo) params.set("date_to", paymentSalesDateTo);
+      }
+      const res = await api.get(`/reports/payment-sales?${params.toString()}`);
+      setPaymentSalesData(res.data);
+    } catch {}
+  };
+
+  useEffect(() => { if (activeTab === "payment-sales") loadPaymentSales(); }, [activeTab, paymentSalesPeriod, paymentSalesExGst, paymentSalesExShip, paymentSalesDateFrom, paymentSalesDateTo, paymentSalesExecId]);
+
   const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 
   return (
@@ -192,6 +220,7 @@ export default function AdminDashboard() {
           <TabsTrigger value="analytics" data-testid="tab-analytics"><BarChart3 className="w-4 h-4 mr-1" /> Analytics</TabsTrigger>
           <TabsTrigger value="my-report" data-testid="tab-my-report"><TrendingUp className="w-4 h-4 mr-1" /> My Report</TabsTrigger>
           <TabsTrigger value="exec-reports" data-testid="tab-exec-reports"><Users className="w-4 h-4 mr-1" /> Executive Reports</TabsTrigger>
+          <TabsTrigger value="payment-sales" data-testid="tab-payment-sales"><CheckCircle className="w-4 h-4 mr-1" /> Payment Sales</TabsTrigger>
           <TabsTrigger value="users" data-testid="tab-users"><Users className="w-4 h-4 mr-1" /> Users</TabsTrigger>
           <TabsTrigger value="settings" data-testid="tab-settings"><Settings className="w-4 h-4 mr-1" /> Settings</TabsTrigger>
         </TabsList>
@@ -390,7 +419,7 @@ export default function AdminDashboard() {
                   <Select value={selectedExec || ""} onValueChange={v => { setSelectedExec(v); loadExecReport(v); }}>
                     <SelectTrigger className="w-48" data-testid="exec-select"><SelectValue placeholder="Choose..." /></SelectTrigger>
                     <SelectContent>
-                      {users.filter(u => u.role === "telecaller" || u.role === "admin").map(u => (
+                      {users.filter(u => u.role === "telecaller" || u.role === "admin" || u.role === "field_manager").map(u => (
                         <SelectItem key={u.id} value={u.id}>{u.name} ({u.role})</SelectItem>
                       ))}
                     </SelectContent>
@@ -441,6 +470,60 @@ export default function AdminDashboard() {
                   )}
                 </div>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Payment Sales Tab */}
+        <TabsContent value="payment-sales" className="space-y-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2"><CheckCircle className="w-5 h-5 text-green-600" /> Sales (Payments Received)</CardTitle>
+              <div className="flex flex-wrap gap-3 items-end mt-2">
+                <div>
+                  <Label className="text-xs">Executive</Label>
+                  <Select value={paymentSalesExecId || "self"} onValueChange={v => setPaymentSalesExecId(v === "self" ? "" : v)}>
+                    <SelectTrigger className="w-48" data-testid="payment-sales-exec"><SelectValue placeholder="All" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="self">My Sales</SelectItem>
+                      {users.filter(u => u.role === "telecaller" || u.role === "admin" || u.role === "field_manager").map(u => (
+                        <SelectItem key={u.id} value={u.id}>{u.name} ({u.role})</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">Period</Label>
+                  <Select value={paymentSalesPeriod} onValueChange={setPaymentSalesPeriod}>
+                    <SelectTrigger className="w-36" data-testid="payment-sales-period"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="today">Today</SelectItem>
+                      <SelectItem value="yesterday">Yesterday</SelectItem>
+                      <SelectItem value="week">This Week</SelectItem>
+                      <SelectItem value="month">This Month</SelectItem>
+                      <SelectItem value="all">All Time</SelectItem>
+                      <SelectItem value="custom">Custom Range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {paymentSalesPeriod === "custom" && (
+                  <>
+                    <div><Label className="text-xs">From</Label><Input type="date" value={paymentSalesDateFrom} onChange={e => setPaymentSalesDateFrom(e.target.value)} className="w-36" /></div>
+                    <div><Label className="text-xs">To</Label><Input type="date" value={paymentSalesDateTo} onChange={e => setPaymentSalesDateTo(e.target.value)} className="w-36" /></div>
+                  </>
+                )}
+                <div className="flex items-center gap-2"><Checkbox id="pExGst" checked={paymentSalesExGst} onCheckedChange={setPaymentSalesExGst} /><Label htmlFor="pExGst" className="text-xs cursor-pointer">Excl. GST</Label></div>
+                <div className="flex items-center gap-2"><Checkbox id="pExShip" checked={paymentSalesExShip} onCheckedChange={setPaymentSalesExShip} /><Label htmlFor="pExShip" className="text-xs cursor-pointer">Excl. Shipping</Label></div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {paymentSalesData ? (
+                <div className="grid grid-cols-3 gap-4">
+                  <Card><CardContent className="pt-4 text-center"><p className="text-2xl font-bold text-green-700 dark:text-green-400">{paymentSalesData.total_orders}</p><p className="text-xs text-muted-foreground">Orders (Payment Received)</p></CardContent></Card>
+                  <Card><CardContent className="pt-4 text-center"><p className="text-2xl font-bold text-green-700 dark:text-green-400">{"\u20B9"}{paymentSalesData.total_amount?.toLocaleString("en-IN")}</p><p className="text-xs text-muted-foreground">Total Revenue</p></CardContent></Card>
+                  <Card><CardContent className="pt-4 text-center"><p className="text-2xl font-bold text-green-700 dark:text-green-400">{"\u20B9"}{paymentSalesData.product_sales?.toLocaleString("en-IN")}</p><p className="text-xs text-muted-foreground">Product Sales</p></CardContent></Card>
+                </div>
+              ) : <p className="text-center py-4 text-muted-foreground">Select an executive or loading...</p>}
             </CardContent>
           </Card>
         </TabsContent>
@@ -540,9 +623,11 @@ export default function AdminDashboard() {
                 <SelectTrigger data-testid="new-user-role"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="telecaller">Telecaller (Executive)</SelectItem>
+                  <SelectItem value="field_manager">Field Manager</SelectItem>
                   <SelectItem value="packaging">Packaging</SelectItem>
                   <SelectItem value="dispatch">Dispatch</SelectItem>
                   <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="accounts">Accounts</SelectItem>
                 </SelectContent>
               </Select>
             </div>

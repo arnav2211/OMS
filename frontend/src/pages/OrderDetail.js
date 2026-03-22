@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X } from "lucide-react";
+import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2 } from "lucide-react";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
@@ -41,8 +41,18 @@ export default function OrderDetail() {
   const [packagingStaff, setPackagingStaff] = useState([]);
   const [dispatchData, setDispatchData] = useState({ courier_name: "", transporter_name: "", lr_no: "", dispatch_type: "" });
   const [previewImage, setPreviewImage] = useState(null);
+  const [customerPhone, setCustomerPhone] = useState("");
 
   useEffect(() => { loadOrder(); }, [id]);
+
+  useEffect(() => {
+    if (order?.customer_id) {
+      api.get(`/customers/${order.customer_id}`).then(r => {
+        const phones = r.data?.phone_numbers || [];
+        if (phones.length) setCustomerPhone(phones[0]);
+      }).catch(() => {});
+    }
+  }, [order?.customer_id]);
 
   const loadOrder = async () => {
     try { const res = await api.get(`/orders/${id}`); setOrder(res.data); }
@@ -51,11 +61,13 @@ export default function OrderDetail() {
   };
 
   const isDispatched = order?.status === "dispatched";
-  const canEditOrder = user?.role === "admin" || (user?.role === "telecaller" && order?.telecaller_id === user?.id);
+  const canEditOrder = user?.role === "admin" || ((user?.role === "telecaller" || user?.role === "field_manager") && order?.telecaller_id === user?.id);
   const canEditFormulation = user?.role === "admin" || user?.role === "packaging";
   const showFormulations = user?.role === "admin" || user?.role === "packaging";
   const canEditPackaging = ["admin", "packaging"].includes(user?.role) && !isDispatched;
   const canEditDispatch = ["admin", "dispatch"].includes(user?.role);
+  const canSharePI = ["admin", "telecaller", "field_manager"].includes(user?.role);
+  const canShareImages = ["admin", "telecaller", "field_manager"].includes(user?.role);
 
   const openEdit = () => {
     if (isDispatched) return toast.error("Cannot edit dispatched order");
@@ -117,6 +129,85 @@ export default function OrderDetail() {
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div></div>;
   if (!order) return <p className="text-center py-8 text-muted-foreground">Order not found.</p>;
+
+  // Collect all packing image URLs
+  const allPackingImageUrls = [];
+  if (order.packaging?.item_images) {
+    Object.values(order.packaging.item_images).forEach(urls => {
+      if (urls?.length) allPackingImageUrls.push(...urls);
+    });
+  }
+  if (order.packaging?.order_images?.length) allPackingImageUrls.push(...order.packaging.order_images);
+  if (order.packaging?.packed_box_images?.length) allPackingImageUrls.push(...order.packaging.packed_box_images);
+
+  const sharePackingImages = async () => {
+    if (!allPackingImageUrls.length) return toast.error("No packing images to share");
+    try {
+      const blobs = await Promise.all(
+        allPackingImageUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
+      );
+      const files = blobs.map((blob, i) => {
+        const ext = blob.type.includes("png") ? "png" : "jpg";
+        return new File([blob], `packing-${order.order_number}-${i + 1}.${ext}`, { type: blob.type });
+      });
+
+      if (navigator.canShare && navigator.canShare({ files })) {
+        await navigator.share({ files, title: `Packing Images - ${order.order_number}` });
+      } else {
+        // Desktop fallback: download each file
+        files.forEach((file, i) => {
+          const url = URL.createObjectURL(file);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = file.name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        });
+        toast.success("Images downloaded. Opening WhatsApp...");
+        // Open WhatsApp if customer phone available
+        if (customerPhone) {
+          const clean = customerPhone.replace(/[^0-9]/g, "");
+          const waPhone = clean.startsWith("91") ? clean : `91${clean}`;
+          setTimeout(() => window.open(`https://wa.me/${waPhone}`, "_blank"), 500);
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") toast.error("Share failed");
+    }
+  };
+
+  const shareInvoice = async () => {
+    if (!order.tax_invoice_url) return toast.error("No invoice to share");
+    try {
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}${order.tax_invoice_url}`);
+      if (!response.ok) throw new Error("Failed to fetch invoice");
+      const blob = await response.blob();
+      const file = new File([blob], `Invoice-${order.order_number}.pdf`, { type: "application/pdf" });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: `Invoice - ${order.order_number}` });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast.success("Invoice downloaded. Opening WhatsApp...");
+        if (customerPhone) {
+          const clean = customerPhone.replace(/[^0-9]/g, "");
+          const waPhone = clean.startsWith("91") ? clean : `91${clean}`;
+          setTimeout(() => window.open(`https://wa.me/${waPhone}`, "_blank"), 500);
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") toast.error("Share failed");
+    }
+  };
 
   return (
     <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6 px-1 sm:px-0" data-testid="order-detail-page">
@@ -248,6 +339,27 @@ export default function OrderDetail() {
         </CardContent>
       </Card>
 
+      {/* Tax Invoice */}
+      {order.tax_invoice_url && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Tax Invoice</CardTitle>
+              <div className="flex gap-2">
+                <a href={`${process.env.REACT_APP_BACKEND_URL}${order.tax_invoice_url}`} target="_blank" rel="noopener noreferrer">
+                  <Button variant="outline" size="sm" data-testid="view-invoice-btn"><FileText className="w-4 h-4 mr-1" /> View</Button>
+                </a>
+                {canSharePI && (
+                  <Button variant="outline" size="sm" onClick={shareInvoice} data-testid="share-invoice-btn">
+                    <Share2 className="w-4 h-4 mr-1 text-green-600" /> Share
+                  </Button>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+        </Card>
+      )}
+
       {/* Free Samples */}
       {order.free_samples?.length > 0 && (
         <Card>
@@ -269,7 +381,16 @@ export default function OrderDetail() {
       {/* Packing Images */}
       {(order.packaging?.item_images && Object.keys(order.packaging.item_images).length > 0) || order.packaging?.order_images?.length > 0 || order.packaging?.packed_box_images?.length > 0 ? (
         <Card>
-          <CardHeader className="pb-3"><CardTitle className="text-base">Packing Images</CardTitle></CardHeader>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Packing Images</CardTitle>
+              {canShareImages && allPackingImageUrls.length > 0 && (
+                <Button variant="outline" size="sm" onClick={sharePackingImages} data-testid="share-packing-images-btn">
+                  <Share2 className="w-4 h-4 mr-1 text-green-600" /> Share Images
+                </Button>
+              )}
+            </div>
+          </CardHeader>
           <CardContent className="space-y-4">
             {order.packaging?.item_images && Object.entries(order.packaging.item_images).map(([key, urls]) => (
               urls?.length > 0 && (

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Package, Truck, ClipboardList, Eye, DollarSign } from "lucide-react";
+import { Plus, Package, Truck, ClipboardList, Eye, DollarSign, CheckCircle } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -31,6 +31,14 @@ export default function TelecallerDashboard() {
   const [excludeShipping, setExcludeShipping] = useState(false);
   const [salesDateFrom, setSalesDateFrom] = useState("");
   const [salesDateTo, setSalesDateTo] = useState("");
+
+  // Payment-received sales state
+  const [paymentSalesPeriod, setPaymentSalesPeriod] = useState("today");
+  const [paymentSalesData, setPaymentSalesData] = useState(null);
+  const [paymentSalesExcludeGst, setPaymentSalesExcludeGst] = useState(false);
+  const [paymentSalesExcludeShipping, setPaymentSalesExcludeShipping] = useState(false);
+  const [paymentSalesDateFrom, setPaymentSalesDateFrom] = useState("");
+  const [paymentSalesDateTo, setPaymentSalesDateTo] = useState("");
 
   useEffect(() => { loadData(); }, []);
 
@@ -58,6 +66,19 @@ export default function TelecallerDashboard() {
   };
 
   useEffect(() => { loadSales(); }, [salesPeriod, excludeGst, excludeShipping, salesDateFrom, salesDateTo]);
+
+  // Load payment-received sales
+  const loadPaymentSales = async () => {
+    try {
+      let url = `/reports/payment-sales?period=${paymentSalesPeriod}&exclude_gst=${paymentSalesExcludeGst}&exclude_shipping=${paymentSalesExcludeShipping}`;
+      if (paymentSalesPeriod === "custom" && paymentSalesDateFrom) url += `&date_from=${paymentSalesDateFrom}`;
+      if (paymentSalesPeriod === "custom" && paymentSalesDateTo) url += `&date_to=${paymentSalesDateTo}`;
+      const res = await api.get(url);
+      setPaymentSalesData(res.data);
+    } catch {}
+  };
+
+  useEffect(() => { loadPaymentSales(); }, [paymentSalesPeriod, paymentSalesExcludeGst, paymentSalesExcludeShipping, paymentSalesDateFrom, paymentSalesDateTo]);
 
   const recentOrders = orders.slice(0, 10);
 
@@ -157,6 +178,68 @@ export default function TelecallerDashboard() {
           ) : <p className="text-muted-foreground text-sm">Loading...</p>}
         </CardContent>
       </Card>
+
+      {/* Sales (Payments Received) - Separate section */}
+      {user?.role !== "field_manager" && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <CardTitle className="text-lg flex items-center gap-2"><CheckCircle className="w-5 h-5 text-green-600" /> Sales (Payments Received)</CardTitle>
+              <div className="flex flex-wrap items-center gap-3">
+                <Select value={paymentSalesPeriod} onValueChange={setPaymentSalesPeriod}>
+                  <SelectTrigger className="w-32" data-testid="payment-sales-period-select"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="today">Today</SelectItem>
+                    <SelectItem value="yesterday">Yesterday</SelectItem>
+                    <SelectItem value="week">This Week</SelectItem>
+                    <SelectItem value="month">This Month</SelectItem>
+                    <SelectItem value="all">All Time</SelectItem>
+                    <SelectItem value="custom">Custom Range</SelectItem>
+                  </SelectContent>
+                </Select>
+                <div className="flex items-center gap-2">
+                  <Checkbox id="pExGst" checked={paymentSalesExcludeGst} onCheckedChange={setPaymentSalesExcludeGst} data-testid="payment-sales-exclude-gst" />
+                  <Label htmlFor="pExGst" className="text-xs cursor-pointer">Excl. GST</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox id="pExShip" checked={paymentSalesExcludeShipping} onCheckedChange={setPaymentSalesExcludeShipping} data-testid="payment-sales-exclude-shipping" />
+                  <Label htmlFor="pExShip" className="text-xs cursor-pointer">Excl. Shipping</Label>
+                </div>
+              </div>
+            </div>
+            {paymentSalesPeriod === "custom" && (
+              <div className="flex flex-wrap gap-3 mt-3">
+                <div className="w-full sm:w-auto">
+                  <Label className="text-xs">Start Date</Label>
+                  <Input type="date" value={paymentSalesDateFrom} onChange={(e) => setPaymentSalesDateFrom(e.target.value)} data-testid="payment-sales-date-from" />
+                </div>
+                <div className="w-full sm:w-auto">
+                  <Label className="text-xs">End Date</Label>
+                  <Input type="date" value={paymentSalesDateTo} onChange={(e) => setPaymentSalesDateTo(e.target.value)} data-testid="payment-sales-date-to" />
+                </div>
+              </div>
+            )}
+          </CardHeader>
+          <CardContent>
+            {paymentSalesData ? (
+              <div className="grid grid-cols-3 gap-3">
+                <div className="text-center p-3 rounded-lg bg-green-50 dark:bg-green-900/20">
+                  <p className="text-xs text-muted-foreground uppercase">Orders</p>
+                  <p className="text-lg sm:text-2xl font-bold mt-1 text-green-700 dark:text-green-400">{paymentSalesData.total_orders}</p>
+                </div>
+                <div className="text-center p-3 rounded-lg bg-green-50 dark:bg-green-900/20">
+                  <p className="text-xs text-muted-foreground uppercase">Total</p>
+                  <p className="text-lg sm:text-2xl font-bold mt-1 font-mono text-green-700 dark:text-green-400">{"\u20B9"}{paymentSalesData.total_amount?.toLocaleString("en-IN")}</p>
+                </div>
+                <div className="text-center p-3 rounded-lg bg-green-100 dark:bg-green-900/30">
+                  <p className="text-xs text-muted-foreground uppercase">Product Sales</p>
+                  <p className="text-lg sm:text-2xl font-bold mt-1 font-mono text-green-700 dark:text-green-400">{"\u20B9"}{paymentSalesData.product_sales?.toLocaleString("en-IN")}</p>
+                </div>
+              </div>
+            ) : <p className="text-muted-foreground text-sm">Loading...</p>}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Recent Orders Only */}
       <Card>
