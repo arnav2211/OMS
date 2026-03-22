@@ -190,6 +190,7 @@ export default function UserManagement() {
                   <SelectItem value="telecaller">Telecaller</SelectItem>
                   <SelectItem value="packaging">Packaging</SelectItem>
                   <SelectItem value="dispatch">Dispatch</SelectItem>
+                  <SelectItem value="accounts">Accounts</SelectItem>
                 </SelectContent>
               </Select>
             </div>

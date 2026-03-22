@@ -12,6 +12,7 @@ import PackagingDashboard from "@/pages/packaging/PackagingDashboard";
 import DispatchDashboard from "@/pages/dispatch/DispatchDashboard";
 import AdminDashboard from "@/pages/admin/AdminDashboard";
 import UserManagement from "@/pages/admin/UserManagement";
+import AccountsDashboard from "@/pages/accounts/AccountsDashboard";
 import OrderDetail from "@/pages/OrderDetail";
 import EditOrder from "@/pages/EditOrder";
 import PIBuilder from "@/pages/PIBuilder";
@@ -34,6 +35,7 @@ function DashboardRouter() {
     case "telecaller": return <TelecallerDashboard />;
     case "packaging": return <PackagingDashboard />;
     case "dispatch": return <DispatchDashboard />;
+    case "accounts": return <AccountsDashboard />;
     default: return <TelecallerDashboard />;
   }
 }
@@ -48,7 +50,7 @@ function AppRoutes() {
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginPage />} />
       <Route path="/" element={<ProtectedRoute><DashboardRouter /></ProtectedRoute>} />
       <Route path="/create-order" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><CreateOrder /></ProtectedRoute>} />
-      <Route path="/customers" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><Customers /></ProtectedRoute>} />
+      <Route path="/customers" element={<ProtectedRoute allowedRoles={["telecaller", "admin", "accounts"]}><Customers /></ProtectedRoute>} />
       <Route path="/packaging" element={<ProtectedRoute allowedRoles={["packaging", "admin"]}><PackagingDashboard /></ProtectedRoute>} />
       <Route path="/dispatch" element={<ProtectedRoute allowedRoles={["dispatch", "packaging", "admin"]}><DispatchDashboard /></ProtectedRoute>} />
       <Route path="/all-orders" element={<ProtectedRoute><AllOrders /></ProtectedRoute>} />

@@ -45,6 +45,11 @@ const NAV_ITEMS = {
     { label: "Item Analytics", icon: TrendingUp, path: "/item-analytics" },
     { label: "Users", icon: Settings, path: "/users" },
   ],
+  accounts: [
+    { label: "Dashboard", icon: Home, path: "/" },
+    { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
+    { label: "Customers", icon: Users, path: "/customers" },
+  ],
 };
 
 export default function Layout({ children }) {

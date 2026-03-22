@@ -334,7 +334,7 @@ async def get_me(user=Depends(get_current_user)):
 # User Management (Admin)
 @api_router.post("/users")
 async def create_user(req: UserCreate, admin=Depends(require_admin)):
-    if req.role not in ["admin", "telecaller", "packaging", "dispatch"]:
+    if req.role not in ["admin", "telecaller", "packaging", "dispatch", "accounts"]:
         raise HTTPException(status_code=400, detail="Invalid role")
     existing = await db.users.find_one({"username": req.username})
     if existing:
@@ -708,6 +708,10 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
             "dispatched_by": "",
             "dispatched_at": ""
         },
+        "tax_invoice_url": "",
+        "payment_check_status": "pending",
+        "payment_checked_by": "",
+        "payment_checked_at": "",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
@@ -735,6 +739,8 @@ async def list_orders(
             query["status"] = {"$in": ["new", "packaging", "packed", "dispatched"]}
         elif user["role"] == "dispatch":
             query["status"] = {"$in": ["packed", "dispatched"]}
+        elif user["role"] == "accounts":
+            pass  # Accounts can see all orders (filtered per tab on frontend)
     else:
         # Telecaller viewing all: default to own, but if view_all=true, show all
         if user["role"] == "telecaller" and telecaller_id:
@@ -853,6 +859,14 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
         raise HTTPException(status_code=403, detail="You can only edit your own orders")
     updates.pop("id", None)
     updates.pop("order_number", None)
+    # Auto-recheck: if payment details change on an already-checked order
+    if order.get("payment_check_status") == "received":
+        payment_changed = (
+            ("payment_status" in updates and updates["payment_status"] != order.get("payment_status")) or
+            ("amount_paid" in updates and float(updates.get("amount_paid", 0)) != float(order.get("amount_paid", 0)))
+        )
+        if payment_changed:
+            updates["payment_check_status"] = "pending_recheck"
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.orders.update_one({"id": order_id}, {"$set": updates})
     if result.matched_count == 0:
@@ -1015,6 +1029,49 @@ async def delete_order_image(
 
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated
+
+# ── Tax Invoice (Accounts role) ──────────────────────────────────────────────
+@api_router.put("/orders/{order_id}/invoice")
+async def set_order_invoice(order_id: str, body: dict, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "accounts"]:
+        raise HTTPException(status_code=403, detail="Accounts or admin only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not order.get("gst_applicable"):
+        raise HTTPException(status_code=400, detail="Tax invoice only for GST-applicable orders")
+    invoice_url = body.get("invoice_url", "")
+    await db.orders.update_one({"id": order_id}, {"$set": {"tax_invoice_url": invoice_url, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return await db.orders.find_one({"id": order_id}, {"_id": 0})
+
+@api_router.delete("/orders/{order_id}/invoice")
+async def delete_order_invoice(order_id: str, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "accounts"]:
+        raise HTTPException(status_code=403, detail="Accounts or admin only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    await db.orders.update_one({"id": order_id}, {"$set": {"tax_invoice_url": "", "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"message": "Invoice removed"}
+
+# ── Payment Check ─────────────────────────────────────────────────────────────
+@api_router.put("/orders/{order_id}/payment-check")
+async def update_payment_check(order_id: str, body: dict, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "accounts"]:
+        raise HTTPException(status_code=403, detail="Accounts or admin only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    status = body.get("payment_check_status")
+    if status not in ["pending", "received", "pending_recheck"]:
+        raise HTTPException(status_code=400, detail="Invalid payment_check_status")
+    await db.orders.update_one({"id": order_id}, {"$set": {
+        "payment_check_status": status,
+        "payment_checked_by": user["name"],
+        "payment_checked_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    return await db.orders.find_one({"id": order_id}, {"_id": 0})
 
 # Bulk Shipping Address Print
 @api_router.post("/orders/print-addresses")
@@ -1303,6 +1360,94 @@ async def telecaller_sales(
         "total_amount": round(total_amount, 2),
         "product_sales": round(product_only_amount, 2),
         "orders": orders
+    }
+
+# Payment-Received Sales Report (Admin + Telecaller — SEPARATE section, no existing logic touched)
+@api_router.get("/reports/payment-sales")
+async def payment_received_sales(
+    period: Optional[str] = "today",
+    exclude_gst: Optional[bool] = False,
+    exclude_shipping: Optional[bool] = False,
+    telecaller_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user=Depends(get_current_user)
+):
+    if user["role"] not in ["admin", "telecaller"]:
+        raise HTTPException(status_code=403, detail="Admin or telecaller only")
+    target_id = telecaller_id if (telecaller_id and user["role"] == "admin") else user["id"]
+    query = {"telecaller_id": target_id, "payment_check_status": "received"}
+    now = datetime.now(timezone.utc)
+    if date_from or date_to:
+        date_filter = {}
+        if date_from: date_filter["$gte"] = date_from
+        if date_to:   date_filter["$lte"] = date_to + "T23:59:59"
+        query["payment_checked_at"] = date_filter
+    elif period == "today":
+        query["payment_checked_at"] = {"$gte": now.replace(hour=0, minute=0, second=0).isoformat()}
+    elif period == "yesterday":
+        y = now - timedelta(days=1)
+        query["payment_checked_at"] = {"$gte": y.replace(hour=0, minute=0, second=0).isoformat(), "$lte": y.replace(hour=23, minute=59, second=59).isoformat()}
+    elif period == "week":
+        ws = now - timedelta(days=now.weekday())
+        query["payment_checked_at"] = {"$gte": ws.replace(hour=0, minute=0, second=0).isoformat()}
+    elif period == "month":
+        query["payment_checked_at"] = {"$gte": now.replace(day=1, hour=0, minute=0, second=0).isoformat()}
+    orders = await db.orders.find(query, {"_id": 0}).to_list(5000)
+    total_amount, product_sales = 0, 0
+    for o in orders:
+        total_amount += o.get("grand_total", 0)
+        if exclude_gst and exclude_shipping:
+            product_sales += o.get("subtotal", 0)
+        elif exclude_gst:
+            product_sales += o.get("subtotal", 0) + o.get("shipping_charge", 0)
+        elif exclude_shipping:
+            product_sales += o.get("subtotal", 0) + o.get("total_gst", 0)
+        else:
+            product_sales += o.get("grand_total", 0)
+    return {"total_orders": len(orders), "total_amount": round(total_amount, 2), "product_sales": round(product_sales, 2)}
+
+# Accounts Dashboard Stats
+@api_router.get("/reports/accounts-dashboard")
+async def accounts_dashboard(
+    period: Optional[str] = "today",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user=Depends(get_current_user)
+):
+    if user["role"] not in ["admin", "accounts"]:
+        raise HTTPException(status_code=403, detail="Accounts or admin only")
+    now = datetime.now(timezone.utc)
+    date_filter = {}
+    if date_from or date_to:
+        if date_from: date_filter["$gte"] = date_from
+        if date_to:   date_filter["$lte"] = date_to + "T23:59:59"
+    elif period == "today":
+        date_filter = {"$gte": now.replace(hour=0, minute=0, second=0).isoformat()}
+    elif period == "week":
+        ws = now - timedelta(days=now.weekday())
+        date_filter = {"$gte": ws.replace(hour=0, minute=0, second=0).isoformat()}
+    elif period == "month":
+        date_filter = {"$gte": now.replace(day=1, hour=0, minute=0, second=0).isoformat()}
+
+    invoice_query = {"gst_applicable": True, "tax_invoice_url": {"$exists": True, "$ne": ""}}
+    payment_query = {"payment_check_status": "received"}
+    if date_filter:
+        invoice_query["updated_at"] = date_filter
+        payment_query["payment_checked_at"] = date_filter
+
+    total_invoices = await db.orders.count_documents(invoice_query)
+    gst_total = await db.orders.count_documents({"gst_applicable": True})
+    gst_without_invoice = await db.orders.count_documents({"gst_applicable": True, "$or": [{"tax_invoice_url": {"$exists": False}}, {"tax_invoice_url": ""}]})
+    payments_received = await db.orders.count_documents(payment_query)
+    payments_pending = await db.orders.count_documents({"payment_check_status": {"$in": ["pending", "pending_recheck"]}})
+
+    return {
+        "total_invoices": total_invoices,
+        "gst_total": gst_total,
+        "gst_without_invoice": gst_without_invoice,
+        "payments_received": payments_received,
+        "payments_pending": payments_pending,
     }
 
 # Admin view telecaller dashboard
