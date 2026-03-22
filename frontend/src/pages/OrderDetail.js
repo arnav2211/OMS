@@ -77,7 +77,7 @@ export default function OrderDetail() {
   const openFormulation = () => {
     setFormulationItems(order.items.map(i => ({
       product_name: i.product_name, formulation: i.formulation || "",
-      qty: i.qty, unit: i.unit, rate: i.rate, gst_applicable: order.gst_applicable,
+      qty: i.qty, unit: i.unit, amount: i.amount || 0, gst_applicable: order.gst_applicable,
     })));
     setShowFormulation(true);
   };
@@ -586,7 +586,7 @@ export default function OrderDetail() {
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
                   <Label className="text-sm font-medium">{item.product_name}</Label>
                   <span className="text-xs text-muted-foreground">Qty: {item.qty} {item.unit}</span>
-                  {item.rate > 0 && <span className="text-xs text-muted-foreground">{"\u20B9"}{item.rate}{item.gst_applicable ? " (excl. GST)" : ""}</span>}
+                  {item.amount > 0 && <span className="text-xs text-muted-foreground">Amt: {"\u20B9"}{item.amount}{item.gst_applicable ? " (excl. GST)" : ""}</span>}
                 </div>
                 <Textarea value={item.formulation} onChange={(e) => {
                   const updated = [...formulationItems];

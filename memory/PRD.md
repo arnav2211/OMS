@@ -62,10 +62,11 @@ Full-stack Order Management System for CitSpray Aroma Sciences with role-based d
 - GET /api/reports/dashboard - Dashboard stats
 
 ### UI/UX Improvements (March 22, 2026)
-- Formulation dialog shows Qty + Unit + Rate beside item names (Admin & Packaging)
+- Formulation dialog shows Qty + Amt (excl. GST) beside item names (Admin & Packaging)
 - All tables have mobile horizontal scroll (min-width enforced, no hidden columns)
-- Image uploads use standard `accept="image/*"` for camera/gallery/file picker on mobile
-- Mobile responsive improvements across All Orders, PI Builder, Dashboard tables
+- Image uploads provide dual buttons: "Gallery/Files" + "Camera" (with capture="environment")
+- Admin Dashboard mobile responsive: compact scrollable tabs, 2-col cards, proper spacing
+- Favicon updated to CitSpray logo, page title to "CitSpray OMS"
 
 ## Pending/Future Tasks
 - GET /api/reports/payment-sales - Sales from received payments (admin/telecaller)

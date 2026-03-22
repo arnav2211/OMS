@@ -123,6 +123,11 @@ export default function PackagingDashboard() {
     fileInputRef.current?.click();
   };
 
+  const triggerCameraUpload = (type, index) => {
+    setUploadTarget({ type, index });
+    document.getElementById("pkg-camera-input")?.click();
+  };
+
   const savePackaging = async (markPacked = false) => {
     if (!selectedOrder) return;
     if (markPacked) {
@@ -237,6 +242,7 @@ export default function PackagingDashboard() {
             </DialogTitle>
           </DialogHeader>
           <input type="file" ref={fileInputRef} className="hidden" multiple accept="image/*" onChange={handleUpload} />
+          <input type="file" className="hidden" accept="image/*" capture="environment" onChange={handleUpload} ref={el => { if (el) el.dataset.camera = "true"; }} id="pkg-camera-input" />
 
           {selectedOrder && (
             <div className="space-y-4">
@@ -277,6 +283,16 @@ export default function PackagingDashboard() {
                       onClick={() => triggerUpload("item", idx)}
                       disabled={uploading}
                       data-testid={`upload-item-img-${idx}`}
+                      title="Gallery / Files"
+                    >
+                      <Upload className="w-5 h-5 text-muted-foreground" />
+                    </button>
+                    <button
+                      className="w-16 h-16 rounded border-2 border-dashed flex items-center justify-center hover:bg-accent transition-colors"
+                      onClick={() => triggerCameraUpload("item", idx)}
+                      disabled={uploading}
+                      data-testid={`camera-item-img-${idx}`}
+                      title="Camera"
                     >
                       <Camera className="w-5 h-5 text-muted-foreground" />
                     </button>
@@ -297,8 +313,13 @@ export default function PackagingDashboard() {
                     </button>
                   </div>
                 ))}
-                <button className="w-20 h-20 rounded border-2 border-dashed flex items-center justify-center hover:bg-accent transition-colors" onClick={() => triggerUpload("order")} disabled={uploading} data-testid="upload-order-img">
+                <button className="w-20 h-20 rounded border-2 border-dashed flex flex-col items-center justify-center hover:bg-accent transition-colors" onClick={() => triggerUpload("order")} disabled={uploading} data-testid="upload-order-img" title="Gallery / Files">
                   <Upload className="w-5 h-5 text-muted-foreground" />
+                  <span className="text-[10px] text-muted-foreground">Files</span>
+                </button>
+                <button className="w-20 h-20 rounded border-2 border-dashed flex flex-col items-center justify-center hover:bg-accent transition-colors" onClick={() => triggerCameraUpload("order")} disabled={uploading} data-testid="camera-order-img" title="Camera">
+                  <Camera className="w-5 h-5 text-muted-foreground" />
+                  <span className="text-[10px] text-muted-foreground">Camera</span>
                 </button>
               </div>
 
@@ -313,8 +334,13 @@ export default function PackagingDashboard() {
                     </button>
                   </div>
                 ))}
-                <button className="w-20 h-20 rounded border-2 border-dashed flex items-center justify-center hover:bg-accent transition-colors" onClick={() => triggerUpload("packed_box")} disabled={uploading} data-testid="upload-packed-box-img">
+                <button className="w-20 h-20 rounded border-2 border-dashed flex flex-col items-center justify-center hover:bg-accent transition-colors" onClick={() => triggerUpload("packed_box")} disabled={uploading} data-testid="upload-packed-box-img" title="Gallery / Files">
                   <Upload className="w-5 h-5 text-muted-foreground" />
+                  <span className="text-[10px] text-muted-foreground">Files</span>
+                </button>
+                <button className="w-20 h-20 rounded border-2 border-dashed flex flex-col items-center justify-center hover:bg-accent transition-colors" onClick={() => triggerCameraUpload("packed_box")} disabled={uploading} data-testid="camera-packed-box-img" title="Camera">
+                  <Camera className="w-5 h-5 text-muted-foreground" />
+                  <span className="text-[10px] text-muted-foreground">Camera</span>
                 </button>
               </div>
 
