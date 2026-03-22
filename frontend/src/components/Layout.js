@@ -50,13 +50,6 @@ const NAV_ITEMS = {
     { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Customers", icon: Users, path: "/customers" },
   ],
-  field_manager: [
-    { label: "Dashboard", icon: Home, path: "/" },
-    { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
-    { label: "Create Order", icon: Plus, path: "/create-order" },
-    { label: "Customers", icon: Users, path: "/customers" },
-    { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
-  ],
 };
 
 export default function Layout({ children }) {

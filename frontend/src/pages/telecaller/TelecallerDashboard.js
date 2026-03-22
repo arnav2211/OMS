@@ -180,8 +180,7 @@ export default function TelecallerDashboard() {
       </Card>
 
       {/* Sales (Payments Received) - Separate section */}
-      {user?.role !== "field_manager" && (
-        <Card>
+      <Card>
           <CardHeader className="pb-3">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <CardTitle className="text-lg flex items-center gap-2"><CheckCircle className="w-5 h-5 text-green-600" /> Sales (Payments Received)</CardTitle>
@@ -239,7 +238,6 @@ export default function TelecallerDashboard() {
             ) : <p className="text-muted-foreground text-sm">Loading...</p>}
           </CardContent>
         </Card>
-      )}
 
       {/* Recent Orders Only */}
       <Card>

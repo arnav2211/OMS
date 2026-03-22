@@ -61,13 +61,13 @@ export default function OrderDetail() {
   };
 
   const isDispatched = order?.status === "dispatched";
-  const canEditOrder = user?.role === "admin" || ((user?.role === "telecaller" || user?.role === "field_manager") && order?.telecaller_id === user?.id);
+  const canEditOrder = user?.role === "admin" || (user?.role === "telecaller" && order?.telecaller_id === user?.id);
   const canEditFormulation = user?.role === "admin" || user?.role === "packaging";
   const showFormulations = user?.role === "admin" || user?.role === "packaging";
   const canEditPackaging = ["admin", "packaging"].includes(user?.role) && !isDispatched;
   const canEditDispatch = ["admin", "dispatch"].includes(user?.role);
-  const canSharePI = ["admin", "telecaller", "field_manager"].includes(user?.role);
-  const canShareImages = ["admin", "telecaller", "field_manager"].includes(user?.role);
+  const canSharePI = ["admin", "telecaller"].includes(user?.role);
+  const canShareImages = ["admin", "telecaller"].includes(user?.role);
 
   const openEdit = () => {
     if (isDispatched) return toast.error("Cannot edit dispatched order");

@@ -6,7 +6,6 @@ Full-stack Order Management System for CitSpray Aroma Sciences with role-based d
 ## Core Roles
 - **Admin**: Full system access, analytics, user management, settings
 - **Telecaller**: Create orders, manage customers, generate PIs, view own/all orders
-- **Field Manager**: Same as Telecaller, but can ONLY see their own orders. No payment check access.
 - **Packaging**: Manage packing (images, checklist)
 - **Dispatch**: Manage dispatch (courier, transporter, LR no)
 - **Accounts**: Upload tax invoices (GST orders only), verify payments (all orders)

@@ -45,8 +45,6 @@ export default function AllOrders() {
 
   const canPrintAddresses = user?.role === "admin" || user?.role === "packaging";
   const showPaymentCheck = ["admin", "telecaller", "accounts"].includes(user?.role);
-  const isFieldManager = user?.role === "field_manager";
-  const isTelecallerLike = user?.role === "telecaller" || isFieldManager;
 
   useEffect(() => {
     loadOrders();
@@ -54,7 +52,7 @@ export default function AllOrders() {
   }, [viewAll, selectedTelecaller]);
 
   const loadUsers = async () => {
-    try { const res = await api.get("/users"); setUsers(res.data.filter(u => u.role === "telecaller" || u.role === "admin" || u.role === "field_manager")); }
+    try { const res = await api.get("/users"); setUsers(res.data.filter(u => u.role === "telecaller" || u.role === "admin")); }
     catch { }
   };
 
@@ -63,13 +61,8 @@ export default function AllOrders() {
     setSelectedOrders(new Set());
     try {
       const params = new URLSearchParams();
-      if (isTelecallerLike) {
-        if (isFieldManager) {
-          // Field manager always sees own orders only
-          params.set("view_all", "false");
-        } else {
-          params.set("view_all", viewAll ? "true" : "false");
-        }
+      if (user?.role === "telecaller") {
+        params.set("view_all", viewAll ? "true" : "false");
       } else {
         params.set("view_all", "true");
         if (user?.role === "admin" && selectedTelecaller !== "all") params.set("telecaller_id", selectedTelecaller);

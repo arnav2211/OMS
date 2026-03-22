@@ -18,7 +18,6 @@ const ROLE_ICONS = {
   packaging: Package,
   dispatch: Truck,
   accounts: Shield,
-  field_manager: Phone,
 };
 
 const ROLE_COLORS = {
@@ -27,7 +26,6 @@ const ROLE_COLORS = {
   packaging: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
   dispatch: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
   accounts: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
-  field_manager: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-400",
 };
 
 export default function UserManagement() {
@@ -195,7 +193,6 @@ export default function UserManagement() {
                   <SelectItem value="packaging">Packaging</SelectItem>
                   <SelectItem value="dispatch">Dispatch</SelectItem>
                   <SelectItem value="accounts">Accounts</SelectItem>
-                  <SelectItem value="field_manager">Field Manager</SelectItem>
                 </SelectContent>
               </Select>
             </div>

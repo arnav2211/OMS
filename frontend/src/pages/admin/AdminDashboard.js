@@ -419,7 +419,7 @@ export default function AdminDashboard() {
                   <Select value={selectedExec || ""} onValueChange={v => { setSelectedExec(v); loadExecReport(v); }}>
                     <SelectTrigger className="w-48" data-testid="exec-select"><SelectValue placeholder="Choose..." /></SelectTrigger>
                     <SelectContent>
-                      {users.filter(u => u.role === "telecaller" || u.role === "admin" || u.role === "field_manager").map(u => (
+                      {users.filter(u => u.role === "telecaller" || u.role === "admin").map(u => (
                         <SelectItem key={u.id} value={u.id}>{u.name} ({u.role})</SelectItem>
                       ))}
                     </SelectContent>
@@ -486,7 +486,7 @@ export default function AdminDashboard() {
                     <SelectTrigger className="w-48" data-testid="payment-sales-exec"><SelectValue placeholder="All" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="self">My Sales</SelectItem>
-                      {users.filter(u => u.role === "telecaller" || u.role === "admin" || u.role === "field_manager").map(u => (
+                      {users.filter(u => u.role === "telecaller" || u.role === "admin").map(u => (
                         <SelectItem key={u.id} value={u.id}>{u.name} ({u.role})</SelectItem>
                       ))}
                     </SelectContent>
@@ -623,7 +623,6 @@ export default function AdminDashboard() {
                 <SelectTrigger data-testid="new-user-role"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="telecaller">Telecaller (Executive)</SelectItem>
-                  <SelectItem value="field_manager">Field Manager</SelectItem>
                   <SelectItem value="packaging">Packaging</SelectItem>
                   <SelectItem value="dispatch">Dispatch</SelectItem>
                   <SelectItem value="admin">Admin</SelectItem>

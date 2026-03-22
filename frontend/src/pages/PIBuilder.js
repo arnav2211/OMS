@@ -97,7 +97,7 @@ export default function PIBuilder() {
   const [newCust, setNewCust] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "" });
   const [sharing, setSharing] = useState({});
 
-  const canShare = ["admin", "telecaller", "field_manager"].includes(user?.role);
+  const canShare = ["admin", "telecaller"].includes(user?.role);
 
   useEffect(() => { loadPIs(); loadCustomers(); }, []);
 
