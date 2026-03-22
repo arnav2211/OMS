@@ -983,6 +983,11 @@ async def delete_order(order_id: str, user=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if user["role"] == "telecaller":
+        if order.get("telecaller_id") != user["id"]:
+            raise HTTPException(status_code=403, detail="Can only delete your own orders")
+        if order.get("status") == "dispatched":
+            raise HTTPException(status_code=400, detail="Cannot delete dispatched orders")
     result = await db.orders.delete_one({"id": order_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -1057,8 +1062,8 @@ async def delete_order_invoice(order_id: str, user=Depends(get_current_user)):
 # ── Payment Check ─────────────────────────────────────────────────────────────
 @api_router.put("/orders/{order_id}/payment-check")
 async def update_payment_check(order_id: str, body: dict, user=Depends(get_current_user)):
-    if user["role"] != "accounts":
-        raise HTTPException(status_code=403, detail="Only accounts can update payment check status")
+    if user["role"] not in ["admin", "accounts"]:
+        raise HTTPException(status_code=403, detail="Only accounts or admin can update payment check status")
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -2259,18 +2264,18 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     # ─────────────────────────────────────────────────────────────
     if is_gst:
         if pi.get("show_rate"):
-            headers = ['#', 'Item / Description', 'Qty', 'Rate', 'Amount', 'GST %', 'GST Amt', 'Total']
-            col_widths = [8*mm, 46*mm, 16*mm, 22*mm, 23*mm, 14*mm, 20*mm, 22*mm]
+            headers = ['#', 'Item / Description', 'Qty', 'Unit', 'Rate', 'Amount', 'GST %', 'GST Amt', 'Total']
+            col_widths = [8*mm, 40*mm, 14*mm, 14*mm, 20*mm, 21*mm, 14*mm, 20*mm, 22*mm]
         else:
-            headers = ['#', 'Item / Description', 'Qty', 'Amount', 'GST %', 'GST Amt', 'Total']
-            col_widths = [8*mm, 60*mm, 18*mm, 26*mm, 16*mm, 24*mm, 29*mm]
+            headers = ['#', 'Item / Description', 'Qty', 'Unit', 'Amount', 'GST %', 'GST Amt', 'Total']
+            col_widths = [8*mm, 52*mm, 16*mm, 14*mm, 24*mm, 16*mm, 24*mm, 27*mm]
     else:
         if pi.get("show_rate"):
-            headers = ['#', 'Item / Description', 'Qty', 'Rate', 'Amount']
-            col_widths = [10*mm, 72*mm, 24*mm, 32*mm, 43*mm]
+            headers = ['#', 'Item / Description', 'Qty', 'Unit', 'Rate', 'Amount']
+            col_widths = [10*mm, 62*mm, 20*mm, 16*mm, 30*mm, 43*mm]
         else:
-            headers = ['#', 'Item / Description', 'Qty', 'Amount']
-            col_widths = [10*mm, 90*mm, 28*mm, 53*mm]
+            headers = ['#', 'Item / Description', 'Qty', 'Unit', 'Amount']
+            col_widths = [10*mm, 76*mm, 24*mm, 16*mm, 53*mm]
 
     itm_p  = sty('IP', fontSize=8, leading=11)
     tbl_hdr= sty('TH', fontSize=8, fontName='Helvetica-Bold', textColor=colors.white, alignment=TA_CENTER)
@@ -2286,6 +2291,7 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
             Paragraph(str(i + 1), tbl_ctr),
             Paragraph(item_name, itm_p),
             Paragraph(str(item.get("qty", 0)), tbl_num),
+            Paragraph(str(item.get("unit", "")), tbl_ctr),
         ]
         if pi.get("show_rate"):
             row.append(Paragraph(f"{item.get('rate', 0):.2f}", tbl_num))

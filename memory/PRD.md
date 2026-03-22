@@ -60,6 +60,8 @@ Full-stack Order Management System for CitSpray Aroma Sciences with role-based d
 - DELETE /api/orders/{id}/invoice - Delete invoice (accounts only)
 - PUT /api/orders/{id}/payment-check - Update payment check (accounts ONLY)
 - GET /api/reports/dashboard - Dashboard stats
+
+## Pending/Future Tasks
 - GET /api/reports/payment-sales - Sales from received payments (admin/telecaller)
 - GET /api/reports/accounts-dashboard - Accounts metrics
 - GET/POST /api/proforma-invoices - PI management
@@ -74,7 +76,11 @@ Full-stack Order Management System for CitSpray Aroma Sciences with role-based d
 - Accounts: accounts1 / accounts123
 - Field Manager: field1 / field123
 
-## Pending/Future Tasks
+### Correction Patch (March 22, 2026)
+- Restored Units column in PI PDF (GST + Non-GST)
+- PI status auto-changes to "Converted" on conversion (was already working)
+- Telecaller can Edit/Delete own orders (pre-dispatch only)
+- Admin can now also mark payment as Received/Pending (alongside Accounts)
 - **P2**: Performance optimization (pagination on all list endpoints)
 - **P2**: server.py modularization into FastAPI routers (2400+ lines)
 - **P3**: Export to CSV/Excel

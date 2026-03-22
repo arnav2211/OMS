@@ -123,7 +123,7 @@ export default function OrderDetail() {
 
   const deleteOrder = async () => {
     if (deleteConfirmText !== order.order_number) return toast.error("Type the order number to confirm");
-    try { await api.delete(`/orders/${id}/delete`); toast.success("Order deleted"); navigate("/orders"); }
+    try { await api.delete(`/orders/${id}`); toast.success("Order deleted"); navigate("/all-orders"); }
     catch (err) { toast.error(err.response?.data?.detail || "Failed"); setShowDeleteConfirm(false); }
   };
 
@@ -226,6 +226,7 @@ export default function OrderDetail() {
           )}
           {canEditFormulation && <Button variant="outline" size="sm" onClick={openFormulation} data-testid="formulation-btn"><FileText className="w-4 h-4 mr-1" /> Formulation</Button>}
           {user?.role === "admin" && <Button variant="destructive" size="sm" onClick={() => setShowDeleteConfirm(true)} data-testid="delete-order-btn"><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>}
+          {user?.role === "telecaller" && canEditOrder && !isDispatched && <Button variant="destructive" size="sm" onClick={() => setShowDeleteConfirm(true)} data-testid="delete-order-btn"><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>}
         </div>
       </div>
 
