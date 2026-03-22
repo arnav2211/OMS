@@ -284,15 +284,15 @@ export default function PIBuilder() {
           <CardContent className="pt-6">
             {loading ? <p className="text-center py-8 text-muted-foreground">Loading...</p> :
              piList.length === 0 ? <p className="text-center py-8 text-muted-foreground">No proforma invoices yet.</p> : (
-              <Table>
+              <Table className="min-w-[600px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-xs">PI No</TableHead>
-                    <TableHead className="text-xs">Customer</TableHead>
-                    <TableHead className="text-xs text-right">Amount</TableHead>
-                    <TableHead className="text-xs hidden sm:table-cell">Date</TableHead>
-                    <TableHead className="text-xs hidden sm:table-cell">Status</TableHead>
-                    <TableHead className="text-xs">Actions</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">PI No</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Customer</TableHead>
+                    <TableHead className="text-xs text-right whitespace-nowrap">Amount</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Date</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Status</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -301,8 +301,8 @@ export default function PIBuilder() {
                       <TableCell className="font-mono text-sm font-medium">{pi.pi_number}</TableCell>
                       <TableCell className="text-sm">{pi.customer_name}</TableCell>
                       <TableCell className="text-sm text-right font-mono">{"\u20B9"}{pi.grand_total}</TableCell>
-                      <TableCell className="text-sm hidden sm:table-cell">{new Date(pi.created_at).toLocaleDateString("en-IN")}</TableCell>
-                      <TableCell className="hidden sm:table-cell"><Badge variant="secondary" className="text-xs">{pi.status}</Badge></TableCell>
+                      <TableCell className="text-sm whitespace-nowrap">{new Date(pi.created_at).toLocaleDateString("en-IN")}</TableCell>
+                      <TableCell><Badge variant="secondary" className="text-xs">{pi.status}</Badge></TableCell>
                       <TableCell>
                         <div className="flex gap-1">
                           <Button variant="ghost" size="icon" onClick={() => downloadPI(pi)} title="Download PDF" data-testid={`download-pi-${pi.id}`}><Download className="w-4 h-4" /></Button>

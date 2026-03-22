@@ -107,3 +107,11 @@ bestproject.zip
 *.env
 *.env.*
 finalproject.zip
+-e 
+# Environment files
+*.env
+*.env.*
+-e 
+# Environment files
+*.env
+*.env.*

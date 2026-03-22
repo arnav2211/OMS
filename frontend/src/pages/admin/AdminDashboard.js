@@ -216,24 +216,26 @@ export default function AdminDashboard() {
       <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Admin Dashboard</h1>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="flex flex-wrap">
-          <TabsTrigger value="analytics" data-testid="tab-analytics"><BarChart3 className="w-4 h-4 mr-1" /> Analytics</TabsTrigger>
-          <TabsTrigger value="my-report" data-testid="tab-my-report"><TrendingUp className="w-4 h-4 mr-1" /> My Report</TabsTrigger>
-          <TabsTrigger value="exec-reports" data-testid="tab-exec-reports"><Users className="w-4 h-4 mr-1" /> Executive Reports</TabsTrigger>
-          <TabsTrigger value="payment-sales" data-testid="tab-payment-sales"><CheckCircle className="w-4 h-4 mr-1" /> Payment Sales</TabsTrigger>
-          <TabsTrigger value="users" data-testid="tab-users"><Users className="w-4 h-4 mr-1" /> Users</TabsTrigger>
-          <TabsTrigger value="settings" data-testid="tab-settings"><Settings className="w-4 h-4 mr-1" /> Settings</TabsTrigger>
-        </TabsList>
+        <div className="overflow-x-auto pb-1">
+          <TabsList className="inline-flex w-auto min-w-full sm:w-full">
+            <TabsTrigger value="analytics" data-testid="tab-analytics" className="text-xs sm:text-sm whitespace-nowrap"><BarChart3 className="w-4 h-4 mr-1 hidden sm:inline" /> Analytics</TabsTrigger>
+            <TabsTrigger value="my-report" data-testid="tab-my-report" className="text-xs sm:text-sm whitespace-nowrap"><TrendingUp className="w-4 h-4 mr-1 hidden sm:inline" /> My Report</TabsTrigger>
+            <TabsTrigger value="exec-reports" data-testid="tab-exec-reports" className="text-xs sm:text-sm whitespace-nowrap"><Users className="w-4 h-4 mr-1 hidden sm:inline" /> Exec Reports</TabsTrigger>
+            <TabsTrigger value="payment-sales" data-testid="tab-payment-sales" className="text-xs sm:text-sm whitespace-nowrap"><CheckCircle className="w-4 h-4 mr-1 hidden sm:inline" /> Payments</TabsTrigger>
+            <TabsTrigger value="users" data-testid="tab-users" className="text-xs sm:text-sm whitespace-nowrap"><Users className="w-4 h-4 mr-1 hidden sm:inline" /> Users</TabsTrigger>
+            <TabsTrigger value="settings" data-testid="tab-settings" className="text-xs sm:text-sm whitespace-nowrap"><Settings className="w-4 h-4 mr-1 hidden sm:inline" /> Settings</TabsTrigger>
+          </TabsList>
+        </div>
 
         {/* Analytics Tab */}
         <TabsContent value="analytics" className="space-y-4">
           <Card>
             <CardHeader className="pb-3">
-              <div className="flex flex-wrap gap-3 items-end">
+              <div className="flex flex-wrap gap-2 sm:gap-3 items-end">
                 <div>
                   <Label className="text-xs">Period</Label>
                   <Select value={period} onValueChange={setPeriod}>
-                    <SelectTrigger className="w-36" data-testid="analytics-period"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="w-28 sm:w-36" data-testid="analytics-period"><SelectValue /></SelectTrigger>
                     <SelectContent>{PERIOD_OPTIONS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
@@ -251,26 +253,26 @@ export default function AdminDashboard() {
 
           {analyticsLoading ? <p className="text-center py-8 text-muted-foreground">Loading analytics...</p> : analytics && (
             <>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <Card><CardContent className="pt-6 text-center">
-                  <ShoppingCart className="w-8 h-8 mx-auto text-blue-500 mb-2" />
-                  <p className="text-2xl font-bold" data-testid="total-orders">{analytics.total_orders}</p>
-                  <p className="text-xs text-muted-foreground">Total Orders</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-4">
+                <Card><CardContent className="pt-4 sm:pt-6 text-center">
+                  <ShoppingCart className="w-6 h-6 sm:w-8 sm:h-8 mx-auto text-blue-500 mb-1 sm:mb-2" />
+                  <p className="text-lg sm:text-2xl font-bold" data-testid="total-orders">{analytics.total_orders}</p>
+                  <p className="text-[10px] sm:text-xs text-muted-foreground">Total Orders</p>
                 </CardContent></Card>
-                <Card><CardContent className="pt-6 text-center">
-                  <IndianRupee className="w-8 h-8 mx-auto text-green-500 mb-2" />
-                  <p className="text-2xl font-bold" data-testid="total-revenue">{"\u20B9"}{analytics.total_revenue?.toLocaleString("en-IN")}</p>
-                  <p className="text-xs text-muted-foreground">Total Revenue</p>
+                <Card><CardContent className="pt-4 sm:pt-6 text-center">
+                  <IndianRupee className="w-6 h-6 sm:w-8 sm:h-8 mx-auto text-green-500 mb-1 sm:mb-2" />
+                  <p className="text-lg sm:text-2xl font-bold" data-testid="total-revenue">{"\u20B9"}{analytics.total_revenue?.toLocaleString("en-IN")}</p>
+                  <p className="text-[10px] sm:text-xs text-muted-foreground">Total Revenue</p>
                 </CardContent></Card>
-                <Card><CardContent className="pt-6 text-center">
-                  <TrendingUp className="w-8 h-8 mx-auto text-emerald-500 mb-2" />
-                  <p className="text-2xl font-bold" data-testid="product-sales">{"\u20B9"}{analytics.product_sales?.toLocaleString("en-IN")}</p>
-                  <p className="text-xs text-muted-foreground">Product Sales (filtered)</p>
+                <Card><CardContent className="pt-4 sm:pt-6 text-center">
+                  <TrendingUp className="w-6 h-6 sm:w-8 sm:h-8 mx-auto text-emerald-500 mb-1 sm:mb-2" />
+                  <p className="text-lg sm:text-2xl font-bold" data-testid="product-sales">{"\u20B9"}{analytics.product_sales?.toLocaleString("en-IN")}</p>
+                  <p className="text-[10px] sm:text-xs text-muted-foreground">Product Sales</p>
                 </CardContent></Card>
-                <Card><CardContent className="pt-6 text-center">
-                  <Package className="w-8 h-8 mx-auto text-purple-500 mb-2" />
-                  <p className="text-2xl font-bold">{analytics.status_counts?.dispatched || 0}</p>
-                  <p className="text-xs text-muted-foreground">Dispatched</p>
+                <Card><CardContent className="pt-4 sm:pt-6 text-center">
+                  <Package className="w-6 h-6 sm:w-8 sm:h-8 mx-auto text-purple-500 mb-1 sm:mb-2" />
+                  <p className="text-lg sm:text-2xl font-bold">{analytics.status_counts?.dispatched || 0}</p>
+                  <p className="text-[10px] sm:text-xs text-muted-foreground">Dispatched</p>
                 </CardContent></Card>
               </div>
 
@@ -326,13 +328,13 @@ export default function AdminDashboard() {
             </CardHeader>
             <CardContent>
               {recentOrders.length === 0 ? <p className="text-center py-4 text-muted-foreground">No orders yet</p> : (
-                <Table>
+                <Table className="min-w-[500px]">
                   <TableHeader><TableRow>
-                    <TableHead className="text-xs">Order #</TableHead>
-                    <TableHead className="text-xs">Customer</TableHead>
-                    <TableHead className="text-xs text-right">Amount</TableHead>
-                    <TableHead className="text-xs">Status</TableHead>
-                    <TableHead className="text-xs hidden sm:table-cell">Executive</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Order #</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Customer</TableHead>
+                    <TableHead className="text-xs text-right whitespace-nowrap">Amount</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Status</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Executive</TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
                     {recentOrders.map(o => (
@@ -341,7 +343,7 @@ export default function AdminDashboard() {
                         <TableCell className="text-sm">{o.customer_name}</TableCell>
                         <TableCell className="text-sm text-right font-mono">{"\u20B9"}{o.grand_total?.toLocaleString("en-IN")}</TableCell>
                         <TableCell><Badge className={`${STATUS_COLORS[o.status] || 'bg-gray-100'} text-xs`}>{o.status}</Badge></TableCell>
-                        <TableCell className="text-sm hidden sm:table-cell">{o.telecaller_name || "-"}</TableCell>
+                        <TableCell className="text-sm whitespace-nowrap">{o.telecaller_name || "-"}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

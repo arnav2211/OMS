@@ -576,7 +576,16 @@ export default function CreateOrder() {
           )}
           <div>
             <Label>Payment Screenshots (optional)</Label>
-            <input type="file" multiple accept="image/*" onChange={handleScreenshotUpload} className="mt-1 block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90" data-testid="payment-screenshot-input" />
+            <div className="flex flex-wrap gap-2 mt-1">
+              <label className="cursor-pointer inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90">
+                Gallery / Files
+                <input type="file" multiple accept="image/*" onChange={handleScreenshotUpload} className="hidden" data-testid="payment-screenshot-input" />
+              </label>
+              <label className="cursor-pointer inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium bg-secondary text-secondary-foreground hover:bg-secondary/80">
+                Camera
+                <input type="file" accept="image/*" capture="environment" onChange={handleScreenshotUpload} className="hidden" data-testid="payment-screenshot-camera" />
+              </label>
+            </div>
             {paymentScreenshots.length > 0 && (
               <div className="flex flex-wrap gap-2 mt-2">
                 {paymentScreenshots.map((url, i) => (
