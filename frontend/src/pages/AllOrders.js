@@ -149,13 +149,13 @@ export default function AllOrders() {
         <CardHeader className="pb-3">
           {/* Filter row */}
           <div className="flex flex-wrap gap-2 items-end">
-            <div className="relative flex-1 min-w-[160px]">
+            <div className="relative flex-1 min-w-[140px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input placeholder="Search..." className="pl-9 h-8 text-sm" value={search} onChange={e => setSearch(e.target.value)} data-testid="orders-search-input" />
             </div>
             {/* Period */}
             <Select value={periodFilter} onValueChange={setPeriodFilter}>
-              <SelectTrigger className="w-32 h-8 text-xs" data-testid="period-filter"><SelectValue placeholder="Period" /></SelectTrigger>
+              <SelectTrigger className="w-28 sm:w-32 h-8 text-xs" data-testid="period-filter"><SelectValue placeholder="Period" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Time</SelectItem>
                 <SelectItem value="today">Today</SelectItem>
@@ -228,8 +228,7 @@ export default function AllOrders() {
           ) : filteredOrders.length === 0 ? (
             <p className="text-center py-8 text-muted-foreground">No orders found</p>
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
+              <Table className="min-w-[700px]">
                 <TableHeader>
                   <TableRow>
                     {canPrintAddresses && (
@@ -238,14 +237,14 @@ export default function AllOrders() {
                           onCheckedChange={toggleSelectAll} data-testid="select-all-orders-checkbox" />
                       </TableHead>
                     )}
-                    <TableHead className="text-xs uppercase">Order #</TableHead>
-                    <TableHead className="text-xs uppercase">Customer</TableHead>
-                    <TableHead className="text-xs uppercase hidden sm:table-cell">Amount</TableHead>
-                    <TableHead className="text-xs uppercase">Status</TableHead>
-                    <TableHead className="text-xs uppercase hidden sm:table-cell">Payment</TableHead>
-                    {showPaymentCheck && <TableHead className="text-xs uppercase hidden md:table-cell">Check</TableHead>}
-                    {user?.role === "admin" && <TableHead className="text-xs uppercase hidden lg:table-cell">Executive</TableHead>}
-                    <TableHead className="text-xs uppercase hidden sm:table-cell">Date</TableHead>
+                    <TableHead className="text-xs uppercase whitespace-nowrap">Order #</TableHead>
+                    <TableHead className="text-xs uppercase whitespace-nowrap">Customer</TableHead>
+                    <TableHead className="text-xs uppercase whitespace-nowrap">Amount</TableHead>
+                    <TableHead className="text-xs uppercase whitespace-nowrap">Status</TableHead>
+                    <TableHead className="text-xs uppercase whitespace-nowrap">Payment</TableHead>
+                    {showPaymentCheck && <TableHead className="text-xs uppercase whitespace-nowrap">Check</TableHead>}
+                    {user?.role === "admin" && <TableHead className="text-xs uppercase whitespace-nowrap">Executive</TableHead>}
+                    <TableHead className="text-xs uppercase whitespace-nowrap">Date</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -264,24 +263,23 @@ export default function AllOrders() {
                           </Link>
                         </TableCell>
                         <TableCell className="text-sm">{o.customer_name}</TableCell>
-                        <TableCell className="text-sm font-mono hidden sm:table-cell">₹{o.grand_total?.toLocaleString("en-IN")}</TableCell>
+                        <TableCell className="text-sm font-mono whitespace-nowrap">{"\u20B9"}{o.grand_total?.toLocaleString("en-IN")}</TableCell>
                         <TableCell><Badge className={`${STATUS_COLORS[o.status] || "bg-gray-100"} text-xs`}>{o.status}</Badge></TableCell>
-                        <TableCell className="hidden sm:table-cell"><Badge variant="outline" className="text-xs">{o.payment_status}</Badge></TableCell>
+                        <TableCell><Badge variant="outline" className="text-xs">{o.payment_status}</Badge></TableCell>
                         {showPaymentCheck && (
-                          <TableCell className="hidden md:table-cell">
+                          <TableCell>
                             <Badge className={`${CHECK_COLORS[checkStatus] || "bg-gray-100"} text-xs`} data-testid={`check-badge-${o.id}`}>
                               {CHECK_LABELS[checkStatus] || "Pending"}
                             </Badge>
                           </TableCell>
                         )}
-                        {user?.role === "admin" && <TableCell className="text-sm hidden lg:table-cell">{o.telecaller_name || "-"}</TableCell>}
-                        <TableCell className="text-sm text-muted-foreground hidden sm:table-cell">{new Date(o.created_at).toLocaleDateString("en-IN")}</TableCell>
+                        {user?.role === "admin" && <TableCell className="text-sm whitespace-nowrap">{o.telecaller_name || "-"}</TableCell>}
+                        <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{new Date(o.created_at).toLocaleDateString("en-IN")}</TableCell>
                       </TableRow>
                     );
                   })}
                 </TableBody>
               </Table>
-            </div>
           )}
           <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
             <span>{selectedOrders.size > 0 ? `${selectedOrders.size} selected` : ""}</span>

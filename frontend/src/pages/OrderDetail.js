@@ -75,7 +75,10 @@ export default function OrderDetail() {
   };
 
   const openFormulation = () => {
-    setFormulationItems(order.items.map(i => ({ product_name: i.product_name, formulation: i.formulation || "" })));
+    setFormulationItems(order.items.map(i => ({
+      product_name: i.product_name, formulation: i.formulation || "",
+      qty: i.qty, unit: i.unit, rate: i.rate, gst_applicable: order.gst_applicable,
+    })));
     setShowFormulation(true);
   };
 
@@ -255,8 +258,7 @@ export default function OrderDetail() {
       <Card>
         <CardHeader className="pb-3"><CardTitle className="text-base">Items ({order.items?.length})</CardTitle></CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <Table>
+            <Table className="min-w-[600px]">
               <TableHeader>
                 <TableRow>
                   <TableHead className="text-xs">#</TableHead>
@@ -291,7 +293,6 @@ export default function OrderDetail() {
                 ))}
               </TableBody>
             </Table>
-          </div>
           <div className="mt-4 space-y-2 text-sm">
             <Separator />
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">{"\u20B9"}{order.subtotal?.toFixed(2)}</span></div>
@@ -582,7 +583,11 @@ export default function OrderDetail() {
           <div className="space-y-4">
             {formulationItems.map((item, i) => (
               <div key={i} className="space-y-1">
-                <Label className="text-sm font-medium">{item.product_name}</Label>
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                  <Label className="text-sm font-medium">{item.product_name}</Label>
+                  <span className="text-xs text-muted-foreground">Qty: {item.qty} {item.unit}</span>
+                  {item.rate > 0 && <span className="text-xs text-muted-foreground">{"\u20B9"}{item.rate}{item.gst_applicable ? " (excl. GST)" : ""}</span>}
+                </div>
                 <Textarea value={item.formulation} onChange={(e) => {
                   const updated = [...formulationItems];
                   updated[i] = { ...updated[i], formulation: e.target.value };

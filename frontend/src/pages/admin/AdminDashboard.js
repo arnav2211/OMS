@@ -326,13 +326,13 @@ export default function AdminDashboard() {
             </CardHeader>
             <CardContent>
               {recentOrders.length === 0 ? <p className="text-center py-4 text-muted-foreground">No orders yet</p> : (
-                <Table>
+                <Table className="min-w-[500px]">
                   <TableHeader><TableRow>
-                    <TableHead className="text-xs">Order #</TableHead>
-                    <TableHead className="text-xs">Customer</TableHead>
-                    <TableHead className="text-xs text-right">Amount</TableHead>
-                    <TableHead className="text-xs">Status</TableHead>
-                    <TableHead className="text-xs hidden sm:table-cell">Executive</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Order #</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Customer</TableHead>
+                    <TableHead className="text-xs text-right whitespace-nowrap">Amount</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Status</TableHead>
+                    <TableHead className="text-xs whitespace-nowrap">Executive</TableHead>
                   </TableRow></TableHeader>
                   <TableBody>
                     {recentOrders.map(o => (
@@ -341,7 +341,7 @@ export default function AdminDashboard() {
                         <TableCell className="text-sm">{o.customer_name}</TableCell>
                         <TableCell className="text-sm text-right font-mono">{"\u20B9"}{o.grand_total?.toLocaleString("en-IN")}</TableCell>
                         <TableCell><Badge className={`${STATUS_COLORS[o.status] || 'bg-gray-100'} text-xs`}>{o.status}</Badge></TableCell>
-                        <TableCell className="text-sm hidden sm:table-cell">{o.telecaller_name || "-"}</TableCell>
+                        <TableCell className="text-sm whitespace-nowrap">{o.telecaller_name || "-"}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

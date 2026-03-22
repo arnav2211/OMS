@@ -257,15 +257,15 @@ export default function TelecallerDashboard() {
               No orders yet. Create your first order!
             </div>
           ) : (
-            <Table>
+            <Table className="min-w-[600px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-xs uppercase tracking-wider">Order #</TableHead>
-                  <TableHead className="text-xs uppercase tracking-wider">Customer</TableHead>
-                  <TableHead className="text-xs uppercase tracking-wider hidden sm:table-cell">Items</TableHead>
-                  <TableHead className="text-xs uppercase tracking-wider">Total</TableHead>
-                  <TableHead className="text-xs uppercase tracking-wider">Status</TableHead>
-                  <TableHead className="text-xs uppercase tracking-wider hidden sm:table-cell">Date</TableHead>
+                  <TableHead className="text-xs uppercase tracking-wider whitespace-nowrap">Order #</TableHead>
+                  <TableHead className="text-xs uppercase tracking-wider whitespace-nowrap">Customer</TableHead>
+                  <TableHead className="text-xs uppercase tracking-wider whitespace-nowrap">Items</TableHead>
+                  <TableHead className="text-xs uppercase tracking-wider whitespace-nowrap">Total</TableHead>
+                  <TableHead className="text-xs uppercase tracking-wider whitespace-nowrap">Status</TableHead>
+                  <TableHead className="text-xs uppercase tracking-wider whitespace-nowrap">Date</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
@@ -274,7 +274,7 @@ export default function TelecallerDashboard() {
                   <TableRow key={order.id} data-testid={`order-row-${order.order_number}`}>
                     <TableCell className="font-mono font-medium text-sm">{order.order_number}</TableCell>
                     <TableCell className="text-sm">{order.customer_name}</TableCell>
-                    <TableCell className="hidden sm:table-cell">{order.items?.length || 0}</TableCell>
+                    <TableCell>{order.items?.length || 0}</TableCell>
                     <TableCell className="font-mono text-sm">
                       {"\u20B9"}{order.grand_total?.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
                     </TableCell>
@@ -283,7 +283,7 @@ export default function TelecallerDashboard() {
                         {order.status}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-sm hidden sm:table-cell">
+                    <TableCell className="text-muted-foreground text-sm whitespace-nowrap">
                       {new Date(order.created_at).toLocaleDateString("en-IN")}
                     </TableCell>
                     <TableCell>

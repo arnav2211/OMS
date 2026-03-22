@@ -195,16 +195,15 @@ export default function AccountsDashboard() {
               {invoiceLoading ? (
                 <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div></div>
               ) : (
-                <div className="overflow-x-auto">
-                  <Table>
+                  <Table className="min-w-[600px]">
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Order #</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Amount</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Invoice</TableHead>
-                        <TableHead>Actions</TableHead>
+                        <TableHead className="whitespace-nowrap">Order #</TableHead>
+                        <TableHead className="whitespace-nowrap">Customer</TableHead>
+                        <TableHead className="whitespace-nowrap">Amount</TableHead>
+                        <TableHead className="whitespace-nowrap">Status</TableHead>
+                        <TableHead className="whitespace-nowrap">Invoice</TableHead>
+                        <TableHead className="whitespace-nowrap">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -252,7 +251,6 @@ export default function AccountsDashboard() {
                       ))}
                     </TableBody>
                   </Table>
-                </div>
               )}
             </CardContent>
           </Card>
@@ -308,17 +306,16 @@ export default function AccountsDashboard() {
               {paymentLoading ? (
                 <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div></div>
               ) : (
-                <div className="overflow-x-auto">
-                  <Table>
+                  <Table className="min-w-[700px]">
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Order #</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Amount</TableHead>
-                        <TableHead>Payment</TableHead>
-                        <TableHead>Check Status</TableHead>
-                        <TableHead>Checked By</TableHead>
-                        <TableHead>Action</TableHead>
+                        <TableHead className="whitespace-nowrap">Order #</TableHead>
+                        <TableHead className="whitespace-nowrap">Customer</TableHead>
+                        <TableHead className="whitespace-nowrap">Amount</TableHead>
+                        <TableHead className="whitespace-nowrap">Payment</TableHead>
+                        <TableHead className="whitespace-nowrap">Check Status</TableHead>
+                        <TableHead className="whitespace-nowrap">Checked By</TableHead>
+                        <TableHead className="whitespace-nowrap">Action</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -362,8 +359,9 @@ export default function AccountsDashboard() {
                       })}
                     </TableBody>
                   </Table>
-                  <p className="text-sm text-muted-foreground mt-3 text-right">{filteredAllOrders.length} order(s)</p>
-                </div>
+              )}
+              {filteredAllOrders.length > 0 && (
+                <p className="text-sm text-muted-foreground mt-3 text-right">{filteredAllOrders.length} order(s)</p>
               )}
             </CardContent>
           </Card>
