@@ -78,9 +78,11 @@ Full-stack Order Management System for CitSpray Aroma Sciences with role-based d
 
 ### Correction Patch (March 22, 2026)
 - Restored Units column in PI PDF (GST + Non-GST)
-- PI status auto-changes to "Converted" on conversion (was already working)
+- PI status auto-changes to "Converted" on conversion (new PATCH endpoint)
 - Telecaller can Edit/Delete own orders (pre-dispatch only)
 - Admin can now also mark payment as Received/Pending (alongside Accounts)
+- Payment Verification section added to OrderDetail for Admin and Accounts (with Mark Received/Pending buttons)
+- Telecaller sees read-only payment check status in OrderDetail
 - **P2**: Performance optimization (pagination on all list endpoints)
 - **P2**: server.py modularization into FastAPI routers (2400+ lines)
 - **P3**: Export to CSV/Excel

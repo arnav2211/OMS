@@ -328,7 +328,7 @@ export default function CreateOrder() {
       toast.success(`Order ${res.data.order_number} created!`);
       if (piId) {
         // Mark PI as converted
-        await api.put(`/proforma-invoices/${piId}`, { status: "converted" }).catch(() => {});
+        await api.patch(`/proforma-invoices/${piId}/mark-converted`, { order_id: res.data.id }).catch(() => {});
       }
       navigate(`/orders/${res.data.id}`);
     } catch (err) { toast.error(err.response?.data?.detail || "Failed to create order"); }

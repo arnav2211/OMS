@@ -340,6 +340,67 @@ export default function OrderDetail() {
         </CardContent>
       </Card>
 
+      {/* Payment Verification */}
+      {["admin", "accounts"].includes(user?.role) && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Payment Verification</CardTitle>
+              <Badge className={`text-xs ${
+                order.payment_check_status === "received" ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" :
+                order.payment_check_status === "pending_recheck" ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" :
+                "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
+              }`} data-testid="payment-check-badge">
+                {order.payment_check_status === "received" ? "Received" : order.payment_check_status === "pending_recheck" ? "Pending Re-check" : "Pending"}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-2">
+              <Button size="sm" variant={order.payment_check_status === "received" ? "default" : "outline"}
+                className={order.payment_check_status === "received" ? "bg-green-600 hover:bg-green-700" : ""}
+                onClick={async () => {
+                  try { await api.put(`/orders/${id}/payment-check`, { payment_check_status: "received" }); toast.success("Payment marked as received"); loadOrder(); }
+                  catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+                }}
+                data-testid="mark-received-btn">
+                Mark Received
+              </Button>
+              <Button size="sm" variant={order.payment_check_status === "pending" ? "default" : "outline"}
+                className={order.payment_check_status === "pending" ? "bg-yellow-600 hover:bg-yellow-700" : ""}
+                onClick={async () => {
+                  try { await api.put(`/orders/${id}/payment-check`, { payment_check_status: "pending" }); toast.success("Payment marked as pending"); loadOrder(); }
+                  catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+                }}
+                data-testid="mark-pending-btn">
+                Mark Pending
+              </Button>
+            </div>
+            {order.payment_checked_by && (
+              <p className="text-xs text-muted-foreground mt-2">Last checked by: {order.payment_checked_by} on {order.payment_checked_at ? new Date(order.payment_checked_at).toLocaleString("en-IN") : "-"}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Payment Check Status (view only for telecaller) */}
+      {user?.role === "telecaller" && order.payment_check_status && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Payment Verification</CardTitle>
+              <Badge className={`text-xs ${
+                order.payment_check_status === "received" ? "bg-green-100 text-green-800" :
+                order.payment_check_status === "pending_recheck" ? "bg-red-100 text-red-800" :
+                "bg-yellow-100 text-yellow-800"
+              }`}>
+                {order.payment_check_status === "received" ? "Received" : order.payment_check_status === "pending_recheck" ? "Pending Re-check" : "Pending"}
+              </Badge>
+            </div>
+          </CardHeader>
+        </Card>
+      )}
+
       {/* Tax Invoice */}
       {order.tax_invoice_url && (
         <Card>

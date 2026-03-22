@@ -823,8 +823,10 @@ async def get_order(order_id: str, user=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    # Hide telecaller info for non-admin
-    if user["role"] != "admin":
+    # Hide telecaller info for non-admin (keep telecaller_id for telecaller's own-order check)
+    if user["role"] == "telecaller":
+        order.pop("telecaller_name", None)
+    elif user["role"] != "admin":
         order.pop("telecaller_name", None)
         order.pop("telecaller_id", None)
     # Strict formulation visibility
@@ -1981,6 +1983,18 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
     await db.proforma_invoices.update_one({"id": pi_id}, {"$set": update_data})
     updated = await db.proforma_invoices.find_one({"id": pi_id}, {"_id": 0})
     return updated
+
+@api_router.patch("/proforma-invoices/{pi_id}/mark-converted")
+async def mark_pi_converted(pi_id: str, body: dict, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "telecaller"]:
+        raise HTTPException(status_code=403, detail="Admin or telecaller only")
+    order_id = body.get("order_id", "")
+    await db.proforma_invoices.update_one(
+        {"id": pi_id},
+        {"$set": {"status": "converted", "converted_order_id": order_id, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"message": "PI marked as converted"}
+
 
 @api_router.post("/proforma-invoices/{pi_id}/convert")
 async def convert_pi_to_order(pi_id: str, body: dict, user=Depends(get_current_user)):
