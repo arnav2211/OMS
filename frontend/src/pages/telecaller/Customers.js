@@ -190,8 +190,8 @@ export default function Customers() {
                             {expandedCustomer === c.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                           </Button>
                           <Button variant="ghost" size="icon" onClick={() => openEdit(c)} data-testid={`edit-customer-${c.id}`}><Edit className="w-4 h-4" /></Button>
-                          {["admin", "telecaller"].includes(user?.role) && (
-                            <Button variant="ghost" size="icon" onClick={() => setShowDeleteConfirm(c)} data-testid={`delete-customer-${c.id}`}><Trash2 className="w-4 h-4 text-destructive" /></Button>
+                          {user?.role === "admin" && (
+                            <Button variant="ghost" size="icon" onClick={() => setShowDeleteConfirm({ customer: c, step: 1 })} data-testid={`delete-customer-${c.id}`}><Trash2 className="w-4 h-4 text-destructive" /></Button>
                           )}
                         </div>
                       </TableCell>

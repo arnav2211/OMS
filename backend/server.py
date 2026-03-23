@@ -142,6 +142,12 @@ class FreeSampleModel(BaseModel):
     item_name: str = ""
     description: str = ""
 
+class AdditionalChargeModel(BaseModel):
+    name: str = ""
+    amount: float = 0
+    gst_percent: int = 0
+    gst_amount: float = 0
+
 class OrderCreate(BaseModel):
     customer_id: str
     purpose: str = ""
@@ -153,6 +159,7 @@ class OrderCreate(BaseModel):
     transporter_name: str = ""
     shipping_charge: float = 0
     shipping_gst: float = 0
+    additional_charges: List[AdditionalChargeModel] = []
     remark: str = ""
     payment_status: str = "unpaid"
     amount_paid: float = 0
@@ -170,6 +177,7 @@ class DispatchUpdate(BaseModel):
     transporter_name: str = ""
     lr_no: str = ""
     dispatch_type: str = ""
+    shipping_method: str = ""
 
 class PICreate(BaseModel):
     customer_id: str
@@ -178,6 +186,7 @@ class PICreate(BaseModel):
     gst_applicable: bool = False
     show_rate: bool = True
     shipping_charge: float = 0
+    additional_charges: List[AdditionalChargeModel] = []
     remark: str = ""
     billing_address_id: str = ""
     shipping_address_id: str = ""
