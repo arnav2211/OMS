@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2, Copy, ClipboardCopy } from "lucide-react";
+import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2, Copy, ClipboardCopy, History } from "lucide-react";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
@@ -38,6 +38,8 @@ export default function OrderDetail() {
   const [formulationItems, setFormulationItems] = useState([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
+  const [formulationHistory, setFormulationHistory] = useState([]);
   const [packagingStaff, setPackagingStaff] = useState([]);
   const [dispatchData, setDispatchData] = useState({ courier_name: "", transporter_name: "", lr_no: "", dispatch_type: "" });
   const [previewImage, setPreviewImage] = useState(null);
@@ -80,6 +82,15 @@ export default function OrderDetail() {
       qty: i.qty, unit: i.unit, amount: i.amount || 0, gst_applicable: order.gst_applicable,
     })));
     setShowFormulation(true);
+  };
+
+  const loadFormulationHistory = async () => {
+    if (!order?.customer_id) return;
+    try {
+      const res = await api.get(`/orders/formulation-history/${order.customer_id}`);
+      setFormulationHistory(res.data);
+      setShowHistory(true);
+    } catch { toast.error("Failed to load history"); }
   };
 
   const saveFormulation = async () => {
@@ -254,6 +265,7 @@ export default function OrderDetail() {
             <Button variant="outline" size="sm" onClick={openEdit} data-testid="edit-order-btn"><Edit className="w-4 h-4 mr-1" /> Edit</Button>
           )}
           {canEditFormulation && <Button variant="outline" size="sm" onClick={openFormulation} data-testid="formulation-btn"><FileText className="w-4 h-4 mr-1" /> Formulation</Button>}
+          {canEditFormulation && <Button variant="outline" size="sm" onClick={loadFormulationHistory} data-testid="formulation-history-btn"><History className="w-4 h-4 mr-1" /> History</Button>}
           {user?.role === "admin" && <Button variant="destructive" size="sm" onClick={() => setShowDeleteConfirm(true)} data-testid="delete-order-btn"><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>}
           {user?.role === "telecaller" && canEditOrder && !isDispatched && <Button variant="destructive" size="sm" onClick={() => setShowDeleteConfirm(true)} data-testid="delete-order-btn"><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>}
         </div>
@@ -629,7 +641,14 @@ export default function OrderDetail() {
       {/* Formulation Dialog */}
       <Dialog open={showFormulation} onOpenChange={setShowFormulation}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Edit Formulations</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              Edit Formulations
+              <Button variant="ghost" size="sm" onClick={loadFormulationHistory} data-testid="formulation-history-in-edit">
+                <History className="w-4 h-4 mr-1" /> History
+              </Button>
+            </DialogTitle>
+          </DialogHeader>
           <div className="space-y-4">
             {formulationItems.map((item, i) => (
               <div key={i} className="space-y-1">
@@ -702,6 +721,33 @@ export default function OrderDetail() {
             <Button variant="outline" onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmText(""); }}>Cancel</Button>
             <Button variant="destructive" onClick={deleteOrder} disabled={deleteConfirmText !== order.order_number} data-testid="confirm-delete-order">Delete Permanently</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Formulation History Dialog */}
+      <Dialog open={showHistory} onOpenChange={setShowHistory}>
+        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Formulation History</DialogTitle></DialogHeader>
+          {formulationHistory.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4">No formulation history found.</p>
+          ) : (
+            <div className="space-y-4">
+              {formulationHistory.map((h, i) => (
+                <div key={i} className="border rounded-lg p-3 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="font-medium text-sm">{h.order_number}</span>
+                    <span className="text-xs text-muted-foreground">{new Date(h.created_at).toLocaleDateString("en-IN")}</span>
+                  </div>
+                  {h.items?.filter(it => it.formulation).map((it, j) => (
+                    <div key={j} className="border-l-2 border-amber-400 pl-3">
+                      <p className="text-sm">{it.product_name} ({it.qty} {it.unit})</p>
+                      <p className="text-xs text-amber-600">{it.formulation}</p>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
