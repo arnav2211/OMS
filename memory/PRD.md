@@ -1,98 +1,66 @@
 # CitSpray Order Management System - PRD
 
 ## Original Problem Statement
-Full-stack Order Management System for CitSpray Aroma Sciences with role-based dashboards, customer/order management, PDF generation, and payment tracking.
-
-## Core Roles
-- **Admin**: Full system access, analytics, user management, settings
-- **Telecaller**: Create orders, manage customers, generate PIs, view own/all orders
-- **Packaging**: Manage packing (images, checklist)
-- **Dispatch**: Manage dispatch (courier, transporter, LR no)
-- **Accounts**: Upload tax invoices (GST orders only), verify payments (all orders)
+Full-stack Order Management System for CitSpray with multi-role access (Admin, Telecaller, Packaging, Dispatch, Accounts), order/customer management, Proforma Invoice creation, PDF generation, and comprehensive workflow management.
 
 ## Tech Stack
-- **Backend**: FastAPI, Motor (MongoDB), Pydantic, JWT, ReportLab, Passlib
-- **Frontend**: React, React Router, Tailwind CSS, Shadcn/UI, Axios, sonner, lucide-react
-- **Database**: MongoDB
+- **Backend:** FastAPI, Motor (async MongoDB), Pydantic, JWT, Passlib, ReportLab
+- **Frontend:** React, React Router, Tailwind CSS, Shadcn/UI, Axios
+- **Database:** MongoDB
 
-## What's Been Implemented
-
-### Phase 1-6 (Foundation)
+## Core Features (Implemented)
 - JWT authentication with role-based access
-- Customer CRUD with addresses
-- Order CRUD with full lifecycle (new -> packaging -> packed -> dispatched)
-- PI (Proforma Invoice) builder with PDF generation
-- Role-based dashboards for all roles
-- PDF generation for PIs, Order Sheets, Address Labels
-- Real-time notifications for telecallers
+- Customer management with addresses
+- Order creation, editing, status workflow (new → packaging → packed → dispatched)
+- Proforma Invoice (PI) creation, editing, PDF generation, PI-to-order conversion
+- Payment tracking with screenshots
+- Packaging dashboard with image uploads
+- Dispatch management
+- PDF generation (order prints, address labels, PI PDFs)
+- Tax invoice generation with UPI QR codes
+- Formulation management
+- Item analytics
 
-### Phase 7 Part 1
-- Full Order Edit page with role-based field access
-- PI to Order conversion
-- "Delete User" button removed
-- Formulation save bug fixed
-- Image deletion for payment/packaging images
-- Telecaller notifications (UI + sound)
-- Bulk shipping address printing
+## Phase 8 Features (Completed - March 2026)
+1. **Print Behavior Fix** - Print triggers browser print dialog directly via iframe
+2. **Customer Deletion Restriction** - Admin-only with two-step confirmation
+3. **Negative Value Restriction** - min=0 on Rate/Amount in all order/PI forms
+4. **Additional Charges System** - Dynamic entries with name, amount, GST% per charge
+5. **Copyable Details** - Phone, billing/shipping address on Order Detail (click-to-copy)
+6. **Shipping Method Column** - Added to All Orders table
+7. **Edit Shipping in Dispatch** - Editable shipping method in dispatch dashboard
+8. **Duplicate Order/PI** - Duplicate button pre-fills new form
+9. **Mobile Camera Upload Fix** - Backend handles missing/wrong extensions from cameras
+10. **Camera in Edit Mode** - Camera buttons alongside Gallery/Files in edit forms
 
-### Phase 7 Part 2
-- PDF design overhaul (PI + Order Sheet)
-- Logo aspect ratio fix
-- Non-GST PI renamed to "Quotation"
+## API Endpoints
+- `POST /api/auth/login` - JWT login
+- `GET/POST /api/customers` - List/Create customers
+- `DELETE /api/customers/{id}` - Admin-only delete
+- `GET/POST /api/orders` - List/Create orders
+- `PUT /api/orders/{id}` - Update order
+- `PUT /api/orders/{id}/packaging` - Update packaging
+- `PUT /api/orders/{id}/dispatch` - Dispatch order
+- `PUT /api/orders/{id}/shipping-method` - Update shipping method (Admin/Dispatch/Packaging)
+- `POST /api/orders/{id}/duplicate` - Get order data for duplication
+- `POST /api/proforma-invoices/{id}/duplicate` - Get PI data for duplication
+- `GET/POST /api/proforma-invoices` - List/Create PIs
+- `PUT /api/proforma-invoices/{id}` - Update PI
+- `POST /api/upload` - File upload (camera-compatible)
 
-### Phase 7 Part 3 (COMPLETED - March 22, 2026)
-- **Share Feature**: PI PDF sharing via navigator.share (mobile) or download+WhatsApp (desktop)
-- **Share Packing Images**: From OrderDetail page, shares actual image files
-- **Share Tax Invoice**: PDF file sharing for Admin, Telecaller, Field Manager
-- **Field Manager Role**: Same as Telecaller, own orders only, no payment check access
-- **Accounts Role**: Invoice uploads (PDF only, GST orders), payment verification (all orders)
-- **Accounts Dashboard**: Metrics (invoices, GST without invoice, payments received/pending)
-- **Payment Check System**: Only accounts can update, re-check logic on payment update
-- **Sales (Payments Received)**: Separate section in Telecaller and Admin dashboards
-- **Payment Filters**: Period, Status, Payment, Check Status in All Orders page
-- **WhatsApp Integration**: wa.me links with customer phone numbers
-
-## Key API Endpoints
-- POST /api/auth/login - JWT login
-- GET/POST /api/orders - List/Create orders
-- PUT /api/orders/{id} - Update order (triggers re-check if payment changed)
-- PUT /api/orders/{id}/invoice - Upload tax invoice (accounts only)
-- DELETE /api/orders/{id}/invoice - Delete invoice (accounts only)
-- PUT /api/orders/{id}/payment-check - Update payment check (accounts ONLY)
-- GET /api/reports/dashboard - Dashboard stats
-
-### UI/UX Improvements (March 22, 2026)
-- Formulation dialog shows Qty + Amt (excl. GST) beside item names (Admin & Packaging)
-- All tables have mobile horizontal scroll (min-width enforced, no hidden columns)
-- Image uploads provide dual buttons: "Gallery/Files" + "Camera" (with capture="environment")
-- Admin Dashboard mobile responsive: compact scrollable tabs, 2-col cards, proper spacing
-- Favicon updated to CitSpray logo, page title to "CitSpray OMS"
-
-## Pending/Future Tasks
-- GET /api/reports/payment-sales - Sales from received payments (admin/telecaller)
-- GET /api/reports/accounts-dashboard - Accounts metrics
-- GET/POST /api/proforma-invoices - PI management
-- GET /api/proforma-invoices/{id}/pdf - Download PI PDF
-
-## Mocked APIs
-- GST verification (/api/gst-verify/{gst_no})
-- Pincode lookup (/api/pincode)
-
-## Test Credentials
+## Credentials
 - Admin: admin / admin123
-- Accounts: accounts1 / accounts123
-- Field Manager: field1 / field123
 
-### Correction Patch (March 22, 2026)
-- Restored Units column in PI PDF (GST + Non-GST)
-- PI status auto-changes to "Converted" on conversion (new PATCH endpoint)
-- Telecaller can Edit/Delete own orders (pre-dispatch only)
-- Admin can now also mark payment as Received/Pending (alongside Accounts)
-- Payment Verification section added to OrderDetail for Admin and Accounts (with Mark Received/Pending buttons)
-- Telecaller sees read-only payment check status in OrderDetail
-- **P2**: Performance optimization (pagination on all list endpoints)
-- **P2**: server.py modularization into FastAPI routers (2400+ lines)
-- **P3**: Export to CSV/Excel
-- **P3**: WhatsApp integration for automated dispatch notifications
-- **P3**: Audit log for all changes
-- **P3**: Customer payment history ledger
+## Upcoming Tasks
+- **P1:** Pagination on all major data tables
+- **P2:** Refactor server.py into modular FastAPI routers
+
+## Future/Backlog
+- P3: Export to CSV/Excel
+- P3: WhatsApp integration for dispatch notifications
+- P3: Comprehensive Audit Log
+- P3: Customer payment history ledger
+
+## Known Mocked APIs
+- GST verification (`/api/gst-verify/{gst_no}`)
+- Pincode lookup (`/api/pincode`)
