@@ -30,7 +30,7 @@ export async function mobilePrintPdf(pdfBlob) {
   if (!printWindow) return; // Popup blocked fallback
 
   const imagesHtml = imageDataUrls
-    .map((src) => `<img src="${src}" style="width:100%;page-break-after:always;display:block;" />`)
+    .map((src, i) => `<img src="${src}" style="width:100%;display:block;${i < imageDataUrls.length - 1 ? "page-break-after:always;" : ""}" />`)
     .join("");
 
   printWindow.document.write(
