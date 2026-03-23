@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import api from "@/lib/api";
+import { compressImage } from "@/lib/compressImage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -113,6 +114,7 @@ export default function CreateOrder() {
   const [courierName, setCourierName] = useState("");
   const [transporterName, setTransporterName] = useState("");
   const [shippingCharge, setShippingCharge] = useState(0);
+  const [localCharge, setLocalCharge] = useState(0);
   const [additionalCharges, setAdditionalCharges] = useState([]);
   const [remark, setRemark] = useState("");
   const [paymentStatus, setPaymentStatus] = useState("unpaid");
@@ -150,7 +152,10 @@ export default function CreateOrder() {
       setCourierName(pi.courier_name || "");
       setTransporterName(pi.transporter_name || "");
       setShippingCharge(pi.shipping_charge || 0);
-      setAdditionalCharges(pi.additional_charges || []);
+      const allCharges = pi.additional_charges || [];
+      const localEntry = allCharges.find(c => c.name === "Local Charges");
+      setLocalCharge(localEntry?.amount || 0);
+      setAdditionalCharges(allCharges.filter(c => c.name !== "Local Charges"));
       setRemark(pi.remark || "");
       setFreeSamples(pi.free_samples || []);
       // Pre-select customer
@@ -188,7 +193,10 @@ export default function CreateOrder() {
       setCourierName(d.courier_name || "");
       setTransporterName(d.transporter_name || "");
       setShippingCharge(d.shipping_charge || 0);
-      setAdditionalCharges(d.additional_charges || []);
+      const allCharges2 = d.additional_charges || [];
+      const localEntry2 = allCharges2.find(c => c.name === "Local Charges");
+      setLocalCharge(localEntry2?.amount || 0);
+      setAdditionalCharges(allCharges2.filter(c => c.name !== "Local Charges"));
       setRemark(d.remark || "");
       setFreeSamples(d.free_samples || []);
       setModeOfPayment(d.mode_of_payment || "");
@@ -242,7 +250,7 @@ export default function CreateOrder() {
     if (gstApplicable && c.gst_percent > 0) return s + +((c.amount || 0) * c.gst_percent / 100).toFixed(2);
     return s;
   }, 0);
-  const rawTotal = subtotal + totalItemGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst;
+  const rawTotal = subtotal + totalItemGst + shippingCharge + shippingGst + localCharge + totalAdditional + totalAdditionalGst;
   const grandTotal = Math.ceil(rawTotal);
   const balanceAmount = paymentStatus === "full" ? 0 : paymentStatus === "partial" ? Math.max(0, grandTotal - amountPaid) : grandTotal;
 
@@ -250,8 +258,9 @@ export default function CreateOrder() {
     const files = e.target.files;
     if (!files?.length) return;
     for (const file of files) {
+      const compressed = await compressImage(file);
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("file", compressed);
       try {
         const res = await api.post("/upload", formData, { headers: { "Content-Type": "multipart/form-data" } });
         setPaymentScreenshots(prev => [...prev, res.data.url]);
@@ -355,10 +364,13 @@ export default function CreateOrder() {
         transporter_name: transporterName,
         shipping_charge: shippingCharge,
         shipping_gst: shippingGst,
-        additional_charges: additionalCharges.filter(c => c.name).map(c => ({
-          name: c.name, amount: Math.max(0, c.amount || 0), gst_percent: c.gst_percent || 0,
-          gst_amount: gstApplicable && c.gst_percent > 0 ? +((c.amount || 0) * c.gst_percent / 100).toFixed(2) : 0,
-        })),
+        additional_charges: [
+          ...(localCharge > 0 ? [{ name: "Local Charges", amount: localCharge, gst_percent: 0, gst_amount: 0 }] : []),
+          ...additionalCharges.filter(c => c.name).map(c => ({
+            name: c.name, amount: Math.max(0, c.amount || 0), gst_percent: c.gst_percent || 0,
+            gst_amount: gstApplicable && c.gst_percent > 0 ? +((c.amount || 0) * c.gst_percent / 100).toFixed(2) : 0,
+          })),
+        ],
         remark,
         payment_status: paymentStatus,
         amount_paid: paymentStatus === "full" ? grandTotal : amountPaid,
@@ -581,19 +593,33 @@ export default function CreateOrder() {
 
       {/* Additional Charges */}
       <Card>
-        <CardHeader className="pb-3">
+        <CardHeader className="pb-3"><CardTitle className="text-base">Charges</CardTitle></CardHeader>
+        <CardContent className="space-y-4">
+          {/* Shipping & Local - Separate fields side by side */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label>Shipping Charges</Label>
+              <Input type="number" min={0} value={shippingCharge || ""} onChange={e => setShippingCharge(Math.max(0, +e.target.value))} placeholder="0" data-testid="shipping-charge-input" />
+            </div>
+            <div>
+              <Label>Local Charges</Label>
+              <Input type="number" min={0} value={localCharge || ""} onChange={e => setLocalCharge(Math.max(0, +e.target.value))} placeholder="0" data-testid="local-charge-input" />
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Additional Charges - Dynamic list */}
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base">Additional Charges</CardTitle>
+            <Label className="text-sm font-medium">Additional Charges</Label>
             <Button variant="outline" size="sm" onClick={() => setAdditionalCharges(p => [...p, { name: "", amount: 0, gst_percent: 0 }])} data-testid="add-charge-btn"><Plus className="w-4 h-4 mr-1" /> Add Charge</Button>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {additionalCharges.length === 0 && <p className="text-sm text-muted-foreground">No additional charges. Add shipping, local, or other charges.</p>}
+          {additionalCharges.length === 0 && <p className="text-sm text-muted-foreground">No additional charges. Add insurance, handling, or other charges.</p>}
           {additionalCharges.map((charge, idx) => (
             <div key={idx} className="flex gap-2 items-end" data-testid={`charge-${idx}`}>
               <div className="flex-1">
                 <Label className="text-xs">Charge Name</Label>
-                <Input value={charge.name} onChange={e => { const c = [...additionalCharges]; c[idx] = { ...c[idx], name: e.target.value }; setAdditionalCharges(c); }} placeholder="e.g. Shipping, Local, Insurance" data-testid={`charge-name-${idx}`} />
+                <Input value={charge.name} onChange={e => { const c = [...additionalCharges]; c[idx] = { ...c[idx], name: e.target.value }; setAdditionalCharges(c); }} placeholder="e.g. Insurance, Handling" data-testid={`charge-name-${idx}`} />
               </div>
               <div className="w-28">
                 <Label className="text-xs">Amount</Label>
@@ -693,8 +719,9 @@ export default function CreateOrder() {
           <div className="space-y-2 text-sm">
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">{"\u20B9"}{subtotal.toFixed(2)}</span></div>
             {gstApplicable && <div className="flex justify-between"><span className="text-muted-foreground">Item GST</span><span className="font-mono">{"\u20B9"}{totalItemGst.toFixed(2)}</span></div>}
-            {shippingCharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping</span><span className="font-mono">{"\u20B9"}{shippingCharge.toFixed(2)}</span></div>}
+            {shippingCharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping Charges</span><span className="font-mono">{"\u20B9"}{shippingCharge.toFixed(2)}</span></div>}
             {shippingGst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST (18%)</span><span className="font-mono">{"\u20B9"}{shippingGst.toFixed(2)}</span></div>}
+            {localCharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Local Charges</span><span className="font-mono">{"\u20B9"}{localCharge.toFixed(2)}</span></div>}
             {additionalCharges.filter(c => c.amount > 0).map((c, i) => (
               <div key={i}>
                 <div className="flex justify-between"><span className="text-muted-foreground">{c.name || "Charge"}</span><span className="font-mono">{"\u20B9"}{(c.amount || 0).toFixed(2)}</span></div>

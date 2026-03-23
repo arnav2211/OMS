@@ -22,9 +22,9 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - Item analytics
 
 ## Phase 8 Features (Completed - March 2026)
-1. **Print Behavior Fix** - Print triggers browser print dialog directly via iframe
+1. **Print Behavior Fix** - Desktop: auto-triggers print dialog via iframe. Mobile: opens PDF in new window with auto-print
 2. **Customer Deletion Restriction** - Admin-only with two-step confirmation
-3. **Negative Value Restriction** - min=0 on Rate/Amount in all order/PI forms
+3. **Negative Value Restriction** - min=0 on all Rate/Amount inputs
 4. **Additional Charges System** - Dynamic entries with name, amount, GST% per charge
 5. **Copyable Details** - Phone, billing/shipping address on Order Detail (click-to-copy)
 6. **Shipping Method Column** - Added to All Orders table
@@ -33,20 +33,18 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 9. **Mobile Camera Upload Fix** - Backend handles missing/wrong extensions from cameras
 10. **Camera in Edit Mode** - Camera buttons alongside Gallery/Files in edit forms
 
-## API Endpoints
-- `POST /api/auth/login` - JWT login
-- `GET/POST /api/customers` - List/Create customers
-- `DELETE /api/customers/{id}` - Admin-only delete
-- `GET/POST /api/orders` - List/Create orders
-- `PUT /api/orders/{id}` - Update order
-- `PUT /api/orders/{id}/packaging` - Update packaging
-- `PUT /api/orders/{id}/dispatch` - Dispatch order
-- `PUT /api/orders/{id}/shipping-method` - Update shipping method (Admin/Dispatch/Packaging)
-- `POST /api/orders/{id}/duplicate` - Get order data for duplication
-- `POST /api/proforma-invoices/{id}/duplicate` - Get PI data for duplication
-- `GET/POST /api/proforma-invoices` - List/Create PIs
-- `PUT /api/proforma-invoices/{id}` - Update PI
-- `POST /api/upload` - File upload (camera-compatible)
+## Phase 9 Features (Completed - March 2026)
+1. **Charges UI Restructured** - 3 separate sections:
+   - Shipping Charges (separate input)
+   - Local Charges (separate input)
+   - Additional Charges (dynamic list with name, amount, GST%)
+   - Applied to: CreateOrder, EditOrder, PIBuilder
+   - Local charges stored as `additional_charges` entry with name "Local Charges" (zero backend change)
+2. **Image Compression** - All image uploads compressed before upload:
+   - Max 1280px width/height, JPEG quality 0.7
+   - Target: ~3MB → ~100-200KB
+   - Applied to: CreateOrder, EditOrder, PackagingDashboard
+   - Utility: `/app/frontend/src/lib/compressImage.js`
 
 ## Credentials
 - Admin: admin / admin123
