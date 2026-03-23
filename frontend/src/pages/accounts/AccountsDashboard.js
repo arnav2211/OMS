@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Upload, Trash2, FileText, CheckCircle, Clock, RefreshCw, AlertTriangle } from "lucide-react";
+import { Upload, Trash2, FileText, CheckCircle, Clock, RefreshCw, AlertTriangle, BanknoteIcon } from "lucide-react";
 import { Link } from "react-router-dom";
 
 const PERIODS = [
@@ -135,6 +135,8 @@ export default function AccountsDashboard() {
   };
 
   const filteredAllOrders = allOrders.filter(o => {
+    // Hide unpaid orders — nothing to check
+    if (o.payment_status === "unpaid") return false;
     if (payStatusFilter !== "all") {
       const map = { "fully_paid": "full", "partial": "partial", "unpaid": "unpaid" };
       if (o.payment_status !== (map[payStatusFilter] || payStatusFilter)) return false;
@@ -169,12 +171,13 @@ export default function AccountsDashboard() {
 
       {/* Metrics */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           <MetricCard icon={FileText} label="Invoices Uploaded" value={stats.total_invoices} iconCls="bg-blue-100 text-blue-700" />
           <MetricCard icon={AlertTriangle} label="GST Without Invoice" value={stats.gst_without_invoice} iconCls="bg-orange-100 text-orange-700" />
           <MetricCard icon={CheckCircle} label="Payments Received" value={stats.payments_received} iconCls="bg-green-100 text-green-700" />
           <MetricCard icon={Clock} label="Payments Pending" value={stats.payments_pending} iconCls="bg-yellow-100 text-yellow-700" />
           <MetricCard icon={FileText} label="GST Orders Total" value={stats.gst_total} iconCls="bg-purple-100 text-purple-700" />
+          <MetricCard icon={BanknoteIcon} label="Unpaid Orders" value={stats.unpaid_orders} iconCls="bg-red-100 text-red-700" />
         </div>
       )}
 
@@ -270,7 +273,6 @@ export default function AccountsDashboard() {
                       <SelectItem value="all">All Payments</SelectItem>
                       <SelectItem value="full">Fully Paid</SelectItem>
                       <SelectItem value="partial">Partially Paid</SelectItem>
-                      <SelectItem value="unpaid">Unpaid</SelectItem>
                     </SelectContent>
                   </Select>
                   <Select value={checkStatusFilter} onValueChange={setCheckStatusFilter}>
