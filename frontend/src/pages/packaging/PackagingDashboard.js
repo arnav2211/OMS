@@ -255,7 +255,7 @@ export default function PackagingDashboard() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               Pack Order {selectedOrder?.order_number}
-              {selectedOrder && (
+              {selectedOrder && formulationVisible && (
                 <Button variant="ghost" size="sm" onClick={() => loadFormulationHistory(selectedOrder.customer_id)} data-testid="view-formulation-history">
                   <History className="w-4 h-4 mr-1" /> History
                 </Button>
