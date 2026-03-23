@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import api from "@/lib/api";
+import { mobilePrintPdf } from "@/lib/mobilePrint";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -123,13 +124,11 @@ export default function AllOrders() {
     setPrintLoading(true);
     try {
       const res = await api.post("/orders/print-addresses", { order_ids: [...selectedOrders] }, { responseType: "blob" });
-      const blobUrl = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
       const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
       if (isMobile) {
-        const w = window.open('', '_blank');
-        w.document.write('<html><head><title>Print</title><style>body,html{margin:0;padding:0;height:100%}iframe{width:100%;height:100%;border:none}</style></head><body><iframe id="pdf" src="' + blobUrl + '"></iframe><script>document.getElementById("pdf").onload=function(){setTimeout(function(){window.print()},800)};<\/script></body></html>');
-        w.document.close();
+        mobilePrintPdf(new Blob([res.data], { type: "application/pdf" }));
       } else {
+        const blobUrl = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
         const iframe = document.createElement("iframe");
         iframe.style.position = "fixed";
         iframe.style.top = "-10000px";
