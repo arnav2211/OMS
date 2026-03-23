@@ -122,26 +122,23 @@ export default function OrderDetail() {
   const handlePrint = () => {
     const token = localStorage.getItem("token");
     const url = `${process.env.REACT_APP_BACKEND_URL}/api/orders/${id}/print?token=${token}`;
-    // Fetch the PDF and open in a hidden iframe to trigger print dialog
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     fetch(url).then(res => res.blob()).then(blob => {
       const blobUrl = URL.createObjectURL(blob);
-      const iframe = document.createElement("iframe");
-      iframe.style.position = "fixed";
-      iframe.style.top = "-10000px";
-      iframe.style.left = "-10000px";
-      iframe.style.width = "0";
-      iframe.style.height = "0";
-      iframe.src = blobUrl;
-      document.body.appendChild(iframe);
-      iframe.onload = () => {
-        setTimeout(() => {
-          iframe.contentWindow.print();
-        }, 500);
-      };
-    }).catch(() => {
-      // Fallback: open in new tab
-      window.open(url, "_blank");
-    });
+      if (isMobile) {
+        window.open(blobUrl, "_blank");
+      } else {
+        const iframe = document.createElement("iframe");
+        iframe.style.position = "fixed";
+        iframe.style.top = "-10000px";
+        iframe.style.left = "-10000px";
+        iframe.style.width = "0";
+        iframe.style.height = "0";
+        iframe.src = blobUrl;
+        document.body.appendChild(iframe);
+        iframe.onload = () => { setTimeout(() => { iframe.contentWindow.print(); }, 500); };
+      }
+    }).catch(() => { window.open(url, "_blank"); });
   };
 
   const copyToClipboard = (text, label) => {

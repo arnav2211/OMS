@@ -124,17 +124,20 @@ export default function AllOrders() {
     try {
       const res = await api.post("/orders/print-addresses", { order_ids: [...selectedOrders] }, { responseType: "blob" });
       const blobUrl = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
-      const iframe = document.createElement("iframe");
-      iframe.style.position = "fixed";
-      iframe.style.top = "-10000px";
-      iframe.style.left = "-10000px";
-      iframe.style.width = "0";
-      iframe.style.height = "0";
-      iframe.src = blobUrl;
-      document.body.appendChild(iframe);
-      iframe.onload = () => {
-        setTimeout(() => { iframe.contentWindow.print(); }, 500);
-      };
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobile) {
+        window.open(blobUrl, "_blank");
+      } else {
+        const iframe = document.createElement("iframe");
+        iframe.style.position = "fixed";
+        iframe.style.top = "-10000px";
+        iframe.style.left = "-10000px";
+        iframe.style.width = "0";
+        iframe.style.height = "0";
+        iframe.src = blobUrl;
+        document.body.appendChild(iframe);
+        iframe.onload = () => { setTimeout(() => { iframe.contentWindow.print(); }, 500); };
+      }
     } catch { toast.error("Failed to generate address PDF"); }
     finally { setPrintLoading(false); }
   };
