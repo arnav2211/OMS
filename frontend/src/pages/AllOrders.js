@@ -126,9 +126,8 @@ export default function AllOrders() {
       const blobUrl = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
       const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
       if (isMobile) {
-        const w = window.open('', '_blank');
-        w.document.write('<html><head><title>Print</title><style>body,html{margin:0;padding:0;height:100%}iframe{width:100%;height:100%;border:none}</style></head><body><iframe id="pdf" src="' + blobUrl + '"></iframe><script>document.getElementById("pdf").onload=function(){setTimeout(function(){window.print()},800)};<\/script></body></html>');
-        w.document.close();
+        const w = window.open(blobUrl, '_blank');
+        if (w) { setTimeout(() => { try { w.print(); } catch(e) {} }, 1000); }
       } else {
         const iframe = document.createElement("iframe");
         iframe.style.position = "fixed";
