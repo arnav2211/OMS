@@ -83,6 +83,7 @@ export default function PIBuilder() {
   const [gstApplicable, setGstApplicable] = useState(false);
   const [showRate, setShowRate] = useState(true);
   const [shippingCharge, setShippingCharge] = useState(0);
+  const [localCharge, setLocalCharge] = useState(0);
   const [additionalCharges, setAdditionalCharges] = useState([]);
   const [remark, setRemark] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -160,7 +161,7 @@ export default function PIBuilder() {
     if (gstApplicable && c.gst_percent > 0) return s + +((c.amount || 0) * c.gst_percent / 100).toFixed(2);
     return s;
   }, 0);
-  const grandTotal = Math.ceil(subtotal + totalGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst);
+  const grandTotal = Math.ceil(subtotal + totalGst + shippingCharge + shippingGst + localCharge + totalAdditional + totalAdditionalGst);
 
   const lookupPincode = async (pincode) => {
     if (!/^\d{6}$/.test(pincode)) return;
@@ -187,7 +188,7 @@ export default function PIBuilder() {
 
   const openNewPI = () => {
     setEditingPi(null); setSelectedCustomer(null); setCustomerSearch(""); setItems([emptyItem()]);
-    setGstApplicable(false); setShowRate(true); setShippingCharge(0); setAdditionalCharges([]); setRemark("");
+    setGstApplicable(false); setShowRate(true); setShippingCharge(0); setLocalCharge(0); setAdditionalCharges([]); setRemark("");
     setBillingAddress(null); setShippingAddress(null); setSameAsBilling(true); setFreeSamples([]);
     setShowBuilder(true);
   };
@@ -198,7 +199,12 @@ export default function PIBuilder() {
     setSelectedCustomer(cust || { id: pi.customer_id, name: pi.customer_name });
     setItems(pi.items.length ? pi.items.map(i => ({ ...i })) : [emptyItem()]);
     setGstApplicable(pi.gst_applicable); setShowRate(pi.show_rate !== false);
-    setShippingCharge(pi.shipping_charge || 0); setAdditionalCharges(pi.additional_charges || []); setRemark(pi.remark || "");
+    setShippingCharge(pi.shipping_charge || 0);
+    const allCharges = pi.additional_charges || [];
+    const localEntry = allCharges.find(c => c.name === "Local Charges");
+    setLocalCharge(localEntry?.amount || 0);
+    setAdditionalCharges(allCharges.filter(c => c.name !== "Local Charges"));
+    setRemark(pi.remark || "");
     setBillingAddress(pi.billing_address || null); setShippingAddress(pi.shipping_address || null);
     setSameAsBilling(pi.billing_address_id === pi.shipping_address_id);
     setFreeSamples(pi.free_samples || []);
@@ -216,10 +222,13 @@ export default function PIBuilder() {
           product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description
         })),
         gst_applicable: gstApplicable, show_rate: showRate, shipping_charge: shippingCharge,
-        additional_charges: additionalCharges.filter(c => c.name).map(c => ({
-          name: c.name, amount: Math.max(0, c.amount || 0), gst_percent: c.gst_percent || 0,
-          gst_amount: gstApplicable && c.gst_percent > 0 ? +((c.amount || 0) * c.gst_percent / 100).toFixed(2) : 0,
-        })),
+        additional_charges: [
+          ...(localCharge > 0 ? [{ name: "Local Charges", amount: localCharge, gst_percent: 0, gst_amount: 0 }] : []),
+          ...additionalCharges.filter(c => c.name).map(c => ({
+            name: c.name, amount: Math.max(0, c.amount || 0), gst_percent: c.gst_percent || 0,
+            gst_amount: gstApplicable && c.gst_percent > 0 ? +((c.amount || 0) * c.gst_percent / 100).toFixed(2) : 0,
+          })),
+        ],
         remark,
         free_samples: freeSamples.filter(s => s.item_name),
         billing_address_id: billingAddress?.id || "",
@@ -332,7 +341,10 @@ export default function PIBuilder() {
                               setItems(d.items?.length ? d.items.map(i => ({ ...i })) : [emptyItem()]);
                               setGstApplicable(d.gst_applicable); setShowRate(d.show_rate !== false);
                               setShippingCharge(d.shipping_charge || 0);
-                              setAdditionalCharges(d.additional_charges || []);
+                              const dupCharges = d.additional_charges || [];
+                              const dupLocal = dupCharges.find(c => c.name === "Local Charges");
+                              setLocalCharge(dupLocal?.amount || 0);
+                              setAdditionalCharges(dupCharges.filter(c => c.name !== "Local Charges"));
                               setRemark(d.remark || "");
                               setBillingAddress(d.billing_address || null);
                               setShippingAddress(d.shipping_address || null);
@@ -505,21 +517,31 @@ export default function PIBuilder() {
             )}
           </Card>
 
-          {/* Additional Charges */}
+          {/* Charges */}
           <Card>
-            <CardHeader className="pb-3">
+            <CardHeader className="pb-3"><CardTitle className="text-base">Charges</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label>Shipping Charges</Label>
+                  <Input type="number" min={0} value={shippingCharge || ""} onChange={e => setShippingCharge(Math.max(0, +e.target.value))} placeholder="0" data-testid="pi-shipping-charge-input" />
+                </div>
+                <div>
+                  <Label>Local Charges</Label>
+                  <Input type="number" min={0} value={localCharge || ""} onChange={e => setLocalCharge(Math.max(0, +e.target.value))} placeholder="0" data-testid="pi-local-charge-input" />
+                </div>
+              </div>
+              <Separator />
               <div className="flex items-center justify-between">
-                <CardTitle className="text-base">Additional Charges</CardTitle>
+                <Label className="text-sm font-medium">Additional Charges</Label>
                 <Button variant="outline" size="sm" onClick={() => setAdditionalCharges(p => [...p, { name: "", amount: 0, gst_percent: 0 }])} data-testid="pi-add-charge-btn"><Plus className="w-4 h-4 mr-1" /> Add Charge</Button>
               </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {additionalCharges.length === 0 && <p className="text-sm text-muted-foreground">No additional charges. Add shipping, local, or other charges.</p>}
+              {additionalCharges.length === 0 && <p className="text-sm text-muted-foreground">No additional charges. Add insurance, handling, or other charges.</p>}
               {additionalCharges.map((charge, idx) => (
                 <div key={idx} className="flex gap-2 items-end" data-testid={`pi-charge-${idx}`}>
                   <div className="flex-1">
                     <Label className="text-xs">Charge Name</Label>
-                    <Input value={charge.name} onChange={e => { const c = [...additionalCharges]; c[idx] = { ...c[idx], name: e.target.value }; setAdditionalCharges(c); }} placeholder="e.g. Shipping, Local, Insurance" />
+                    <Input value={charge.name} onChange={e => { const c = [...additionalCharges]; c[idx] = { ...c[idx], name: e.target.value }; setAdditionalCharges(c); }} placeholder="e.g. Insurance, Handling" />
                   </div>
                   <div className="w-28">
                     <Label className="text-xs">Amount</Label>
@@ -540,7 +562,7 @@ export default function PIBuilder() {
             </CardContent>
           </Card>
 
-          {/* Shipping & Remark */}
+          {/* Remark */}
           <Card>
             <CardContent className="pt-6 space-y-4">
               <div><Label>Remarks</Label><Textarea value={remark} onChange={e => setRemark(e.target.value)} /></div>
@@ -554,8 +576,9 @@ export default function PIBuilder() {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">{"\u20B9"}{subtotal.toFixed(2)}</span></div>
                 {gstApplicable && <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-mono">{"\u20B9"}{totalGst.toFixed(2)}</span></div>}
-                {shippingCharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping</span><span className="font-mono">{"\u20B9"}{shippingCharge.toFixed(2)}</span></div>}
+                {shippingCharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping Charges</span><span className="font-mono">{"\u20B9"}{shippingCharge.toFixed(2)}</span></div>}
                 {shippingGst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST (18%)</span><span className="font-mono">{"\u20B9"}{shippingGst.toFixed(2)}</span></div>}
+                {localCharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Local Charges</span><span className="font-mono">{"\u20B9"}{localCharge.toFixed(2)}</span></div>}
                 {additionalCharges.filter(c => c.amount > 0).map((c, i) => (
                   <div key={i}>
                     <div className="flex justify-between"><span className="text-muted-foreground">{c.name || "Charge"}</span><span className="font-mono">{"\u20B9"}{(c.amount || 0).toFixed(2)}</span></div>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import api from "@/lib/api";
+import { compressImage } from "@/lib/compressImage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -100,8 +101,9 @@ export default function PackagingDashboard() {
     setUploading(true);
     const urls = [];
     for (const file of files) {
+      const compressed = await compressImage(file);
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("file", compressed);
       try {
         const res = await api.post("/upload", formData, { headers: { "Content-Type": "multipart/form-data" } });
         urls.push(res.data.url);
