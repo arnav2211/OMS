@@ -34,7 +34,7 @@ export async function mobilePrintPdf(pdfBlob) {
     .join("");
 
   printWindow.document.write(
-    `<!DOCTYPE html><html><head><title>Print</title><style>@media print{body{margin:0}img{page-break-after:always;width:100%}}body{margin:0;padding:0;background:#fff}</style></head><body>${imagesHtml}<script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>`
+    `<!DOCTYPE html><html><head><title>Print</title><style>@media print{body{margin:0}img{width:100%}img:last-child{page-break-after:auto}}body{margin:0;padding:0;background:#fff}</style></head><body>${imagesHtml}<script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>`
   );
   printWindow.document.close();
 }
