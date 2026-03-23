@@ -165,7 +165,23 @@ export default function PackagingDashboard() {
   const backendUrl = process.env.REACT_APP_BACKEND_URL;
   const handlePrint = (orderId) => {
     const token = localStorage.getItem("token");
-    window.open(`${backendUrl}/api/orders/${orderId}/print?token=${token}`, '_blank');
+    const url = `${backendUrl}/api/orders/${orderId}/print?token=${token}`;
+    fetch(url).then(res => res.blob()).then(blob => {
+      const blobUrl = URL.createObjectURL(blob);
+      const iframe = document.createElement("iframe");
+      iframe.style.position = "fixed";
+      iframe.style.top = "-10000px";
+      iframe.style.left = "-10000px";
+      iframe.style.width = "0";
+      iframe.style.height = "0";
+      iframe.src = blobUrl;
+      document.body.appendChild(iframe);
+      iframe.onload = () => {
+        setTimeout(() => { iframe.contentWindow.print(); }, 500);
+      };
+    }).catch(() => {
+      window.open(url, "_blank");
+    });
   };
 
   return (

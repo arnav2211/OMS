@@ -25,6 +25,7 @@ export default function DispatchDashboard() {
   const [courierName, setCourierName] = useState("");
   const [transporterName, setTransporterName] = useState("");
   const [lrNo, setLrNo] = useState("");
+  const [editShippingMethod, setEditShippingMethod] = useState("");
 
   useEffect(() => { loadOrders(); }, []);
 
@@ -35,8 +36,17 @@ export default function DispatchDashboard() {
     } catch { } finally { setLoading(false); }
   };
 
+  const SHIPPING_METHODS = [
+    { value: "transport", label: "Transport" },
+    { value: "courier", label: "Courier" },
+    { value: "porter", label: "Porter" },
+    { value: "self_arranged", label: "Self-Arranged" },
+    { value: "office_collection", label: "Office Collection" },
+  ];
+
   const openDispatch = (order) => {
     setSelectedOrder(order);
+    setEditShippingMethod(order.shipping_method || "");
     setCourierName(order.dispatch?.courier_name || order.courier_name || "");
     setTransporterName(order.dispatch?.transporter_name || order.transporter_name || "");
     setLrNo(order.dispatch?.lr_no || "");
@@ -45,7 +55,7 @@ export default function DispatchDashboard() {
 
   const handleDispatch = async () => {
     if (!selectedOrder) return;
-    const method = selectedOrder.shipping_method;
+    const method = editShippingMethod || selectedOrder.shipping_method;
 
     // For transport: LR is mandatory for dispatch/packaging
     if (method === "transport" && ["dispatch", "packaging"].includes(user?.role) && !lrNo) {
@@ -63,8 +73,25 @@ export default function DispatchDashboard() {
         transporter_name: transporterName,
         lr_no: lrNo,
         dispatch_type: method,
+        shipping_method: method,
       });
       toast.success("Order dispatched!");
+      setShowDispatch(false);
+      loadOrders();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed");
+    }
+  };
+
+  const handleUpdateShipping = async () => {
+    if (!selectedOrder) return;
+    try {
+      await api.put(`/orders/${selectedOrder.id}/shipping-method`, {
+        shipping_method: editShippingMethod,
+        courier_name: courierName,
+        transporter_name: transporterName,
+      });
+      toast.success("Shipping method updated!");
       setShowDispatch(false);
       loadOrders();
     } catch (err) {
@@ -147,13 +174,22 @@ export default function DispatchDashboard() {
               <div className="text-sm">
                 <span className="text-muted-foreground">Customer:</span> {selectedOrder.customer_name}
               </div>
-              <div className="text-sm">
-                <span className="text-muted-foreground">Shipping Method:</span>{" "}
-                <span className="font-medium">{getShippingLabel(selectedOrder.shipping_method)}</span>
+
+              {/* Editable shipping method */}
+              <div>
+                <Label>Shipping Method</Label>
+                <Select value={editShippingMethod} onValueChange={setEditShippingMethod}>
+                  <SelectTrigger data-testid="dispatch-shipping-method-select"><SelectValue placeholder="Select method" /></SelectTrigger>
+                  <SelectContent>
+                    {SHIPPING_METHODS.map(m => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               {/* Courier dispatch */}
-              {selectedOrder.shipping_method === "courier" && (
+              {editShippingMethod === "courier" && (
                 <div>
                   <Label>Courier *</Label>
                   <Select value={courierName} onValueChange={setCourierName}>
@@ -168,7 +204,7 @@ export default function DispatchDashboard() {
               )}
 
               {/* Transport dispatch */}
-              {selectedOrder.shipping_method === "transport" && (
+              {editShippingMethod === "transport" && (
                 <>
                   <div>
                     <Label>Transporter Name</Label>
@@ -192,7 +228,7 @@ export default function DispatchDashboard() {
               )}
 
               {/* For courier, also show LR field */}
-              {selectedOrder.shipping_method === "courier" && (
+              {editShippingMethod === "courier" && (
                 <div>
                   <Label>Tracking Number</Label>
                   <Input
@@ -205,9 +241,9 @@ export default function DispatchDashboard() {
               )}
 
               {/* Porter / Self-arranged / Office Collection: just dispatch */}
-              {NO_LR_METHODS.includes(selectedOrder.shipping_method) && (
+              {NO_LR_METHODS.includes(editShippingMethod) && (
                 <p className="text-sm text-muted-foreground p-3 rounded bg-secondary">
-                  No LR number or courier details required for {getShippingLabel(selectedOrder.shipping_method)}.
+                  No LR number or courier details required for {getShippingLabel(editShippingMethod)}.
                   Click dispatch to mark as dispatched.
                 </p>
               )}
@@ -215,9 +251,15 @@ export default function DispatchDashboard() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDispatch(false)}>Cancel</Button>
-            <Button onClick={handleDispatch} data-testid="confirm-dispatch-btn">
-              <Truck className="w-4 h-4 mr-1" /> Confirm Dispatch
-            </Button>
+            {selectedOrder?.status === "dispatched" ? (
+              <Button onClick={handleUpdateShipping} data-testid="update-shipping-btn">
+                <Truck className="w-4 h-4 mr-1" /> Update Shipping
+              </Button>
+            ) : (
+              <Button onClick={handleDispatch} data-testid="confirm-dispatch-btn">
+                <Truck className="w-4 h-4 mr-1" /> Confirm Dispatch
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
