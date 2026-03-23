@@ -142,6 +142,12 @@ class FreeSampleModel(BaseModel):
     item_name: str = ""
     description: str = ""
 
+class AdditionalChargeModel(BaseModel):
+    name: str = ""
+    amount: float = 0
+    gst_percent: int = 0
+    gst_amount: float = 0
+
 class OrderCreate(BaseModel):
     customer_id: str
     purpose: str = ""
@@ -153,6 +159,7 @@ class OrderCreate(BaseModel):
     transporter_name: str = ""
     shipping_charge: float = 0
     shipping_gst: float = 0
+    additional_charges: List[AdditionalChargeModel] = []
     remark: str = ""
     payment_status: str = "unpaid"
     amount_paid: float = 0
@@ -170,6 +177,7 @@ class DispatchUpdate(BaseModel):
     transporter_name: str = ""
     lr_no: str = ""
     dispatch_type: str = ""
+    shipping_method: str = ""
 
 class PICreate(BaseModel):
     customer_id: str
@@ -178,6 +186,7 @@ class PICreate(BaseModel):
     gst_applicable: bool = False
     show_rate: bool = True
     shipping_charge: float = 0
+    additional_charges: List[AdditionalChargeModel] = []
     remark: str = ""
     billing_address_id: str = ""
     shipping_address_id: str = ""
@@ -492,8 +501,8 @@ async def update_customer(customer_id: str, req: CustomerCreate, user=Depends(ge
 
 @api_router.delete("/customers/{customer_id}")
 async def delete_customer(customer_id: str, user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "telecaller"]:
-        raise HTTPException(status_code=403, detail="Only admin or telecaller can delete customers")
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can delete customers")
     order_count = await db.orders.count_documents({"customer_id": customer_id})
     if order_count > 0:
         raise HTTPException(status_code=400, detail=f"Cannot delete: customer has {order_count} order(s)")
@@ -654,11 +663,26 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         total_gst += item_dict["gst_amount"]
         items.append(item_dict)
 
+    # Process additional charges
+    additional_charges = []
+    total_additional = 0
+    total_additional_gst = 0
+    for charge in req.additional_charges:
+        c = charge.model_dump()
+        c["amount"] = max(0, c["amount"])
+        if req.gst_applicable and c["gst_percent"] > 0:
+            c["gst_amount"] = round(c["amount"] * c["gst_percent"] / 100, 2)
+        else:
+            c["gst_amount"] = 0
+        total_additional += c["amount"]
+        total_additional_gst += c["gst_amount"]
+        additional_charges.append(c)
+
     shipping_gst = 0
     if req.gst_applicable and req.shipping_charge > 0:
         shipping_gst = round(req.shipping_charge * 0.18, 2)
 
-    raw_total = subtotal + total_gst + req.shipping_charge + shipping_gst
+    raw_total = subtotal + total_gst + req.shipping_charge + shipping_gst + total_additional + total_additional_gst
     grand_total = math.ceil(raw_total)
 
     order_doc = {
@@ -674,8 +698,9 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "transporter_name": req.transporter_name,
         "shipping_charge": req.shipping_charge,
         "shipping_gst": shipping_gst,
+        "additional_charges": additional_charges,
         "subtotal": round(subtotal, 2),
-        "total_gst": round(total_gst + shipping_gst, 2),
+        "total_gst": round(total_gst + shipping_gst + total_additional_gst, 2),
         "grand_total": grand_total,
         "remark": req.remark,
         "status": "new",
@@ -957,7 +982,7 @@ async def update_dispatch(order_id: str, req: DispatchUpdate, user=Depends(get_c
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    shipping_method = order.get("shipping_method", "")
+    shipping_method = req.shipping_method or order.get("shipping_method", "")
     # For transport: dispatch team must provide LR number
     if shipping_method == "transport" and user["role"] in ["dispatch", "packaging"]:
         if not req.lr_no:
@@ -970,12 +995,42 @@ async def update_dispatch(order_id: str, req: DispatchUpdate, user=Depends(get_c
         "dispatched_by": user["name"],
         "dispatched_at": datetime.now(timezone.utc).isoformat()
     }
-    await db.orders.update_one(
-        {"id": order_id},
-        {"$set": {"dispatch": dispatch, "status": "dispatched", "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
+    update_fields = {
+        "dispatch": dispatch,
+        "status": "dispatched",
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    # Allow updating shipping method from dispatch
+    if req.shipping_method:
+        update_fields["shipping_method"] = req.shipping_method
+    if req.courier_name:
+        update_fields["courier_name"] = req.courier_name
+    if req.transporter_name:
+        update_fields["transporter_name"] = req.transporter_name
+    await db.orders.update_one({"id": order_id}, {"$set": update_fields})
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated
+
+
+# Update shipping method (without dispatching) - for Dispatch/Packaging/Admin
+@api_router.put("/orders/{order_id}/shipping-method")
+async def update_shipping_method(order_id: str, body: dict, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "dispatch", "packaging"]:
+        raise HTTPException(status_code=403, detail="Dispatch, packaging or admin only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    update_fields = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if "shipping_method" in body:
+        update_fields["shipping_method"] = body["shipping_method"]
+    if "courier_name" in body:
+        update_fields["courier_name"] = body["courier_name"]
+    if "transporter_name" in body:
+        update_fields["transporter_name"] = body["transporter_name"]
+    await db.orders.update_one({"id": order_id}, {"$set": update_fields})
+    updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    return updated
+
 
 # Order Delete (permanent)
 @api_router.delete("/orders/{order_id}")
@@ -1247,9 +1302,27 @@ async def verify_gst(gst_no: str, user=Depends(get_current_user)):
 # File Upload
 @api_router.post("/upload")
 async def upload_file(file: UploadFile = File(...), user=Depends(get_current_user)):
-    ext = Path(file.filename).suffix.lower()
-    if ext not in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"]:
-        raise HTTPException(status_code=400, detail="Unsupported file type")
+    # Handle mobile camera uploads which may have empty/wrong extensions
+    ext = Path(file.filename or "photo.jpg").suffix.lower() if file.filename else ""
+    # Map content types to extensions for camera uploads that lack proper extensions
+    content_type_map = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "image/heic": ".jpg",
+        "image/heif": ".jpg",
+        "application/pdf": ".pdf",
+        "application/octet-stream": ".jpg",
+    }
+    if not ext or ext == ".":
+        ext = content_type_map.get(file.content_type, ".jpg")
+    # Normalize HEIC/HEIF to jpg
+    if ext in [".heic", ".heif"]:
+        ext = ".jpg"
+    allowed = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"]
+    if ext not in allowed:
+        ext = ".jpg"  # Fallback for unknown camera formats
     filename = f"{uuid.uuid4()}{ext}"
     filepath = UPLOAD_DIR / filename
     async with aiofiles.open(filepath, 'wb') as f:
@@ -1791,6 +1864,15 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
         totals.append([Paragraph("GST:", tot_sty), Paragraph(f"₹ {order['total_gst']:.2f}", tot_sty)])
     if order.get("shipping_charge", 0) > 0:
         totals.append([Paragraph("Shipping:", tot_sty), Paragraph(f"₹ {order['shipping_charge']:.2f}", tot_sty)])
+    # Additional charges
+    for charge in order.get("additional_charges", []):
+        charge_label = charge.get("name", "Charge")
+        charge_amt = charge.get("amount", 0)
+        charge_gst = charge.get("gst_amount", 0)
+        if charge_amt > 0:
+            totals.append([Paragraph(f"{charge_label}:", tot_sty), Paragraph(f"₹ {charge_amt:.2f}", tot_sty)])
+        if charge_gst > 0:
+            totals.append([Paragraph(f"{charge_label} GST ({charge.get('gst_percent', 0)}%):", tot_sty), Paragraph(f"₹ {charge_gst:.2f}", tot_sty)])
     totals.append([Paragraph("Grand Total:", totb_sty), Paragraph(f"<b>₹ {order.get('grand_total', 0):.0f}</b>", totb_sty)])
     tt = Table(totals, colWidths=[pw - 55*mm, 55*mm])
     tt.setStyle(TableStyle([
@@ -1871,7 +1953,23 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
         total_gst += d["gst_amount"]
         items.append(d)
     shipping_gst = round(req.shipping_charge * 0.18, 2) if req.gst_applicable and req.shipping_charge > 0 else 0
-    grand_total = math.ceil(subtotal + total_gst + req.shipping_charge + shipping_gst)
+
+    # Process additional charges for PI
+    additional_charges = []
+    total_additional = 0
+    total_additional_gst = 0
+    for charge in req.additional_charges:
+        c = charge.model_dump()
+        c["amount"] = max(0, c["amount"])
+        if req.gst_applicable and c["gst_percent"] > 0:
+            c["gst_amount"] = round(c["amount"] * c["gst_percent"] / 100, 2)
+        else:
+            c["gst_amount"] = 0
+        total_additional += c["amount"]
+        total_additional_gst += c["gst_amount"]
+        additional_charges.append(c)
+
+    grand_total = math.ceil(subtotal + total_gst + req.shipping_charge + shipping_gst + total_additional + total_additional_gst)
 
     # Fetch addresses
     billing_addr = None
@@ -1891,8 +1989,9 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
         "show_rate": req.show_rate,
         "shipping_charge": req.shipping_charge,
         "shipping_gst": shipping_gst,
+        "additional_charges": additional_charges,
         "subtotal": round(subtotal, 2),
-        "total_gst": round(total_gst + shipping_gst, 2),
+        "total_gst": round(total_gst + shipping_gst + total_additional_gst, 2),
         "grand_total": grand_total,
         "remark": req.remark,
         "status": "draft",
@@ -1952,7 +2051,23 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
         total_gst += d["gst_amount"]
         items.append(d)
     shipping_gst = round(req.shipping_charge * 0.18, 2) if req.gst_applicable and req.shipping_charge > 0 else 0
-    grand_total = math.ceil(subtotal + total_gst + req.shipping_charge + shipping_gst)
+
+    # Process additional charges for PI update
+    additional_charges = []
+    total_additional = 0
+    total_additional_gst = 0
+    for charge in req.additional_charges:
+        c = charge.model_dump()
+        c["amount"] = max(0, c["amount"])
+        if req.gst_applicable and c["gst_percent"] > 0:
+            c["gst_amount"] = round(c["amount"] * c["gst_percent"] / 100, 2)
+        else:
+            c["gst_amount"] = 0
+        total_additional += c["amount"]
+        total_additional_gst += c["gst_amount"]
+        additional_charges.append(c)
+
+    grand_total = math.ceil(subtotal + total_gst + req.shipping_charge + shipping_gst + total_additional + total_additional_gst)
 
     billing_addr = None
     shipping_addr = None
@@ -1969,8 +2084,9 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
         "show_rate": req.show_rate,
         "shipping_charge": req.shipping_charge,
         "shipping_gst": shipping_gst,
+        "additional_charges": additional_charges,
         "subtotal": round(subtotal, 2),
-        "total_gst": round(total_gst + shipping_gst, 2),
+        "total_gst": round(total_gst + shipping_gst + total_additional_gst, 2),
         "grand_total": grand_total,
         "remark": req.remark,
         "billing_address_id": req.billing_address_id,
@@ -1994,6 +2110,62 @@ async def mark_pi_converted(pi_id: str, body: dict, user=Depends(get_current_use
         {"$set": {"status": "converted", "converted_order_id": order_id, "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
     return {"message": "PI marked as converted"}
+
+# Duplicate Order
+@api_router.post("/orders/{order_id}/duplicate")
+async def duplicate_order(order_id: str, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "telecaller"]:
+        raise HTTPException(status_code=403, detail="Admin or telecaller only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    # Return the order data needed for pre-filling a new form
+    return {
+        "customer_id": order.get("customer_id", ""),
+        "customer_name": order.get("customer_name", ""),
+        "purpose": order.get("purpose", ""),
+        "items": order.get("items", []),
+        "gst_applicable": order.get("gst_applicable", False),
+        "shipping_method": order.get("shipping_method", ""),
+        "courier_name": order.get("courier_name", ""),
+        "transporter_name": order.get("transporter_name", ""),
+        "shipping_charge": order.get("shipping_charge", 0),
+        "additional_charges": order.get("additional_charges", []),
+        "remark": order.get("remark", ""),
+        "free_samples": order.get("free_samples", []),
+        "billing_address_id": order.get("billing_address_id", ""),
+        "shipping_address_id": order.get("shipping_address_id", ""),
+        "billing_address": order.get("billing_address"),
+        "shipping_address": order.get("shipping_address"),
+        "mode_of_payment": order.get("mode_of_payment", ""),
+        "payment_mode_details": order.get("payment_mode_details", ""),
+    }
+
+# Duplicate PI
+@api_router.post("/proforma-invoices/{pi_id}/duplicate")
+async def duplicate_pi(pi_id: str, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "telecaller"]:
+        raise HTTPException(status_code=403, detail="Admin or telecaller only")
+    pi = await db.proforma_invoices.find_one({"id": pi_id}, {"_id": 0})
+    if not pi:
+        raise HTTPException(status_code=404, detail="PI not found")
+    return {
+        "customer_id": pi.get("customer_id", ""),
+        "customer_name": pi.get("customer_name", ""),
+        "items": pi.get("items", []),
+        "gst_applicable": pi.get("gst_applicable", False),
+        "show_rate": pi.get("show_rate", True),
+        "shipping_charge": pi.get("shipping_charge", 0),
+        "additional_charges": pi.get("additional_charges", []),
+        "remark": pi.get("remark", ""),
+        "free_samples": pi.get("free_samples", []),
+        "billing_address_id": pi.get("billing_address_id", ""),
+        "shipping_address_id": pi.get("shipping_address_id", ""),
+        "billing_address": pi.get("billing_address"),
+        "shipping_address": pi.get("shipping_address"),
+    }
+
+
 
 
 @api_router.post("/proforma-invoices/{pi_id}/convert")
@@ -2023,6 +2195,7 @@ async def convert_pi_to_order(pi_id: str, body: dict, user=Depends(get_current_u
         "transporter_name": body.get("transporter_name", ""),
         "shipping_charge": pi["shipping_charge"],
         "shipping_gst": pi["shipping_gst"],
+        "additional_charges": pi.get("additional_charges", []),
         "subtotal": pi["subtotal"],
         "total_gst": pi["total_gst"],
         "grand_total": pi["grand_total"],
@@ -2351,6 +2524,15 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
         totals.append([Paragraph("Shipping Charges", tr), Paragraph(f"{pi['shipping_charge']:.2f}", tr)])
         if pi.get("shipping_gst", 0) > 0:
             totals.append([Paragraph("Shipping GST (18%)", tr), Paragraph(f"{pi['shipping_gst']:.2f}", tr)])
+    # Additional charges in PI PDF
+    for charge in pi.get("additional_charges", []):
+        charge_label = charge.get("name", "Charge")
+        charge_amt = charge.get("amount", 0)
+        charge_gst = charge.get("gst_amount", 0)
+        if charge_amt > 0:
+            totals.append([Paragraph(charge_label, tr), Paragraph(f"{charge_amt:.2f}", tr)])
+        if charge_gst > 0:
+            totals.append([Paragraph(f"{charge_label} GST ({charge.get('gst_percent', 0)}%)", tr), Paragraph(f"{charge_gst:.2f}", tr)])
     totals.append([Paragraph("<b>GRAND TOTAL</b>", trb), Paragraph(f"<b>INR {pi.get('grand_total', 0):.0f}</b>", trb)])
 
     tt = Table(totals, colWidths=[pw - 62*mm, 62*mm])

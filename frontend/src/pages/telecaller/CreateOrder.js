@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import api from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -97,6 +97,8 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
 export default function CreateOrder() {
   const navigate = useNavigate();
   const { piId } = useParams(); // For PI conversion mode
+  const [searchParams] = useSearchParams();
+  const duplicateOrderId = searchParams.get("duplicate");
   const [piConverting, setPiConverting] = useState(false);
   const [customers, setCustomers] = useState([]);
   const [customerSearch, setCustomerSearch] = useState("");
@@ -111,6 +113,7 @@ export default function CreateOrder() {
   const [courierName, setCourierName] = useState("");
   const [transporterName, setTransporterName] = useState("");
   const [shippingCharge, setShippingCharge] = useState(0);
+  const [additionalCharges, setAdditionalCharges] = useState([]);
   const [remark, setRemark] = useState("");
   const [paymentStatus, setPaymentStatus] = useState("unpaid");
   const [amountPaid, setAmountPaid] = useState(0);
@@ -147,6 +150,7 @@ export default function CreateOrder() {
       setCourierName(pi.courier_name || "");
       setTransporterName(pi.transporter_name || "");
       setShippingCharge(pi.shipping_charge || 0);
+      setAdditionalCharges(pi.additional_charges || []);
       setRemark(pi.remark || "");
       setFreeSamples(pi.free_samples || []);
       // Pre-select customer
@@ -165,6 +169,38 @@ export default function CreateOrder() {
       toast.success("PI data loaded - review and create order");
     }).catch(() => toast.error("Failed to load PI data"));
   }, [piId]);
+
+  // Load duplicate order data
+  useEffect(() => {
+    if (!duplicateOrderId) return;
+    api.post(`/orders/${duplicateOrderId}/duplicate`).then(r => {
+      const d = r.data;
+      if (d.customer_id) {
+        api.get(`/customers/${d.customer_id}`).then(cr => {
+          setSelectedCustomer(cr.data);
+          setCustomerSearch(cr.data.name || "");
+        }).catch(() => {});
+      }
+      setPurpose(d.purpose || "");
+      setItems(d.items?.length ? d.items.map(i => ({ ...i })) : [emptyItem()]);
+      setGstApplicable(d.gst_applicable || false);
+      setShippingMethod(d.shipping_method || "");
+      setCourierName(d.courier_name || "");
+      setTransporterName(d.transporter_name || "");
+      setShippingCharge(d.shipping_charge || 0);
+      setAdditionalCharges(d.additional_charges || []);
+      setRemark(d.remark || "");
+      setFreeSamples(d.free_samples || []);
+      setModeOfPayment(d.mode_of_payment || "");
+      setPaymentModeDetails(d.payment_mode_details || "");
+      if (d.billing_address) setBillingAddress(d.billing_address);
+      if (d.shipping_address) setShippingAddress(d.shipping_address);
+      if (d.billing_address_id && d.shipping_address_id) {
+        setSameAsBilling(d.billing_address_id === d.shipping_address_id);
+      }
+      toast.success("Order data loaded for duplication");
+    }).catch(() => toast.error("Failed to load order for duplication"));
+  }, [duplicateOrderId]);
 
   const filteredCustomers = customers.filter(
     (c) =>
@@ -201,7 +237,12 @@ export default function CreateOrder() {
   const subtotal = items.reduce((s, i) => s + i.amount, 0);
   const totalItemGst = items.reduce((s, i) => s + i.gst_amount, 0);
   const shippingGst = gstApplicable && shippingCharge > 0 ? +(shippingCharge * 0.18).toFixed(2) : 0;
-  const rawTotal = subtotal + totalItemGst + shippingCharge + shippingGst;
+  const totalAdditional = additionalCharges.reduce((s, c) => s + (c.amount || 0), 0);
+  const totalAdditionalGst = additionalCharges.reduce((s, c) => {
+    if (gstApplicable && c.gst_percent > 0) return s + +((c.amount || 0) * c.gst_percent / 100).toFixed(2);
+    return s;
+  }, 0);
+  const rawTotal = subtotal + totalItemGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst;
   const grandTotal = Math.ceil(rawTotal);
   const balanceAmount = paymentStatus === "full" ? 0 : paymentStatus === "partial" ? Math.max(0, grandTotal - amountPaid) : grandTotal;
 
@@ -314,6 +355,10 @@ export default function CreateOrder() {
         transporter_name: transporterName,
         shipping_charge: shippingCharge,
         shipping_gst: shippingGst,
+        additional_charges: additionalCharges.filter(c => c.name).map(c => ({
+          name: c.name, amount: Math.max(0, c.amount || 0), gst_percent: c.gst_percent || 0,
+          gst_amount: gstApplicable && c.gst_percent > 0 ? +((c.amount || 0) * c.gst_percent / 100).toFixed(2) : 0,
+        })),
         remark,
         payment_status: paymentStatus,
         amount_paid: paymentStatus === "full" ? grandTotal : amountPaid,
@@ -455,8 +500,8 @@ export default function CreateOrder() {
                     <SelectContent>{UNITS.map((u) => (<SelectItem key={u || "blank"} value={u || "blank"}>{u || "(none)"}</SelectItem>))}</SelectContent>
                   </Select>
                 </div>
-                <div><Label className="text-xs">Rate</Label><Input type="number" value={item.rate || ""} onChange={(e) => updateItem(idx, "rate", +e.target.value)} data-testid={`item-rate-${idx}`} /></div>
-                <div><Label className="text-xs">Amount</Label><Input type="number" value={item.amount || ""} onChange={(e) => updateItem(idx, "amount", +e.target.value)} data-testid={`item-amount-${idx}`} /></div>
+                <div><Label className="text-xs">Rate</Label><Input type="number" min={0} value={item.rate || ""} onChange={(e) => updateItem(idx, "rate", Math.max(0, +e.target.value))} data-testid={`item-rate-${idx}`} /></div>
+                <div><Label className="text-xs">Amount</Label><Input type="number" min={0} value={item.amount || ""} onChange={(e) => updateItem(idx, "amount", Math.max(0, +e.target.value))} data-testid={`item-amount-${idx}`} /></div>
               </div>
               <div>
                 <Label className="text-xs">Description (optional)</Label>
@@ -530,11 +575,42 @@ export default function CreateOrder() {
                 <Input value={transporterName} onChange={(e) => setTransporterName(e.target.value)} placeholder="Transporter name (optional)" data-testid="transporter-name-input" />
               </div>
             )}
-            <div>
-              <Label>Shipping / Local Charge</Label>
-              <Input type="number" value={shippingCharge || ""} onChange={(e) => setShippingCharge(+e.target.value)} data-testid="shipping-charge-input" />
-            </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Additional Charges */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">Additional Charges</CardTitle>
+            <Button variant="outline" size="sm" onClick={() => setAdditionalCharges(p => [...p, { name: "", amount: 0, gst_percent: 0 }])} data-testid="add-charge-btn"><Plus className="w-4 h-4 mr-1" /> Add Charge</Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {additionalCharges.length === 0 && <p className="text-sm text-muted-foreground">No additional charges. Add shipping, local, or other charges.</p>}
+          {additionalCharges.map((charge, idx) => (
+            <div key={idx} className="flex gap-2 items-end" data-testid={`charge-${idx}`}>
+              <div className="flex-1">
+                <Label className="text-xs">Charge Name</Label>
+                <Input value={charge.name} onChange={e => { const c = [...additionalCharges]; c[idx] = { ...c[idx], name: e.target.value }; setAdditionalCharges(c); }} placeholder="e.g. Shipping, Local, Insurance" data-testid={`charge-name-${idx}`} />
+              </div>
+              <div className="w-28">
+                <Label className="text-xs">Amount</Label>
+                <Input type="number" min={0} value={charge.amount || ""} onChange={e => { const c = [...additionalCharges]; c[idx] = { ...c[idx], amount: Math.max(0, +e.target.value) }; setAdditionalCharges(c); }} data-testid={`charge-amount-${idx}`} />
+              </div>
+              {gstApplicable && (
+                <div className="w-24">
+                  <Label className="text-xs">GST %</Label>
+                  <Select value={String(charge.gst_percent || 0)} onValueChange={v => { const c = [...additionalCharges]; c[idx] = { ...c[idx], gst_percent: +v }; setAdditionalCharges(c); }}>
+                    <SelectTrigger data-testid={`charge-gst-${idx}`}><SelectValue /></SelectTrigger>
+                    <SelectContent>{GST_RATES.map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+              )}
+              <Button variant="ghost" size="icon" onClick={() => setAdditionalCharges(p => p.filter((_, i) => i !== idx))} data-testid={`remove-charge-${idx}`}><Trash2 className="w-4 h-4 text-destructive" /></Button>
+            </div>
+          ))}
         </CardContent>
       </Card>
 
@@ -619,6 +695,12 @@ export default function CreateOrder() {
             {gstApplicable && <div className="flex justify-between"><span className="text-muted-foreground">Item GST</span><span className="font-mono">{"\u20B9"}{totalItemGst.toFixed(2)}</span></div>}
             {shippingCharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping</span><span className="font-mono">{"\u20B9"}{shippingCharge.toFixed(2)}</span></div>}
             {shippingGst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST (18%)</span><span className="font-mono">{"\u20B9"}{shippingGst.toFixed(2)}</span></div>}
+            {additionalCharges.filter(c => c.amount > 0).map((c, i) => (
+              <div key={i}>
+                <div className="flex justify-between"><span className="text-muted-foreground">{c.name || "Charge"}</span><span className="font-mono">{"\u20B9"}{(c.amount || 0).toFixed(2)}</span></div>
+                {gstApplicable && c.gst_percent > 0 && <div className="flex justify-between"><span className="text-muted-foreground">{c.name || "Charge"} GST ({c.gst_percent}%)</span><span className="font-mono">{"\u20B9"}{((c.amount || 0) * c.gst_percent / 100).toFixed(2)}</span></div>}
+              </div>
+            ))}
             <Separator />
             <div className="flex justify-between text-base font-bold">
               <span>Grand Total (Rounded Up)</span><span className="font-mono">{"\u20B9"}{grandTotal}</span>

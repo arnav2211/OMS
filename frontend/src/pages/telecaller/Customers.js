@@ -190,8 +190,8 @@ export default function Customers() {
                             {expandedCustomer === c.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                           </Button>
                           <Button variant="ghost" size="icon" onClick={() => openEdit(c)} data-testid={`edit-customer-${c.id}`}><Edit className="w-4 h-4" /></Button>
-                          {["admin", "telecaller"].includes(user?.role) && (
-                            <Button variant="ghost" size="icon" onClick={() => setShowDeleteConfirm(c)} data-testid={`delete-customer-${c.id}`}><Trash2 className="w-4 h-4 text-destructive" /></Button>
+                          {user?.role === "admin" && (
+                            <Button variant="ghost" size="icon" onClick={() => setShowDeleteConfirm({ customer: c, step: 1 })} data-testid={`delete-customer-${c.id}`}><Trash2 className="w-4 h-4 text-destructive" /></Button>
                           )}
                         </div>
                       </TableCell>
@@ -311,17 +311,34 @@ export default function Customers() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation */}
+      {/* Delete Confirmation - Two Step */}
       <Dialog open={!!showDeleteConfirm} onOpenChange={() => setShowDeleteConfirm(null)}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Delete Customer</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Are you sure you want to delete <span className="font-medium text-foreground">{showDeleteConfirm?.name}</span>? Customers with existing orders cannot be deleted.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDeleteConfirm(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={() => deleteCustomer(showDeleteConfirm)} data-testid="confirm-delete-customer">Delete</Button>
-          </DialogFooter>
+          {showDeleteConfirm?.step === 1 ? (
+            <>
+              <DialogHeader><DialogTitle>Delete Customer</DialogTitle></DialogHeader>
+              <p className="text-sm text-muted-foreground">
+                Are you sure you want to delete <span className="font-medium text-foreground">{showDeleteConfirm?.customer?.name}</span>?
+              </p>
+              <p className="text-sm text-muted-foreground">Customers with existing orders cannot be deleted.</p>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowDeleteConfirm(null)}>Cancel</Button>
+                <Button variant="destructive" onClick={() => setShowDeleteConfirm({ ...showDeleteConfirm, step: 2 })} data-testid="confirm-delete-step1">Yes, Continue</Button>
+              </DialogFooter>
+            </>
+          ) : showDeleteConfirm?.step === 2 ? (
+            <>
+              <DialogHeader><DialogTitle className="text-destructive">Final Warning</DialogTitle></DialogHeader>
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-destructive">This action is permanent and cannot be undone!</p>
+                <p className="text-sm text-muted-foreground">All related records may be affected. Are you absolutely sure you want to permanently delete <span className="font-bold text-foreground">{showDeleteConfirm?.customer?.name}</span>?</p>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowDeleteConfirm(null)}>Cancel</Button>
+                <Button variant="destructive" onClick={() => deleteCustomer(showDeleteConfirm.customer)} data-testid="confirm-delete-step2">Permanently Delete</Button>
+              </DialogFooter>
+            </>
+          ) : null}
         </DialogContent>
       </Dialog>
     </div>

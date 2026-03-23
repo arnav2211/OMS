@@ -165,7 +165,26 @@ export default function PackagingDashboard() {
   const backendUrl = process.env.REACT_APP_BACKEND_URL;
   const handlePrint = (orderId) => {
     const token = localStorage.getItem("token");
-    window.open(`${backendUrl}/api/orders/${orderId}/print?token=${token}`, '_blank');
+    const url = `${backendUrl}/api/orders/${orderId}/print?token=${token}`;
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    fetch(url).then(res => res.blob()).then(blob => {
+      const blobUrl = URL.createObjectURL(blob);
+      if (isMobile) {
+        const w = window.open('', '_blank');
+        w.document.write('<html><head><title>Print</title><style>body,html{margin:0;padding:0;height:100%}iframe{width:100%;height:100%;border:none}</style></head><body><iframe id="pdf" src="' + blobUrl + '"></iframe><script>document.getElementById("pdf").onload=function(){setTimeout(function(){window.print()},800)};<\/script></body></html>');
+        w.document.close();
+      } else {
+        const iframe = document.createElement("iframe");
+        iframe.style.position = "fixed";
+        iframe.style.top = "-10000px";
+        iframe.style.left = "-10000px";
+        iframe.style.width = "0";
+        iframe.style.height = "0";
+        iframe.src = blobUrl;
+        document.body.appendChild(iframe);
+        iframe.onload = () => { setTimeout(() => { iframe.contentWindow.print(); }, 500); };
+      }
+    }).catch(() => { window.open(url, "_blank"); });
   };
 
   return (

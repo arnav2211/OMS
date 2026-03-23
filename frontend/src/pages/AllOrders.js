@@ -123,9 +123,23 @@ export default function AllOrders() {
     setPrintLoading(true);
     try {
       const res = await api.post("/orders/print-addresses", { order_ids: [...selectedOrders] }, { responseType: "blob" });
-      const url = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
-      window.open(url, "_blank");
-      setTimeout(() => window.URL.revokeObjectURL(url), 30000);
+      const blobUrl = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobile) {
+        const w = window.open('', '_blank');
+        w.document.write('<html><head><title>Print</title><style>body,html{margin:0;padding:0;height:100%}iframe{width:100%;height:100%;border:none}</style></head><body><iframe id="pdf" src="' + blobUrl + '"></iframe><script>document.getElementById("pdf").onload=function(){setTimeout(function(){window.print()},800)};<\/script></body></html>');
+        w.document.close();
+      } else {
+        const iframe = document.createElement("iframe");
+        iframe.style.position = "fixed";
+        iframe.style.top = "-10000px";
+        iframe.style.left = "-10000px";
+        iframe.style.width = "0";
+        iframe.style.height = "0";
+        iframe.src = blobUrl;
+        document.body.appendChild(iframe);
+        iframe.onload = () => { setTimeout(() => { iframe.contentWindow.print(); }, 500); };
+      }
     } catch { toast.error("Failed to generate address PDF"); }
     finally { setPrintLoading(false); }
   };
@@ -245,6 +259,7 @@ export default function AllOrders() {
                     {showPaymentCheck && <TableHead className="text-xs uppercase whitespace-nowrap">Check</TableHead>}
                     {user?.role === "admin" && <TableHead className="text-xs uppercase whitespace-nowrap">Executive</TableHead>}
                     <TableHead className="text-xs uppercase whitespace-nowrap">Date</TableHead>
+                    <TableHead className="text-xs uppercase whitespace-nowrap">Shipping</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -275,6 +290,9 @@ export default function AllOrders() {
                         )}
                         {user?.role === "admin" && <TableCell className="text-sm whitespace-nowrap">{o.telecaller_name || "-"}</TableCell>}
                         <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{new Date(o.created_at).toLocaleDateString("en-IN")}</TableCell>
+                        <TableCell className="text-sm whitespace-nowrap" data-testid={`shipping-method-${o.id}`}>
+                          {o.shipping_method === "courier" ? (o.courier_name || "Courier") : o.shipping_method === "transport" ? (o.transporter_name || "Transport") : o.shipping_method || "-"}
+                        </TableCell>
                       </TableRow>
                     );
                   })}

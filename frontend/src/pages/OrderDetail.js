@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2 } from "lucide-react";
+import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2, Copy, ClipboardCopy } from "lucide-react";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
@@ -121,7 +121,30 @@ export default function OrderDetail() {
 
   const handlePrint = () => {
     const token = localStorage.getItem("token");
-    window.open(`${process.env.REACT_APP_BACKEND_URL}/api/orders/${id}/print?token=${token}`, "_blank");
+    const url = `${process.env.REACT_APP_BACKEND_URL}/api/orders/${id}/print?token=${token}`;
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    fetch(url).then(res => res.blob()).then(blob => {
+      const blobUrl = URL.createObjectURL(blob);
+      if (isMobile) {
+        const w = window.open('', '_blank');
+        w.document.write('<html><head><title>Print</title><style>body,html{margin:0;padding:0;height:100%}iframe{width:100%;height:100%;border:none}</style></head><body><iframe id="pdf" src="' + blobUrl + '"></iframe><script>document.getElementById("pdf").onload=function(){setTimeout(function(){window.print()},800)};<\/script></body></html>');
+        w.document.close();
+      } else {
+        const iframe = document.createElement("iframe");
+        iframe.style.position = "fixed";
+        iframe.style.top = "-10000px";
+        iframe.style.left = "-10000px";
+        iframe.style.width = "0";
+        iframe.style.height = "0";
+        iframe.src = blobUrl;
+        document.body.appendChild(iframe);
+        iframe.onload = () => { setTimeout(() => { iframe.contentWindow.print(); }, 500); };
+      }
+    }).catch(() => { window.open(url, "_blank"); });
+  };
+
+  const copyToClipboard = (text, label) => {
+    navigator.clipboard.writeText(text).then(() => toast.success(`${label} copied!`)).catch(() => toast.error("Copy failed"));
   };
 
   const deleteOrder = async () => {
@@ -224,6 +247,9 @@ export default function OrderDetail() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={handlePrint} data-testid="print-order-btn"><Printer className="w-4 h-4 mr-1" /> Print</Button>
+          {(user?.role === "admin" || user?.role === "telecaller") && (
+            <Button variant="outline" size="sm" onClick={() => navigate(`/create-order?duplicate=${id}`)} data-testid="duplicate-order-btn"><Copy className="w-4 h-4 mr-1" /> Duplicate</Button>
+          )}
           {(canEditOrder || canEditPackaging || canEditDispatch) && !isDispatched && (
             <Button variant="outline" size="sm" onClick={openEdit} data-testid="edit-order-btn"><Edit className="w-4 h-4 mr-1" /> Edit</Button>
           )}
@@ -240,11 +266,29 @@ export default function OrderDetail() {
         <CardHeader className="pb-3"><CardTitle className="text-base">Customer Information</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           <div className="flex justify-between"><span className="text-sm text-muted-foreground">Customer</span><span className="text-sm font-medium">{order.customer_name}</span></div>
+          {customerPhone && (
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">Phone</span>
+              <button className="text-sm font-medium flex items-center gap-1 hover:text-primary transition-colors" onClick={() => copyToClipboard(customerPhone, "Phone number")} data-testid="copy-phone-btn">
+                {customerPhone} <ClipboardCopy className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
           {order.billing_address && (
-            <div className="flex justify-between"><span className="text-sm text-muted-foreground">Billing Address</span><span className="text-sm text-right max-w-[60%]">{order.billing_address.address_line}, {order.billing_address.city}, {order.billing_address.state} - {order.billing_address.pincode}</span></div>
+            <div className="flex justify-between items-start">
+              <span className="text-sm text-muted-foreground">Billing Address</span>
+              <button className="text-sm text-right max-w-[60%] flex items-start gap-1 hover:text-primary transition-colors" onClick={() => copyToClipboard(`${order.billing_address.address_line}, ${order.billing_address.city}, ${order.billing_address.state} - ${order.billing_address.pincode}`, "Billing address")} data-testid="copy-billing-address-btn">
+                {order.billing_address.address_line}, {order.billing_address.city}, {order.billing_address.state} - {order.billing_address.pincode} <ClipboardCopy className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              </button>
+            </div>
           )}
           {order.shipping_address && (
-            <div className="flex justify-between"><span className="text-sm text-muted-foreground">Shipping Address</span><span className="text-sm text-right max-w-[60%]">{order.shipping_address.address_line}, {order.shipping_address.city}, {order.shipping_address.state} - {order.shipping_address.pincode}</span></div>
+            <div className="flex justify-between items-start">
+              <span className="text-sm text-muted-foreground">Shipping Address</span>
+              <button className="text-sm text-right max-w-[60%] flex items-start gap-1 hover:text-primary transition-colors" onClick={() => copyToClipboard(`${order.shipping_address.address_line}, ${order.shipping_address.city}, ${order.shipping_address.state} - ${order.shipping_address.pincode}`, "Shipping address")} data-testid="copy-shipping-address-btn">
+                {order.shipping_address.address_line}, {order.shipping_address.city}, {order.shipping_address.state} - {order.shipping_address.pincode} <ClipboardCopy className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              </button>
+            </div>
           )}
           {order.purpose && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Purpose</span><span className="text-sm">{order.purpose}</span></div>}
           {order.mode_of_payment && (
@@ -299,6 +343,12 @@ export default function OrderDetail() {
             {order.gst_applicable && <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-mono">{"\u20B9"}{order.total_gst?.toFixed(2)}</span></div>}
             {order.shipping_charge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping</span><span className="font-mono">{"\u20B9"}{order.shipping_charge?.toFixed(2)}</span></div>}
             {order.shipping_gst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST</span><span className="font-mono">{"\u20B9"}{order.shipping_gst?.toFixed(2)}</span></div>}
+            {order.additional_charges?.filter(c => c.amount > 0).map((c, i) => (
+              <div key={i}>
+                <div className="flex justify-between"><span className="text-muted-foreground">{c.name || "Charge"}</span><span className="font-mono">{"\u20B9"}{c.amount?.toFixed(2)}</span></div>
+                {c.gst_amount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">{c.name} GST ({c.gst_percent}%)</span><span className="font-mono">{"\u20B9"}{c.gst_amount?.toFixed(2)}</span></div>}
+              </div>
+            ))}
             <Separator />
             <div className="flex justify-between text-base font-bold"><span>Grand Total</span><span className="font-mono">{"\u20B9"}{order.grand_total}</span></div>
           </div>
