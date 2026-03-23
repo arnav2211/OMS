@@ -144,8 +144,9 @@ export default function OrderDetail() {
     fetch(url).then(res => res.blob()).then(blob => {
       const blobUrl = URL.createObjectURL(blob);
       if (isMobile) {
-        const w = window.open(blobUrl, '_blank');
-        if (w) { setTimeout(() => { try { w.print(); } catch(e) {} }, 1000); }
+        const printWindow = window.open('', '_blank');
+        printWindow.document.write(`<html><head><title>Print</title></head><body style="margin:0"><iframe src="${blobUrl}" style="width:100%;height:100vh;border:none;" onload="setTimeout(()=>window.print(),500)"></iframe><div style="position:fixed;bottom:20px;right:20px;z-index:9999"><button onclick="window.print()" style="padding:12px 24px;font-size:16px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3)">Print</button></div></body></html>`);
+        printWindow.document.close();
       } else {
         const iframe = document.createElement("iframe");
         iframe.style.position = "fixed";
