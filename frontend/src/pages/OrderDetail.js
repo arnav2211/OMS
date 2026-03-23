@@ -40,12 +40,19 @@ export default function OrderDetail() {
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [showHistory, setShowHistory] = useState(false);
   const [formulationHistory, setFormulationHistory] = useState([]);
+  const [formulationVisible, setFormulationVisible] = useState(true);
   const [packagingStaff, setPackagingStaff] = useState([]);
   const [dispatchData, setDispatchData] = useState({ courier_name: "", transporter_name: "", lr_no: "", dispatch_type: "" });
   const [previewImage, setPreviewImage] = useState(null);
   const [customerPhone, setCustomerPhone] = useState("");
 
   useEffect(() => { loadOrder(); }, [id]);
+
+  useEffect(() => {
+    if (user?.role === "packaging") {
+      api.get("/settings").then(r => setFormulationVisible(r.data?.show_formulation || false)).catch(() => {});
+    }
+  }, [user?.role]);
 
   useEffect(() => {
     if (order?.customer_id) {
@@ -64,8 +71,8 @@ export default function OrderDetail() {
 
   const isDispatched = order?.status === "dispatched";
   const canEditOrder = user?.role === "admin" || (user?.role === "telecaller" && order?.telecaller_id === user?.id);
-  const canEditFormulation = user?.role === "admin" || user?.role === "packaging";
-  const showFormulations = user?.role === "admin" || user?.role === "packaging";
+  const canEditFormulation = user?.role === "admin" || (user?.role === "packaging" && formulationVisible);
+  const showFormulations = user?.role === "admin" || (user?.role === "packaging" && formulationVisible);
   const canEditPackaging = ["admin", "packaging"].includes(user?.role) && !isDispatched;
   const canEditDispatch = ["admin", "dispatch"].includes(user?.role);
   const canSharePI = ["admin", "telecaller"].includes(user?.role);
