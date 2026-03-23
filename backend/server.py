@@ -1521,6 +1521,7 @@ async def accounts_dashboard(
     gst_without_invoice = await db.orders.count_documents({"gst_applicable": True, "$or": [{"tax_invoice_url": {"$exists": False}}, {"tax_invoice_url": ""}]})
     payments_received = await db.orders.count_documents(payment_query)
     payments_pending = await db.orders.count_documents({"payment_check_status": {"$in": ["pending", "pending_recheck"]}})
+    unpaid_orders = await db.orders.count_documents({"payment_status": "unpaid"})
 
     return {
         "total_invoices": total_invoices,
@@ -1528,6 +1529,7 @@ async def accounts_dashboard(
         "gst_without_invoice": gst_without_invoice,
         "payments_received": payments_received,
         "payments_pending": payments_pending,
+        "unpaid_orders": unpaid_orders,
     }
 
 # Admin view telecaller dashboard
