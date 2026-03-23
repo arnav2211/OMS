@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import api from "@/lib/api";
 import { compressImage } from "@/lib/compressImage";
+import { mobilePrintPdf } from "@/lib/mobilePrint";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -170,12 +171,10 @@ export default function PackagingDashboard() {
     const url = `${backendUrl}/api/orders/${orderId}/print?token=${token}`;
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     fetch(url).then(res => res.blob()).then(blob => {
-      const blobUrl = URL.createObjectURL(blob);
       if (isMobile) {
-        const printWindow = window.open('', '_blank');
-        printWindow.document.write(`<html><head><title>Print</title></head><body style="margin:0"><iframe src="${blobUrl}" style="width:100%;height:100vh;border:none;" onload="setTimeout(()=>window.print(),500)"></iframe><div style="position:fixed;bottom:20px;right:20px;z-index:9999"><button onclick="window.print()" style="padding:12px 24px;font-size:16px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3)">Print</button></div></body></html>`);
-        printWindow.document.close();
+        mobilePrintPdf(blob);
       } else {
+        const blobUrl = URL.createObjectURL(blob);
         const iframe = document.createElement("iframe");
         iframe.style.position = "fixed";
         iframe.style.top = "-10000px";
