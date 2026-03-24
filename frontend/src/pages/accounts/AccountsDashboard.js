@@ -10,8 +10,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Upload, Trash2, FileText, CheckCircle, Clock, RefreshCw, AlertTriangle, BanknoteIcon } from "lucide-react";
+import { Upload, Trash2, FileText, CheckCircle, Clock, RefreshCw, AlertTriangle, BanknoteIcon, Eye, X } from "lucide-react";
 import { Link } from "react-router-dom";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const PERIODS = [
   { value: "today", label: "Today" },
@@ -68,6 +69,7 @@ export default function AccountsDashboard() {
   const [payDateFrom, setPayDateFrom] = useState("");
   const [payDateTo, setPayDateTo] = useState("");
   const [updating, setUpdating] = useState({});
+  const [previewScreenshots, setPreviewScreenshots] = useState(null);
 
   useEffect(() => { loadStats(); }, [period, dateFrom, dateTo]);
   useEffect(() => { if (tab === "invoices") loadGstOrders(); }, [tab]);
@@ -94,10 +96,7 @@ export default function AccountsDashboard() {
   const loadAllOrders = async () => {
     setPaymentLoading(true);
     try {
-      const params = new URLSearchParams({ view_all: "true" });
-      if (payDateFrom) params.set("date_from", payDateFrom);
-      if (payDateTo) params.set("date_to", payDateTo);
-      const res = await api.get(`/orders?${params}`);
+      const res = await api.get("/orders?view_all=true");
       setAllOrders(res.data);
     } catch { } finally { setPaymentLoading(false); }
   };
@@ -146,6 +145,30 @@ export default function AccountsDashboard() {
     if (searchTerm) {
       const q = searchTerm.toLowerCase();
       if (!o.order_number?.toLowerCase().includes(q) && !o.customer_name?.toLowerCase().includes(q)) return false;
+    }
+    // Date filter based on order creation date
+    if (payPeriod !== "all") {
+      const orderDate = new Date(o.created_at);
+      const now = new Date();
+      if (payPeriod === "today") {
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        if (orderDate < start) return false;
+      } else if (payPeriod === "week") {
+        const start = new Date(now);
+        start.setDate(now.getDate() - now.getDay());
+        start.setHours(0, 0, 0, 0);
+        if (orderDate < start) return false;
+      } else if (payPeriod === "month") {
+        const start = new Date(now.getFullYear(), now.getMonth(), 1);
+        if (orderDate < start) return false;
+      } else if (payPeriod === "custom") {
+        if (payDateFrom && orderDate < new Date(payDateFrom)) return false;
+        if (payDateTo) {
+          const endDate = new Date(payDateTo);
+          endDate.setHours(23, 59, 59, 999);
+          if (orderDate > endDate) return false;
+        }
+      }
     }
     return true;
   });
@@ -323,13 +346,17 @@ export default function AccountsDashboard() {
               {paymentLoading ? (
                 <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div></div>
               ) : (
-                  <Table className="min-w-[700px]">
+                  <Table className="min-w-[900px]">
                     <TableHeader>
                       <TableRow>
                         <TableHead className="whitespace-nowrap">Order #</TableHead>
                         <TableHead className="whitespace-nowrap">Customer</TableHead>
+                        <TableHead className="whitespace-nowrap">Date</TableHead>
                         <TableHead className="whitespace-nowrap">Amount</TableHead>
                         <TableHead className="whitespace-nowrap">Payment</TableHead>
+                        <TableHead className="whitespace-nowrap">Mode</TableHead>
+                        <TableHead className="whitespace-nowrap">GST</TableHead>
+                        <TableHead className="whitespace-nowrap">Proof</TableHead>
                         <TableHead className="whitespace-nowrap">Check Status</TableHead>
                         <TableHead className="whitespace-nowrap">Checked By</TableHead>
                         <TableHead className="whitespace-nowrap">Action</TableHead>
@@ -337,7 +364,7 @@ export default function AccountsDashboard() {
                     </TableHeader>
                     <TableBody>
                       {filteredAllOrders.length === 0 && (
-                        <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No orders found</TableCell></TableRow>
+                        <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-8">No orders found</TableCell></TableRow>
                       )}
                       {filteredAllOrders.map(o => {
                         const checkInfo = CHECK_BADGE[o.payment_check_status || "pending"] || CHECK_BADGE.pending;
@@ -347,8 +374,20 @@ export default function AccountsDashboard() {
                               <Link to={`/orders/${o.id}`} className="font-mono text-sm text-primary hover:underline">{o.order_number}</Link>
                             </TableCell>
                             <TableCell className="text-sm">{o.customer_name}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap" data-testid={`order-date-${o.id}`}>{new Date(o.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</TableCell>
                             <TableCell className="text-sm font-mono">₹{o.grand_total?.toLocaleString("en-IN")}</TableCell>
                             <TableCell><Badge variant="outline" className="text-xs">{o.payment_status}</Badge></TableCell>
+                            <TableCell className="text-sm" data-testid={`pay-mode-${o.id}`}>{o.mode_of_payment || "—"}{o.payment_mode_details ? ` (${o.payment_mode_details})` : ""}</TableCell>
+                            <TableCell data-testid={`gst-flag-${o.id}`}><Badge variant="outline" className={`text-xs ${o.gst_applicable ? "bg-blue-50 text-blue-700 border-blue-200" : ""}`}>{o.gst_applicable ? "GST" : "Non-GST"}</Badge></TableCell>
+                            <TableCell>
+                              {o.payment_screenshots?.length > 0 ? (
+                                <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => setPreviewScreenshots(o.payment_screenshots)} data-testid={`preview-proof-${o.id}`}>
+                                  <Eye className="w-3 h-3 mr-1" />{o.payment_screenshots.length}
+                                </Button>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </TableCell>
                             <TableCell>
                               <Badge className={`text-xs ${checkInfo.cls}`} data-testid={`check-status-${o.id}`}>{checkInfo.label}</Badge>
                             </TableCell>
@@ -384,6 +423,20 @@ export default function AccountsDashboard() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Payment Screenshot Preview Dialog */}
+      <Dialog open={!!previewScreenshots} onOpenChange={() => setPreviewScreenshots(null)}>
+        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Payment Screenshots</DialogTitle></DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            {previewScreenshots?.map((url, i) => (
+              <a key={i} href={`${backendUrl}${url}`} target="_blank" rel="noopener noreferrer">
+                <img src={`${backendUrl}${url}`} alt={`Payment proof ${i + 1}`} className="w-full rounded-lg border object-cover aspect-square hover:opacity-80 transition-opacity" />
+              </a>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

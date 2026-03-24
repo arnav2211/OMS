@@ -22,31 +22,37 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - Item analytics
 
 ## Phase 8 Features (Completed - March 2026)
-1. Print Behavior Fix - Desktop: auto-triggers print dialog via iframe. Mobile: opens PDF in new window with auto-print
+1. Print Behavior Fix
 2. Customer Deletion Restriction - Admin-only with two-step confirmation
-3. Negative Value Restriction - min=0 on all Rate/Amount inputs
-4. Additional Charges System - Dynamic entries with name, amount, GST% per charge
-5. Copyable Details - Phone, billing/shipping address on Order Detail (click-to-copy)
-6. Shipping Method Column - Added to All Orders table
-7. Edit Shipping in Dispatch - Editable shipping method in dispatch dashboard
-8. Duplicate Order/PI - Duplicate button pre-fills new form
-9. Mobile Camera Upload Fix - Backend handles missing/wrong extensions from cameras
-10. Camera in Edit Mode - Camera buttons alongside Gallery/Files in edit forms
+3. Negative Value Restriction
+4. Additional Charges System
+5. Copyable Details
+6. Shipping Method Column
+7. Edit Shipping in Dispatch
+8. Duplicate Order/PI
+9. Mobile Camera Upload Fix
+10. Camera in Edit Mode
 
 ## Phase 9 Features (Completed - March 2026)
-1. Charges UI Restructured - 3 separate sections: Shipping Charges, Additional Charges
-2. Image Compression - All image uploads compressed before upload (max 1280px, JPEG quality 0.7)
+1. Charges UI Restructured
+2. Image Compression
 
 ## Phase 10 Features (Completed - March 2026)
-1. **Forward to Packaging (Admin)** - Toggle button in All Orders "Fwd Pkg" column. Admin can mark orders as forwarded to packaging (visual reference only).
-2. **Tax Invoice Filter (Accounts)** - Filter in Accounts Dashboard for invoices: All / Uploaded / Pending Upload.
-3. **Remove Local Charges** - Removed "Local Charges" input from Create Order, Edit Order, Create PI, Edit PI. Only Shipping Charges remain.
-4. **Telecaller Payment Edit** - Telecallers can edit payment details (status, mode, screenshots) on their own orders even after dispatch. New PaymentSection component with inline edit.
-5. **Admin Full Edit Power** - Admins can edit everything in an order even after dispatch. No dispatch lock for admins.
-6. **Image Upload in Order Summary** - PackagingForm in Order Detail now includes full image upload/edit/delete (item images, order images, packed box images). Admin can edit anytime, Packaging team can edit pre-dispatch.
+1. Forward to Packaging (Admin toggle in All Orders)
+2. Tax Invoice Filter (Accounts - Uploaded/Pending)
+3. Remove Local Charges from all forms
+4. Telecaller Payment Edit (own orders, even after dispatch)
+5. Admin Full Edit Power (everything, even after dispatch)
+6. Image Upload in Packaging Update dialog (Order Summary)
+
+## Phase 10.1 - Accounts Dashboard Payment Check Fixes (Completed - March 2026)
+1. **Date filter fix** — Now filters by order creation date (client-side). Works for Today, This Week, This Month, Custom range.
+2. **New columns added** — Mode of Payment, Date of Order, GST/Non-GST badge, Payment Proof preview button.
+3. **Payment screenshot preview** — Eye icon button with count opens a dialog showing all payment screenshots with clickable full-size images.
 
 ## Credentials
 - Admin: admin / admin123
+- Accounts: test_accounts / test123, accounts1
 
 ## Upcoming Tasks
 - **P1:** Pagination on all major data tables
