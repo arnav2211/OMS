@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Upload, RefreshCw, Search, Package } from "lucide-react";
+import { Upload, RefreshCw, Search, Package, Trash2 } from "lucide-react";
 
 const STATUS_BADGE = {
   new: "bg-blue-100 text-blue-800 border-blue-200",
@@ -29,11 +29,12 @@ export default function AmazonOrders() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [shipTypeFilter, setShipTypeFilter] = useState("all");
   const [showUpload, setShowUpload] = useState(false);
   const [shipType, setShipType] = useState("easy_ship");
-  const [courier, setCourier] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   useEffect(() => { loadOrders(); }, []);
 
@@ -48,18 +49,12 @@ export default function AmazonOrders() {
   const handleUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (shipType === "self_ship" && !courier) {
-      toast.error("Select a courier for Self Ship");
-      e.target.value = "";
-      return;
-    }
     setUploading(true);
     setUploadResult(null);
     try {
       const form = new FormData();
       form.append("file", file);
       const params = new URLSearchParams({ ship_type: shipType });
-      if (shipType === "self_ship") params.set("courier_name", courier);
       const res = await api.post(`/amazon/upload-pdf?${params}`, form, { headers: { "Content-Type": "multipart/form-data" } });
       setUploadResult(res.data);
       toast.success(`${res.data.created} orders created`);
@@ -72,8 +67,18 @@ export default function AmazonOrders() {
     }
   };
 
+  const handleDelete = async (orderId) => {
+    try {
+      await api.delete(`/amazon/orders/${orderId}`);
+      toast.success("Order deleted");
+      setDeleteConfirm(null);
+      loadOrders();
+    } catch (err) { toast.error(err.response?.data?.detail || "Delete failed"); }
+  };
+
   const filtered = orders.filter(o => {
     if (statusFilter !== "all" && o.status !== statusFilter) return false;
+    if (shipTypeFilter !== "all" && o.ship_type !== shipTypeFilter) return false;
     if (search) {
       const q = search.toLowerCase();
       return o.am_order_number?.toLowerCase().includes(q) || o.amazon_order_id?.toLowerCase().includes(q) || o.customer_name?.toLowerCase().includes(q);
@@ -108,6 +113,14 @@ export default function AmazonOrders() {
             <SelectItem value="dispatched">Dispatched</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={shipTypeFilter} onValueChange={setShipTypeFilter}>
+          <SelectTrigger className="w-32 h-9" data-testid="amazon-ship-filter"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Types</SelectItem>
+            <SelectItem value="easy_ship">Easy Ship</SelectItem>
+            <SelectItem value="self_ship">Self Ship</SelectItem>
+          </SelectContent>
+        </Select>
         <Button variant="outline" size="sm" onClick={loadOrders}><RefreshCw className="w-4 h-4" /></Button>
       </div>
 
@@ -124,11 +137,12 @@ export default function AmazonOrders() {
                   <TableHead className="text-xs uppercase whitespace-nowrap">Amount</TableHead>
                   <TableHead className="text-xs uppercase whitespace-nowrap">Shipping</TableHead>
                   <TableHead className="text-xs uppercase whitespace-nowrap">Status</TableHead>
+                  {isAdmin && <TableHead className="text-xs uppercase whitespace-nowrap">Action</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {loading && <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>}
-                {!loading && filtered.length === 0 && <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No orders found</TableCell></TableRow>}
+                {loading && <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>}
+                {!loading && filtered.length === 0 && <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No orders found</TableCell></TableRow>}
                 {filtered.map(o => (
                   <TableRow key={o.id} className="cursor-pointer hover:bg-accent/50" data-testid={`am-row-${o.id}`}>
                     <TableCell>
@@ -143,6 +157,16 @@ export default function AmazonOrders() {
                     <TableCell>
                       <Badge variant="outline" className={`text-xs capitalize ${STATUS_BADGE[o.status] || ""}`}>{o.status}</Badge>
                     </TableCell>
+                    {isAdmin && (
+                      <TableCell>
+                        {o.status !== "dispatched" && (
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:text-red-700 hover:bg-red-50"
+                            onClick={(e) => { e.stopPropagation(); setDeleteConfirm(o); }} data-testid={`am-delete-${o.id}`}>
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        )}
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
@@ -158,7 +182,7 @@ export default function AmazonOrders() {
           <div className="space-y-4">
             <div>
               <Label className="text-sm">Ship Type</Label>
-              <Select value={shipType} onValueChange={v => { setShipType(v); setCourier(""); }} data-testid="ship-type-select">
+              <Select value={shipType} onValueChange={setShipType} data-testid="ship-type-select">
                 <SelectTrigger data-testid="ship-type-trigger"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="easy_ship">Easy Ship</SelectItem>
@@ -166,17 +190,6 @@ export default function AmazonOrders() {
                 </SelectContent>
               </Select>
             </div>
-            {shipType === "self_ship" && (
-              <div>
-                <Label className="text-sm">Courier</Label>
-                <Select value={courier} onValueChange={setCourier}>
-                  <SelectTrigger data-testid="courier-select"><SelectValue placeholder="Select courier" /></SelectTrigger>
-                  <SelectContent>
-                    {COURIERS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
             <div>
               <Label className="text-sm">PDF File</Label>
               <Input type="file" accept=".pdf" onChange={handleUpload} disabled={uploading} data-testid="pdf-file-input" />
@@ -191,6 +204,22 @@ export default function AmazonOrders() {
               </div>
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Delete Order</DialogTitle></DialogHeader>
+          <div className="space-y-2">
+            <p className="text-sm">Are you sure you want to delete <span className="font-mono font-bold">{deleteConfirm?.am_order_number}</span>?</p>
+            <p className="text-sm text-muted-foreground">Amazon Order: {deleteConfirm?.amazon_order_id}</p>
+            <p className="text-sm text-muted-foreground">Customer: {deleteConfirm?.customer_name}</p>
+            <p className="text-sm text-destructive font-medium">This action cannot be undone.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteConfirm(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => handleDelete(deleteConfirm?.id)} data-testid="confirm-delete-am">Delete</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

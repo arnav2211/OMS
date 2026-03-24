@@ -38,7 +38,7 @@ export default function AmazonOrderDetail() {
   const [lrNumber, setLrNumber] = useState("");
 
   const canEditPackaging = isAdmin || (isPacking && order?.status !== "dispatched");
-  const canDispatch = (isAdmin || isPacking) && order?.status === "packed";
+  const canDispatch = ["admin", "packaging", "dispatch"].includes(user?.role) && order?.status === "packed";
   const isDispatched = order?.status === "dispatched";
 
   useEffect(() => { loadOrder(); loadStaff(); }, [id]);
@@ -290,8 +290,8 @@ export default function AmazonOrderDetail() {
           <div className="space-y-4">
             {order.ship_type === "self_ship" && (
               <div>
-                <Label className="text-sm">LR Number (optional)</Label>
-                <Input value={lrNumber} onChange={e => setLrNumber(e.target.value)} placeholder="LR/Tracking number" data-testid="am-lr-input" />
+                <Label className="text-sm">LR Number <span className="text-red-500">*</span></Label>
+                <Input value={lrNumber} onChange={e => setLrNumber(e.target.value)} placeholder="Enter LR / Tracking number" data-testid="am-lr-input" />
               </div>
             )}
             {order.ship_type === "easy_ship" && (
@@ -300,7 +300,7 @@ export default function AmazonOrderDetail() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDispatch(false)}>Cancel</Button>
-            <Button onClick={dispatchOrder} disabled={saving} data-testid="am-confirm-dispatch">{saving ? "Dispatching..." : "Dispatch"}</Button>
+            <Button onClick={dispatchOrder} disabled={saving || (order.ship_type === "self_ship" && !lrNumber.trim())} data-testid="am-confirm-dispatch">{saving ? "Dispatching..." : "Dispatch"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

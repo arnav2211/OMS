@@ -2800,15 +2800,12 @@ async def get_next_am_number():
 async def upload_amazon_pdf(
     file: UploadFile = File(...),
     ship_type: str = Query("easy_ship"),
-    courier_name: str = Query(""),
     user=Depends(get_current_user)
 ):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
     if ship_type not in ["easy_ship", "self_ship"]:
         raise HTTPException(status_code=400, detail="Invalid ship type")
-    if ship_type == "self_ship" and not courier_name:
-        raise HTTPException(status_code=400, detail="Courier name required for self ship")
 
     tmp_path = UPLOAD_DIR / f"tmp_amazon_{uuid.uuid4().hex}.pdf"
     try:
@@ -2841,7 +2838,7 @@ async def upload_amazon_pdf(
             "amazon_order_id": p["amazon_order_id"],
             "ship_type": ship_type,
             "shipping_method": shipping_method,
-            "courier_name": courier_name if ship_type == "self_ship" else "",
+            "courier_name": "",
             "customer_name": p["customer_name"],
             "address": p["address"],
             "phone": p.get("phone", ""),
@@ -2869,7 +2866,7 @@ async def upload_amazon_pdf(
 
 @api_router.get("/amazon/orders")
 async def list_amazon_orders(user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "packaging"]:
+    if user["role"] not in ["admin", "packaging", "dispatch"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     orders = await db.amazon_orders.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
     return orders
@@ -2877,7 +2874,7 @@ async def list_amazon_orders(user=Depends(get_current_user)):
 
 @api_router.get("/amazon/orders/{order_id}")
 async def get_amazon_order(order_id: str, user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "packaging"]:
+    if user["role"] not in ["admin", "packaging", "dispatch"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
@@ -2913,7 +2910,7 @@ async def update_amazon_packaging(order_id: str, updates: dict, user=Depends(get
 
 @api_router.put("/amazon/orders/{order_id}/mark-packed")
 async def mark_amazon_packed(order_id: str, user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "packaging"]:
+    if user["role"] not in ["admin", "packaging", "dispatch"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
@@ -2938,12 +2935,69 @@ async def dispatch_amazon_order(order_id: str, data: dict = {}, user=Depends(get
         "dispatched_by": user["username"],
     }
     if order.get("ship_type") == "self_ship":
-        dispatch["lr_number"] = data.get("lr_number", "")
+        lr = data.get("lr_number", "").strip()
+        if not lr:
+            raise HTTPException(status_code=400, detail="LR number is required for self ship orders")
+        dispatch["lr_number"] = lr
     await db.amazon_orders.update_one(
         {"id": order_id},
         {"$set": {"status": "dispatched", "dispatch": dispatch, "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
     return {"status": "dispatched"}
+
+
+@api_router.post("/amazon/orders/bulk-dispatch")
+async def bulk_dispatch_amazon(data: dict, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "dispatch", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order_ids = data.get("order_ids", [])
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="No order IDs provided")
+    dispatched = 0
+    for oid in order_ids:
+        order = await db.amazon_orders.find_one({"id": oid}, {"_id": 0})
+        if not order or order.get("status") == "dispatched":
+            continue
+        dispatch_data = {
+            "dispatched_at": datetime.now(timezone.utc).isoformat(),
+            "dispatched_by": user["username"],
+        }
+        await db.amazon_orders.update_one(
+            {"id": oid},
+            {"$set": {"status": "dispatched", "dispatch": dispatch_data, "updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        dispatched += 1
+    return {"dispatched": dispatched}
+
+
+@api_router.put("/amazon/orders/{order_id}/courier")
+async def update_amazon_courier(order_id: str, data: dict, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "packaging", "dispatch"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("status") == "dispatched":
+        raise HTTPException(status_code=400, detail="Cannot modify dispatched order")
+    courier_name = data.get("courier_name", "")
+    await db.amazon_orders.update_one(
+        {"id": order_id},
+        {"$set": {"courier_name": courier_name, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"status": "updated", "courier_name": courier_name}
+
+
+@api_router.delete("/amazon/orders/{order_id}")
+async def delete_amazon_order(order_id: str, user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("status") == "dispatched":
+        raise HTTPException(status_code=400, detail="Cannot delete dispatched order")
+    await db.amazon_orders.delete_one({"id": order_id})
+    return {"status": "deleted"}
 
 
 @api_router.delete("/amazon/orders/{order_id}/images")
