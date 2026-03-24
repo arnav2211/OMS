@@ -114,7 +114,6 @@ export default function CreateOrder() {
   const [courierName, setCourierName] = useState("");
   const [transporterName, setTransporterName] = useState("");
   const [shippingCharge, setShippingCharge] = useState(0);
-  const [localCharge, setLocalCharge] = useState(0);
   const [additionalCharges, setAdditionalCharges] = useState([]);
   const [remark, setRemark] = useState("");
   const [paymentStatus, setPaymentStatus] = useState("unpaid");
@@ -153,8 +152,6 @@ export default function CreateOrder() {
       setTransporterName(pi.transporter_name || "");
       setShippingCharge(pi.shipping_charge || 0);
       const allCharges = pi.additional_charges || [];
-      const localEntry = allCharges.find(c => c.name === "Local Charges");
-      setLocalCharge(localEntry?.amount || 0);
       setAdditionalCharges(allCharges.filter(c => c.name !== "Local Charges"));
       setRemark(pi.remark || "");
       setFreeSamples(pi.free_samples || []);
@@ -194,8 +191,6 @@ export default function CreateOrder() {
       setTransporterName(d.transporter_name || "");
       setShippingCharge(d.shipping_charge || 0);
       const allCharges2 = d.additional_charges || [];
-      const localEntry2 = allCharges2.find(c => c.name === "Local Charges");
-      setLocalCharge(localEntry2?.amount || 0);
       setAdditionalCharges(allCharges2.filter(c => c.name !== "Local Charges"));
       setRemark(d.remark || "");
       setFreeSamples(d.free_samples || []);
@@ -250,7 +245,7 @@ export default function CreateOrder() {
     if (gstApplicable && c.gst_percent > 0) return s + +((c.amount || 0) * c.gst_percent / 100).toFixed(2);
     return s;
   }, 0);
-  const rawTotal = subtotal + totalItemGst + shippingCharge + shippingGst + localCharge + totalAdditional + totalAdditionalGst;
+  const rawTotal = subtotal + totalItemGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst;
   const grandTotal = Math.ceil(rawTotal);
   const balanceAmount = paymentStatus === "full" ? 0 : paymentStatus === "partial" ? Math.max(0, grandTotal - amountPaid) : grandTotal;
 
@@ -365,7 +360,6 @@ export default function CreateOrder() {
         shipping_charge: shippingCharge,
         shipping_gst: shippingGst,
         additional_charges: [
-          ...(localCharge > 0 ? [{ name: "Local Charges", amount: localCharge, gst_percent: 0, gst_amount: 0 }] : []),
           ...additionalCharges.filter(c => c.name).map(c => ({
             name: c.name, amount: Math.max(0, c.amount || 0), gst_percent: c.gst_percent || 0,
             gst_amount: gstApplicable && c.gst_percent > 0 ? +((c.amount || 0) * c.gst_percent / 100).toFixed(2) : 0,
@@ -595,16 +589,10 @@ export default function CreateOrder() {
       <Card>
         <CardHeader className="pb-3"><CardTitle className="text-base">Charges</CardTitle></CardHeader>
         <CardContent className="space-y-4">
-          {/* Shipping & Local - Separate fields side by side */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <Label>Shipping Charges</Label>
-              <Input type="number" min={0} value={shippingCharge || ""} onChange={e => setShippingCharge(Math.max(0, +e.target.value))} placeholder="0" data-testid="shipping-charge-input" />
-            </div>
-            <div>
-              <Label>Local Charges</Label>
-              <Input type="number" min={0} value={localCharge || ""} onChange={e => setLocalCharge(Math.max(0, +e.target.value))} placeholder="0" data-testid="local-charge-input" />
-            </div>
+          {/* Shipping Charges */}
+          <div>
+            <Label>Shipping Charges</Label>
+            <Input type="number" min={0} value={shippingCharge || ""} onChange={e => setShippingCharge(Math.max(0, +e.target.value))} placeholder="0" data-testid="shipping-charge-input" />
           </div>
 
           <Separator />
@@ -721,7 +709,6 @@ export default function CreateOrder() {
             {gstApplicable && <div className="flex justify-between"><span className="text-muted-foreground">Item GST</span><span className="font-mono">{"\u20B9"}{totalItemGst.toFixed(2)}</span></div>}
             {shippingCharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping Charges</span><span className="font-mono">{"\u20B9"}{shippingCharge.toFixed(2)}</span></div>}
             {shippingGst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST (18%)</span><span className="font-mono">{"\u20B9"}{shippingGst.toFixed(2)}</span></div>}
-            {localCharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Local Charges</span><span className="font-mono">{"\u20B9"}{localCharge.toFixed(2)}</span></div>}
             {additionalCharges.filter(c => c.amount > 0).map((c, i) => (
               <div key={i}>
                 <div className="flex justify-between"><span className="text-muted-foreground">{c.name || "Charge"}</span><span className="font-mono">{"\u20B9"}{(c.amount || 0).toFixed(2)}</span></div>

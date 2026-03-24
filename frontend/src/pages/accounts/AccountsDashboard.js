@@ -56,6 +56,7 @@ export default function AccountsDashboard() {
   const [gstOrders, setGstOrders] = useState([]);
   const [invoiceLoading, setInvoiceLoading] = useState(true);
   const [uploading, setUploading] = useState({});
+  const [invoiceFilter, setInvoiceFilter] = useState("all");
 
   // Payment check tab state
   const [allOrders, setAllOrders] = useState([]);
@@ -190,9 +191,19 @@ export default function AccountsDashboard() {
         {/* ── INVOICES TAB ─────────────────────────────────── */}
         <TabsContent value="invoices">
           <Card>
-            <CardHeader className="pb-3 flex flex-row items-center justify-between">
+            <CardHeader className="pb-3 flex flex-row items-center justify-between flex-wrap gap-2">
               <CardTitle className="text-base">GST Orders — Invoice Management</CardTitle>
-              <Button variant="outline" size="sm" onClick={loadGstOrders}><RefreshCw className="w-4 h-4 mr-1" />Refresh</Button>
+              <div className="flex items-center gap-2">
+                <Select value={invoiceFilter} onValueChange={setInvoiceFilter}>
+                  <SelectTrigger className="w-40 h-8 text-xs" data-testid="invoice-filter"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Invoices</SelectItem>
+                    <SelectItem value="uploaded">Uploaded</SelectItem>
+                    <SelectItem value="pending">Pending Upload</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button variant="outline" size="sm" onClick={loadGstOrders}><RefreshCw className="w-4 h-4 mr-1" />Refresh</Button>
+              </div>
             </CardHeader>
             <CardContent>
               {invoiceLoading ? (
@@ -213,7 +224,11 @@ export default function AccountsDashboard() {
                       {gstOrders.length === 0 && (
                         <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No GST orders found</TableCell></TableRow>
                       )}
-                      {gstOrders.map(o => (
+                      {gstOrders.filter(o => {
+                        if (invoiceFilter === "uploaded") return !!o.tax_invoice_url;
+                        if (invoiceFilter === "pending") return !o.tax_invoice_url;
+                        return true;
+                      }).map(o => (
                         <TableRow key={o.id} data-testid={`invoice-row-${o.id}`}>
                           <TableCell>
                             <Link to={`/orders/${o.id}`} className="font-mono text-sm text-primary hover:underline">{o.order_number}</Link>

@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Search, RefreshCw, Printer } from "lucide-react";
+import { Search, RefreshCw, Printer, PackageCheck } from "lucide-react";
 
 const STATUS_COLORS = {
   new: "bg-blue-100 text-blue-800",
@@ -46,6 +46,15 @@ export default function AllOrders() {
 
   const canPrintAddresses = user?.role === "admin" || user?.role === "packaging";
   const showPaymentCheck = ["admin", "telecaller", "accounts"].includes(user?.role);
+  const isAdmin = user?.role === "admin";
+
+  const toggleForwardToPackaging = async (orderId, e) => {
+    e.stopPropagation();
+    try {
+      const res = await api.post(`/orders/${orderId}/forward-to-packaging`);
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, forwarded_to_packaging: res.data.forwarded_to_packaging } : o));
+    } catch { toast.error("Failed to update"); }
+  };
 
   useEffect(() => {
     loadOrders();
@@ -259,6 +268,7 @@ export default function AllOrders() {
                     {user?.role === "admin" && <TableHead className="text-xs uppercase whitespace-nowrap">Executive</TableHead>}
                     <TableHead className="text-xs uppercase whitespace-nowrap">Date</TableHead>
                     <TableHead className="text-xs uppercase whitespace-nowrap">Shipping</TableHead>
+                    {isAdmin && <TableHead className="text-xs uppercase whitespace-nowrap">Fwd Pkg</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -292,6 +302,20 @@ export default function AllOrders() {
                         <TableCell className="text-sm whitespace-nowrap" data-testid={`shipping-method-${o.id}`}>
                           {o.shipping_method === "courier" ? (o.courier_name || "Courier") : o.shipping_method === "transport" ? (o.transporter_name || "Transport") : o.shipping_method || "-"}
                         </TableCell>
+                        {isAdmin && (
+                          <TableCell>
+                            <Button
+                              variant={o.forwarded_to_packaging ? "default" : "outline"}
+                              size="icon"
+                              className={`h-7 w-7 ${o.forwarded_to_packaging ? "bg-green-600 hover:bg-green-700" : ""}`}
+                              onClick={(e) => toggleForwardToPackaging(o.id, e)}
+                              data-testid={`fwd-pkg-${o.id}`}
+                              title={o.forwarded_to_packaging ? "Forwarded to Packaging" : "Forward to Packaging"}
+                            >
+                              <PackageCheck className="w-3.5 h-3.5" />
+                            </Button>
+                          </TableCell>
+                        )}
                       </TableRow>
                     );
                   })}

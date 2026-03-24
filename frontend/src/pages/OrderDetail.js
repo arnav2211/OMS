@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
-import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2, Copy, ClipboardCopy, History } from "lucide-react";
+import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2, Copy, ClipboardCopy, History, Upload } from "lucide-react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import api from "@/lib/api";
+import { compressImage } from "@/lib/compressImage";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -71,16 +72,19 @@ export default function OrderDetail() {
   };
 
   const isDispatched = order?.status === "dispatched";
+  const isAdmin = user?.role === "admin";
   const canEditOrder = user?.role === "admin" || (user?.role === "telecaller" && order?.telecaller_id === user?.id);
   const canEditFormulation = user?.role === "admin" || (user?.role === "packaging" && formulationVisible);
   const showFormulations = user?.role === "admin" || (user?.role === "packaging" && formulationVisible);
-  const canEditPackaging = ["admin", "packaging"].includes(user?.role) && !isDispatched;
+  const canEditPackaging = user?.role === "admin" || (user?.role === "packaging" && !isDispatched);
   const canEditDispatch = ["admin", "dispatch"].includes(user?.role);
   const canSharePI = ["admin", "telecaller"].includes(user?.role);
   const canShareImages = ["admin", "telecaller"].includes(user?.role);
+  // Telecaller can edit payment on own orders even after dispatch
+  const canEditPayment = isAdmin || (user?.role === "telecaller" && order?.telecaller_id === user?.id);
 
   const openEdit = () => {
-    if (isDispatched) return toast.error("Cannot edit dispatched order");
+    if (isDispatched && !isAdmin) return toast.error("Cannot edit dispatched order");
     navigate(`/orders/${id}/edit`);
   };
 
@@ -267,7 +271,10 @@ export default function OrderDetail() {
           {(user?.role === "admin" || user?.role === "telecaller") && (
             <Button variant="outline" size="sm" onClick={() => navigate(`/create-order?duplicate=${id}`)} data-testid="duplicate-order-btn"><Copy className="w-4 h-4 mr-1" /> Duplicate</Button>
           )}
-          {(canEditOrder || canEditPackaging || canEditDispatch) && !isDispatched && (
+          {isAdmin && (
+            <Button variant="outline" size="sm" onClick={openEdit} data-testid="edit-order-btn"><Edit className="w-4 h-4 mr-1" /> Edit</Button>
+          )}
+          {!isAdmin && (canEditOrder || canEditPackaging || canEditDispatch) && !isDispatched && (
             <Button variant="outline" size="sm" onClick={openEdit} data-testid="edit-order-btn"><Edit className="w-4 h-4 mr-1" /> Edit</Button>
           )}
           {canEditFormulation && <Button variant="outline" size="sm" onClick={openFormulation} data-testid="formulation-btn"><FileText className="w-4 h-4 mr-1" /> Formulation</Button>}
@@ -277,7 +284,7 @@ export default function OrderDetail() {
         </div>
       </div>
 
-      {isDispatched && <div className="p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 text-sm text-purple-800 dark:text-purple-200" data-testid="dispatch-lock-notice">This order has been dispatched. Editing is locked (formulation changes only).</div>}
+      {isDispatched && !isAdmin && <div className="p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 text-sm text-purple-800 dark:text-purple-200" data-testid="dispatch-lock-notice">This order has been dispatched. Editing is locked (formulation changes only).</div>}
 
       {/* Customer Info */}
       <Card>
@@ -309,9 +316,6 @@ export default function OrderDetail() {
             </div>
           )}
           {order.purpose && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Purpose</span><span className="text-sm">{order.purpose}</span></div>}
-          {order.mode_of_payment && (
-            <div className="flex justify-between"><span className="text-sm text-muted-foreground">Payment Mode</span><span className="text-sm">{order.mode_of_payment}{order.payment_mode_details ? ` (${order.payment_mode_details})` : ""}</span></div>
-          )}
           <div className="flex justify-between"><span className="text-sm text-muted-foreground">Created</span><span className="text-sm">{new Date(order.created_at).toLocaleString("en-IN")}</span></div>
         </CardContent>
       </Card>
@@ -374,40 +378,7 @@ export default function OrderDetail() {
       </Card>
 
       {/* Payment */}
-      <Card>
-        <CardHeader className="pb-3"><CardTitle className="text-base">Payment Details</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex justify-between"><span className="text-sm text-muted-foreground">Status</span><Badge variant="outline">{order.payment_status}</Badge></div>
-          {order.amount_paid > 0 && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Amount Paid</span><span className="text-sm font-mono">{"\u20B9"}{order.amount_paid}</span></div>}
-          {order.balance_amount > 0 && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Balance</span><span className="text-sm font-mono text-red-500">{"\u20B9"}{order.balance_amount}</span></div>}
-          {order.payment_screenshots?.length > 0 && (
-            <div>
-              <p className="text-sm font-medium mb-2">Payment Proof</p>
-              <div className="flex flex-wrap gap-2" data-testid="payment-proof-images">
-                {order.payment_screenshots.map((url, i) => (
-                  <div key={i} className="relative w-20 h-20 rounded-lg border overflow-hidden group">
-                    <button className="w-full h-full" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
-                      <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Payment proof ${i + 1}`} className="w-full h-full object-cover" />
-                    </button>
-                    {!isDispatched && (canEditOrder) && (
-                      <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={async () => {
-                          try {
-                            await api.delete(`/orders/${id}/images?image_type=payment&image_url=${encodeURIComponent(url)}`);
-                            toast.success("Image removed"); loadOrder();
-                          } catch { toast.error("Failed to remove"); }
-                        }}
-                        data-testid={`delete-payment-img-${i}`}>
-                        <X className="w-3 h-3" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <PaymentSection order={order} user={user} canEditPayment={canEditPayment} isDispatched={isDispatched} isAdmin={isAdmin} orderId={id} onReload={loadOrder} setPreviewImage={setPreviewImage} />
 
       {/* Payment Verification */}
       {["admin", "accounts"].includes(user?.role) && (
@@ -533,7 +504,7 @@ export default function OrderDetail() {
                         <button className="w-full h-full" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
                           <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Item ${key}`} className="w-full h-full object-cover" />
                         </button>
-                        {!isDispatched && canEditPackaging && (
+                        {canEditPackaging && (
                           <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
                             onClick={async () => {
                               try {
@@ -559,7 +530,7 @@ export default function OrderDetail() {
                       <button className="w-full h-full" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
                         <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Order img ${i + 1}`} className="w-full h-full object-cover" />
                       </button>
-                      {!isDispatched && canEditPackaging && (
+                      {canEditPackaging && (
                         <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
                           onClick={async () => { try { await api.delete(`/orders/${id}/images?image_type=order_image&image_url=${encodeURIComponent(url)}`); toast.success("Image removed"); loadOrder(); } catch { toast.error("Failed"); } }}>
                           <X className="w-3 h-3" />
@@ -579,7 +550,7 @@ export default function OrderDetail() {
                       <button className="w-full h-full" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
                         <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Box img ${i + 1}`} className="w-full h-full object-cover" />
                       </button>
-                      {!isDispatched && canEditPackaging && (
+                      {canEditPackaging && (
                         <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
                           onClick={async () => { try { await api.delete(`/orders/${id}/images?image_type=packed_box_image&image_url=${encodeURIComponent(url)}`); toast.success("Image removed"); loadOrder(); } catch { toast.error("Failed"); } }}>
                           <X className="w-3 h-3" />
@@ -601,7 +572,7 @@ export default function OrderDetail() {
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">Packaging</CardTitle>
-              {["admin", "packaging"].includes(user?.role) && order.status !== "dispatched" && (
+              {canEditPackaging && (
                 <Button variant="outline" size="sm" onClick={openPackaging} data-testid="update-packaging-btn"><Package className="w-4 h-4 mr-1" /> Update</Button>
               )}
             </div>
@@ -680,7 +651,7 @@ export default function OrderDetail() {
 
       {/* Packaging Dialog - Simplified */}
       <Dialog open={showPackaging} onOpenChange={setShowPackaging}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Update Packaging</DialogTitle></DialogHeader>
           <PackagingForm order={order} staffList={packagingStaff} onSave={savePackaging} onCancel={() => setShowPackaging(false)} saving={saving} />
         </DialogContent>
@@ -768,17 +739,206 @@ export default function OrderDetail() {
   );
 }
 
+function PaymentSection({ order, user, canEditPayment, isDispatched, isAdmin, orderId, onReload, setPreviewImage }) {
+  const [editing, setEditing] = useState(false);
+  const [payStatus, setPayStatus] = useState(order.payment_status || "unpaid");
+  const [modeOfPayment, setModeOfPayment] = useState(order.mode_of_payment || "");
+  const [paymentModeDetails, setPaymentModeDetails] = useState(order.payment_mode_details || "");
+  const [amountPaid, setAmountPaid] = useState(order.amount_paid || 0);
+  const [screenshots, setScreenshots] = useState(order.payment_screenshots || []);
+  const [saving, setSaving] = useState(false);
+
+  const PAYMENT_MODES = ["Cash", "Online", "Other"];
+  const grandTotal = order.grand_total || 0;
+  const balanceAmount = payStatus === "full" ? 0 : payStatus === "partial" ? Math.max(0, grandTotal - amountPaid) : grandTotal;
+
+  const handleScreenshotUpload = async (e) => {
+    const files = e.target.files;
+    if (!files?.length) return;
+    for (const file of files) {
+      const compressed = await compressImage(file);
+      const formData = new FormData();
+      formData.append("file", compressed);
+      try {
+        const res = await api.post("/upload", formData, { headers: { "Content-Type": "multipart/form-data" } });
+        setScreenshots(prev => [...prev, res.data.url]);
+      } catch { toast.error("Upload failed"); }
+    }
+    e.target.value = "";
+  };
+
+  const savePayment = async () => {
+    setSaving(true);
+    try {
+      await api.put(`/orders/${orderId}`, {
+        payment_status: payStatus,
+        mode_of_payment: modeOfPayment,
+        payment_mode_details: paymentModeDetails,
+        amount_paid: payStatus === "full" ? grandTotal : amountPaid,
+        balance_amount: balanceAmount,
+        payment_screenshots: screenshots,
+      });
+      toast.success("Payment details updated");
+      setEditing(false);
+      onReload();
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed to update"); }
+    finally { setSaving(false); }
+  };
+
+  if (editing) {
+    return (
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">Edit Payment Details</CardTitle>
+            <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>Cancel</Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <Label className="text-sm">Payment Status</Label>
+              <Select value={payStatus} onValueChange={setPayStatus}>
+                <SelectTrigger data-testid="edit-pay-status"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unpaid">Unpaid</SelectItem>
+                  <SelectItem value="partial">Partial</SelectItem>
+                  <SelectItem value="full">Full</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-sm">Mode of Payment</Label>
+              <Select value={modeOfPayment} onValueChange={setModeOfPayment}>
+                <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                <SelectContent>{PAYMENT_MODES.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            {modeOfPayment === "Other" && (
+              <div><Label className="text-sm">Payment Details</Label><Input value={paymentModeDetails} onChange={e => setPaymentModeDetails(e.target.value)} /></div>
+            )}
+          </div>
+          {payStatus === "partial" && (
+            <div className="grid grid-cols-2 gap-4">
+              <div><Label className="text-sm">Amount Paid</Label><Input type="number" value={amountPaid || ""} onChange={e => setAmountPaid(+e.target.value)} data-testid="edit-pay-amount" /></div>
+              <div><Label className="text-sm">Balance</Label><Input type="number" value={balanceAmount} readOnly className="bg-muted" /></div>
+            </div>
+          )}
+          <div>
+            <Label className="text-sm">Payment Screenshots</Label>
+            <div className="flex flex-wrap gap-2 mt-1">
+              <label className="cursor-pointer inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90">
+                Gallery / Files
+                <input type="file" multiple accept="image/*" onChange={handleScreenshotUpload} className="hidden" data-testid="pay-screenshot-input" />
+              </label>
+              <label className="cursor-pointer inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium bg-secondary text-secondary-foreground hover:bg-secondary/80">
+                Camera
+                <input type="file" accept="image/*" capture="environment" onChange={handleScreenshotUpload} className="hidden" data-testid="pay-screenshot-camera" />
+              </label>
+            </div>
+            {screenshots.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {screenshots.map((url, i) => (
+                  <div key={i} className="relative w-16 h-16 rounded border overflow-hidden group">
+                    <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt="" className="w-full h-full object-cover" />
+                    <button className="absolute inset-0 bg-red-500/80 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
+                      onClick={() => setScreenshots(prev => prev.filter((_, j) => j !== i))}>
+                      <X className="w-4 h-4 text-white" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={savePayment} disabled={saving} data-testid="save-payment-btn">{saving ? "Saving..." : "Save Payment"}</Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base">Payment Details</CardTitle>
+          {canEditPayment && (
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)} data-testid="edit-payment-btn"><Edit className="w-4 h-4 mr-1" /> Edit</Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex justify-between"><span className="text-sm text-muted-foreground">Status</span><Badge variant="outline">{order.payment_status}</Badge></div>
+        {order.mode_of_payment && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Mode</span><span className="text-sm">{order.mode_of_payment}{order.payment_mode_details ? ` (${order.payment_mode_details})` : ""}</span></div>}
+        {order.amount_paid > 0 && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Amount Paid</span><span className="text-sm font-mono">{"\u20B9"}{order.amount_paid}</span></div>}
+        {order.balance_amount > 0 && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Balance</span><span className="text-sm font-mono text-red-500">{"\u20B9"}{order.balance_amount}</span></div>}
+        {order.payment_screenshots?.length > 0 && (
+          <div>
+            <p className="text-sm font-medium mb-2">Payment Proof</p>
+            <div className="flex flex-wrap gap-2" data-testid="payment-proof-images">
+              {order.payment_screenshots.map((url, i) => (
+                <div key={i} className="relative w-20 h-20 rounded-lg border overflow-hidden group">
+                  <button className="w-full h-full" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
+                    <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Payment proof ${i + 1}`} className="w-full h-full object-cover" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function PackagingForm({ order, staffList, onSave, onCancel, saving }) {
   const [itemPackedBy, setItemPackedBy] = useState(order.packaging?.item_packed_by || []);
   const [boxPackedBy, setBoxPackedBy] = useState(order.packaging?.box_packed_by || []);
   const [checkedBy, setCheckedBy] = useState(order.packaging?.checked_by || []);
+  const [itemImages, setItemImages] = useState(order.packaging?.item_images || {});
+  const [orderImages, setOrderImages] = useState(order.packaging?.order_images || []);
+  const [packedBoxImages, setPackedBoxImages] = useState(order.packaging?.packed_box_images || []);
+  const [uploading, setUploading] = useState(false);
 
   const toggleStaff = (list, setList, name) => {
     setList(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
   };
 
+  const uploadImage = async (file, target, itemKey) => {
+    const compressed = await compressImage(file);
+    const form = new FormData();
+    form.append("file", compressed);
+    setUploading(true);
+    try {
+      const res = await api.post("/upload", form, { headers: { "Content-Type": "multipart/form-data" } });
+      const url = res.data.url;
+      if (target === "item" && itemKey) {
+        setItemImages(prev => ({ ...prev, [itemKey]: [...(prev[itemKey] || []), url] }));
+      } else if (target === "order") {
+        setOrderImages(prev => [...prev, url]);
+      } else if (target === "packed_box") {
+        setPackedBoxImages(prev => [...prev, url]);
+      }
+    } catch { toast.error("Upload failed"); }
+    finally { setUploading(false); }
+  };
+
+  const removeImage = (target, url, itemKey) => {
+    if (target === "item" && itemKey) {
+      setItemImages(prev => ({ ...prev, [itemKey]: (prev[itemKey] || []).filter(u => u !== url) }));
+    } else if (target === "order") {
+      setOrderImages(prev => prev.filter(u => u !== url));
+    } else if (target === "packed_box") {
+      setPackedBoxImages(prev => prev.filter(u => u !== url));
+    }
+  };
+
+  const backendUrl = process.env.REACT_APP_BACKEND_URL;
+
   return (
     <div className="space-y-4">
+      {/* Staff Selection */}
       {[["Item Packed By", itemPackedBy, setItemPackedBy], ["Box Packed By", boxPackedBy, setBoxPackedBy], ["Checked By", checkedBy, setCheckedBy]].map(([label, list, setter]) => (
         <div key={label}>
           <Label className="text-sm">{label}</Label>
@@ -792,9 +952,102 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving }) {
           </div>
         </div>
       ))}
+
+      <Separator />
+
+      {/* Image Upload Section */}
+      <div className="space-y-4">
+        <Label className="text-sm font-medium">Packaging Images</Label>
+
+        {/* Item Images */}
+        {order.items?.map(item => (
+          <div key={item.product_name}>
+            <Label className="text-xs font-medium text-muted-foreground uppercase">{item.product_name}</Label>
+            <div className="flex flex-wrap gap-2 mt-1">
+              {(itemImages[item.product_name] || []).map((url, i) => (
+                <div key={i} className="relative w-16 h-16 rounded-lg border overflow-hidden group">
+                  <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
+                  <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={() => removeImage("item", url, item.product_name)}><X className="w-3 h-3" /></button>
+                </div>
+              ))}
+              <label className="w-16 h-16 rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-accent transition-colors">
+                <Upload className="w-3 h-3 text-muted-foreground" />
+                <span className="text-[10px] text-muted-foreground">Files</span>
+                <input type="file" accept="image/*" className="sr-only" disabled={uploading}
+                  onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "item", item.product_name); e.target.value = ""; }} />
+              </label>
+              <label className="w-16 h-16 rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-accent transition-colors bg-secondary/30">
+                <Upload className="w-3 h-3 text-muted-foreground" />
+                <span className="text-[10px] text-muted-foreground">Camera</span>
+                <input type="file" accept="image/*" capture="environment" className="sr-only" disabled={uploading}
+                  onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "item", item.product_name); e.target.value = ""; }} />
+              </label>
+            </div>
+          </div>
+        ))}
+
+        {/* Order Images */}
+        <div>
+          <Label className="text-xs font-medium text-muted-foreground uppercase">Full Order Images</Label>
+          <div className="flex flex-wrap gap-2 mt-1">
+            {orderImages.map((url, i) => (
+              <div key={i} className="relative w-16 h-16 rounded-lg border overflow-hidden group">
+                <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
+                <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                  onClick={() => removeImage("order", url)}><X className="w-3 h-3" /></button>
+              </div>
+            ))}
+            <label className="w-16 h-16 rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-accent transition-colors">
+              <Upload className="w-3 h-3 text-muted-foreground" />
+              <span className="text-[10px] text-muted-foreground">Files</span>
+              <input type="file" accept="image/*" className="sr-only" disabled={uploading}
+                onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "order"); e.target.value = ""; }} />
+            </label>
+            <label className="w-16 h-16 rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-accent transition-colors bg-secondary/30">
+              <Upload className="w-3 h-3 text-muted-foreground" />
+              <span className="text-[10px] text-muted-foreground">Camera</span>
+              <input type="file" accept="image/*" capture="environment" className="sr-only" disabled={uploading}
+                onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "order"); e.target.value = ""; }} />
+            </label>
+          </div>
+        </div>
+
+        {/* Packed Box Images */}
+        <div>
+          <Label className="text-xs font-medium text-muted-foreground uppercase">Packed Box Images</Label>
+          <div className="flex flex-wrap gap-2 mt-1">
+            {packedBoxImages.map((url, i) => (
+              <div key={i} className="relative w-16 h-16 rounded-lg border overflow-hidden group">
+                <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
+                <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                  onClick={() => removeImage("packed_box", url)}><X className="w-3 h-3" /></button>
+              </div>
+            ))}
+            <label className="w-16 h-16 rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-accent transition-colors">
+              <Upload className="w-3 h-3 text-muted-foreground" />
+              <span className="text-[10px] text-muted-foreground">Files</span>
+              <input type="file" accept="image/*" className="sr-only" disabled={uploading}
+                onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "packed_box"); e.target.value = ""; }} />
+            </label>
+            <label className="w-16 h-16 rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-accent transition-colors bg-secondary/30">
+              <Upload className="w-3 h-3 text-muted-foreground" />
+              <span className="text-[10px] text-muted-foreground">Camera</span>
+              <input type="file" accept="image/*" capture="environment" className="sr-only" disabled={uploading}
+                onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "packed_box"); e.target.value = ""; }} />
+            </label>
+          </div>
+        </div>
+      </div>
+
+      {uploading && <p className="text-xs text-muted-foreground">Uploading...</p>}
+
       <DialogFooter>
         <Button variant="outline" onClick={onCancel}>Cancel</Button>
-        <Button onClick={() => onSave({ item_packed_by: itemPackedBy, box_packed_by: boxPackedBy, checked_by: checkedBy })} disabled={saving}>
+        <Button onClick={() => onSave({
+          item_packed_by: itemPackedBy, box_packed_by: boxPackedBy, checked_by: checkedBy,
+          item_images: itemImages, order_images: orderImages, packed_box_images: packedBoxImages,
+        })} disabled={saving || uploading}>
           {saving ? "Saving..." : "Save Packaging"}
         </Button>
       </DialogFooter>
