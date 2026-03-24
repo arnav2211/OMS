@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Link } from "react-router-dom";
 import api from "@/lib/api";
 import { compressImage } from "@/lib/compressImage";
 import { mobilePrintPdf } from "@/lib/mobilePrint";
@@ -221,7 +222,9 @@ export default function PackagingDashboard() {
               <TableBody>
                 {orders.map((order) => (
                   <TableRow key={order.id} data-testid={`pkg-order-${order.order_number}`}>
-                    <TableCell className="font-mono font-medium text-sm">{order.order_number}</TableCell>
+                    <TableCell className="font-mono font-medium text-sm">
+                      <Link to={`/orders/${order.id}`} className="text-primary hover:underline" data-testid={`pkg-order-link-${order.order_number}`}>{order.order_number}</Link>
+                    </TableCell>
                     <TableCell className="text-sm">{order.customer_name}</TableCell>
                     <TableCell className="hidden sm:table-cell">{order.items?.length}</TableCell>
                     <TableCell>
