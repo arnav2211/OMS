@@ -8,55 +8,50 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - **Frontend:** React, React Router, Tailwind CSS, Shadcn/UI, Axios
 - **Database:** MongoDB
 
-## Core Features (Implemented)
-- JWT authentication with role-based access
-- Customer management with addresses
-- Order creation, editing, status workflow
-- Proforma Invoice management
-- Payment tracking with screenshots
-- Packaging dashboard with image uploads
-- Dispatch management
-- PDF generation
-- Tax invoice generation with UPI QR codes
-- Formulation management
-- Item analytics
-- Persistent notification system
-- Forward to Packaging (admin)
-- Admin full edit power post-dispatch
-- Telecaller payment edit post-dispatch
+## Amazon PDF Orders Module (Latest Updates - March 2026)
+### Core
+- Admin uploads Easy Ship / Self Ship PDF invoices
+- System parses and creates orders in `amazon_orders` collection (separate from regular orders)
+- AM-XXXX sequential numbering via `amazon_counter`
+- Duplicate prevention by Amazon Order ID
 
-## Amazon PDF Orders Module (Completed - March 2026)
-### Overview
-Separate module for processing Amazon invoices. Admin uploads PDF → system auto-creates structured orders → packing team processes them.
+### Upload
+- Easy Ship: shipping=Amazon, no courier
+- Self Ship: shipping=Courier, **courier NOT selected during upload** — set manually per order later
 
-### Features
-- **PDF Upload:** Easy Ship (shipping=Amazon, no courier) and Self Ship (shipping=Courier, select from DTDC/Anjani/Professional/India Post)
-- **PDF Parsing:** Extracts customer name, address, phone (self-ship), Amazon Order ID, items (name, qty, price), grand total
-- **Separate Collection:** `amazon_orders` — does NOT mix with regular orders
-- **AM Numbering:** Sequential AM-0001, AM-0002... via `amazon_counter` collection
-- **Duplicate Prevention:** By Amazon Order ID
-- **Access Control:** Admin (upload + full), Packaging (view + process), Telecaller (NO access)
-- **Packing:** Same logic as /packaging — staff selection, item/order/packed box images, mark packed
-- **Dispatch:** Easy Ship = just mark dispatched. Self Ship = optional LR number
-- **Admin Override:** Can edit packaging even after dispatch
+### Access Control
+- Admin: upload + full access + delete
+- Packaging: view + packing + dispatch + courier edit
+- Dispatch: dispatch + courier edit + view
+- Telecaller: NO access
 
 ### Pages
-- `/amazon-orders` — Order list with filters, Upload PDF button (admin)
-- `/amazon-orders/:id` — Order detail with packaging, dispatch
-- `/amazon-packing` — Packing queue for packaging team
+- `/amazon-orders` — List with status + ship type filters. Upload (admin), Delete (admin, non-dispatched)
+- `/amazon-orders/:id` — Detail with packaging, dispatch
+- `/amazon-packing` — Packing queue with image uploads
+- `/amazon-dispatch` — Two tabs: Easy Ship (bulk multi-select dispatch), Self Ship (courier edit + mandatory LR dispatch)
+
+### Dispatch Rules
+- Easy Ship: bulk select + dispatch (no LR needed)
+- Self Ship: must assign courier first, then dispatch with **mandatory** LR number
+- PDF deleted from server after parsing
 
 ### API Endpoints
 - `POST /api/amazon/upload-pdf` — Parse PDF, create orders
-- `GET /api/amazon/orders` — List all amazon orders
+- `GET /api/amazon/orders` — List all
 - `GET /api/amazon/orders/{id}` — Single order
 - `PUT /api/amazon/orders/{id}/packaging` — Update packaging
-- `PUT /api/amazon/orders/{id}/mark-packed` — Mark as packed
-- `PUT /api/amazon/orders/{id}/dispatch` — Dispatch order
+- `PUT /api/amazon/orders/{id}/mark-packed` — Mark packed
+- `PUT /api/amazon/orders/{id}/dispatch` — Dispatch (LR mandatory for self_ship)
+- `POST /api/amazon/orders/bulk-dispatch` — Bulk dispatch easy_ship
+- `PUT /api/amazon/orders/{id}/courier` — Update courier name
+- `DELETE /api/amazon/orders/{id}` — Delete order (admin, non-dispatched)
 - `DELETE /api/amazon/orders/{id}/images` — Delete images
 
 ## Credentials
 - Admin: admin / admin123
 - Packaging: test_packaging_user / test123
+- Dispatch: test_dispatch_user / test123
 - Telecaller: test_tc_payment / test123
 - Accounts: test_accounts / test123
 
