@@ -39,8 +39,8 @@ export default function AmazonDispatch() {
     try { const res = await api.get("/amazon/orders"); setOrders(res.data); } catch {} finally { setLoading(false); }
   };
 
-  const easyShipOrders = orders.filter(o => o.ship_type === "easy_ship" && o.status !== "dispatched");
-  const selfShipOrders = orders.filter(o => o.ship_type === "self_ship" && o.status !== "dispatched");
+  const easyShipOrders = orders.filter(o => o.ship_type === "easy_ship" && o.status === "packed");
+  const selfShipOrders = orders.filter(o => o.ship_type === "self_ship" && o.status === "packed");
 
   // Easy Ship - bulk dispatch
   const toggleEasySelect = (id) => {

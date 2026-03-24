@@ -11,8 +11,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Package, Truck, X, Upload, Copy } from "lucide-react";
+import { ArrowLeft, Package, Truck, X, Upload, Copy, Edit2 } from "lucide-react";
 
 const STATUS_BADGE = {
   new: "bg-blue-100 text-blue-800",
@@ -36,6 +37,11 @@ export default function AmazonOrderDetail() {
   const [packagingStaff, setPackagingStaff] = useState([]);
   const [previewImage, setPreviewImage] = useState(null);
   const [lrNumber, setLrNumber] = useState("");
+  const [editingCourier, setEditingCourier] = useState(false);
+  const [courierValue, setCourierValue] = useState("");
+
+  const COURIERS = ["DTDC", "Anjani", "Professional", "India Post"];
+  const canEditCourier = ["admin", "packaging", "dispatch"].includes(user?.role) && order?.status !== "dispatched" && order?.ship_type === "self_ship";
 
   const canEditPackaging = isAdmin || (isPacking && order?.status !== "dispatched");
   const canDispatch = ["admin", "packaging", "dispatch"].includes(user?.role) && order?.status === "packed";
@@ -87,6 +93,16 @@ export default function AmazonOrderDetail() {
   };
 
   const copyText = (t) => { navigator.clipboard.writeText(t); toast.success("Copied"); };
+
+  const saveCourier = async () => {
+    if (!courierValue) return toast.error("Select a courier");
+    try {
+      await api.put(`/amazon/orders/${id}/courier`, { courier_name: courierValue });
+      toast.success("Courier updated");
+      setEditingCourier(false);
+      loadOrder();
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+  };
 
   if (loading || !order) return <div className="flex items-center justify-center py-20 text-muted-foreground">Loading...</div>;
 
@@ -153,7 +169,30 @@ export default function AmazonOrderDetail() {
         <CardContent className="space-y-2">
           <div className="flex justify-between"><span className="text-sm text-muted-foreground">Type</span><span className="text-sm capitalize">{order.ship_type?.replace("_", " ")}</span></div>
           <div className="flex justify-between"><span className="text-sm text-muted-foreground">Method</span><span className="text-sm capitalize">{order.shipping_method}</span></div>
-          {order.courier_name && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Courier</span><span className="text-sm">{order.courier_name}</span></div>}
+          {order.ship_type === "self_ship" && (
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">Courier</span>
+              {editingCourier ? (
+                <div className="flex items-center gap-2">
+                  <Select value={courierValue} onValueChange={setCourierValue}>
+                    <SelectTrigger className="w-36 h-8 text-xs" data-testid="courier-edit-select"><SelectValue placeholder="Select" /></SelectTrigger>
+                    <SelectContent>{COURIERS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Button size="sm" className="h-8 text-xs" onClick={saveCourier} data-testid="save-courier-btn">Save</Button>
+                  <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setEditingCourier(false)}>Cancel</Button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <span className="text-sm">{order.courier_name || <span className="italic text-muted-foreground">Not set</span>}</span>
+                  {canEditCourier && (
+                    <button onClick={() => { setCourierValue(order.courier_name || ""); setEditingCourier(true); }} className="p-1 hover:bg-accent rounded" data-testid="edit-courier-btn">
+                      <Edit2 className="w-3 h-3 text-muted-foreground" />
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           {order.dispatch?.lr_number && <div className="flex justify-between"><span className="text-sm text-muted-foreground">LR Number</span><span className="text-sm font-mono">{order.dispatch.lr_number}</span></div>}
         </CardContent>
       </Card>

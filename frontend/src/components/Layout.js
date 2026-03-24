@@ -49,6 +49,7 @@ const NAV_ITEMS = {
     { label: "Amazon Orders", icon: ShoppingBag, path: "/amazon-orders" },
     { label: "Amazon Packing", icon: ShoppingBag, path: "/amazon-packing" },
     { label: "Amazon Dispatch", icon: Truck, path: "/amazon-dispatch" },
+    { label: "Accounts", icon: BarChart3, path: "/accounts" },
     { label: "Item Analytics", icon: TrendingUp, path: "/item-analytics" },
     { label: "Users", icon: Settings, path: "/users" },
   ],
