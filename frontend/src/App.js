@@ -18,6 +18,11 @@ import EditOrder from "@/pages/EditOrder";
 import PIBuilder from "@/pages/PIBuilder";
 import ItemAnalytics from "@/pages/ItemAnalytics";
 import AllOrders from "@/pages/AllOrders";
+import AmazonOrders from "@/pages/amazon/AmazonOrders";
+import AmazonOrderDetail from "@/pages/amazon/AmazonOrderDetail";
+import AmazonPacking from "@/pages/amazon/AmazonPacking";
+import AmazonDispatch from "@/pages/amazon/AmazonDispatch";
+import AdminAccounts from "@/pages/admin/AdminAccounts";
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
@@ -60,6 +65,11 @@ function AppRoutes() {
       <Route path="/proforma" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><PIBuilder /></ProtectedRoute>} />
       <Route path="/item-analytics" element={<ProtectedRoute allowedRoles={["admin"]}><ItemAnalytics /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute allowedRoles={["admin"]}><UserManagement /></ProtectedRoute>} />
+      <Route path="/amazon-orders" element={<ProtectedRoute allowedRoles={["admin", "packaging"]}><AmazonOrders /></ProtectedRoute>} />
+      <Route path="/amazon-orders/:id" element={<ProtectedRoute allowedRoles={["admin", "packaging", "dispatch"]}><AmazonOrderDetail /></ProtectedRoute>} />
+      <Route path="/amazon-packing" element={<ProtectedRoute allowedRoles={["admin", "packaging"]}><AmazonPacking /></ProtectedRoute>} />
+      <Route path="/amazon-dispatch" element={<ProtectedRoute allowedRoles={["admin", "packaging", "dispatch"]}><AmazonDispatch /></ProtectedRoute>} />
+      <Route path="/accounts" element={<ProtectedRoute allowedRoles={["admin"]}><AdminAccounts /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

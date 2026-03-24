@@ -10,7 +10,7 @@ import {
 import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
-  FileText, TrendingUp, Bell,
+  FileText, TrendingUp, Bell, ShoppingBag,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -27,12 +27,16 @@ const NAV_ITEMS = {
     { label: "Dashboard", icon: Home, path: "/" },
     { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Packaging Queue", icon: Package, path: "/packaging" },
+    { label: "Amazon Orders", icon: ShoppingBag, path: "/amazon-orders" },
+    { label: "Amazon Packing", icon: ShoppingBag, path: "/amazon-packing" },
+    { label: "Amazon Dispatch", icon: Truck, path: "/amazon-dispatch" },
     { label: "Dispatch", icon: Truck, path: "/dispatch" },
   ],
   dispatch: [
     { label: "Dashboard", icon: Home, path: "/" },
     { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Dispatch Queue", icon: Truck, path: "/dispatch" },
+    { label: "Amazon Dispatch", icon: ShoppingBag, path: "/amazon-dispatch" },
   ],
   admin: [
     { label: "Dashboard", icon: Home, path: "/" },
@@ -42,6 +46,10 @@ const NAV_ITEMS = {
     { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
     { label: "Packaging", icon: Package, path: "/packaging" },
     { label: "Dispatch", icon: Truck, path: "/dispatch" },
+    { label: "Amazon Orders", icon: ShoppingBag, path: "/amazon-orders" },
+    { label: "Amazon Packing", icon: ShoppingBag, path: "/amazon-packing" },
+    { label: "Amazon Dispatch", icon: Truck, path: "/amazon-dispatch" },
+    { label: "Accounts", icon: BarChart3, path: "/accounts" },
     { label: "Item Analytics", icon: TrendingUp, path: "/item-analytics" },
     { label: "Users", icon: Settings, path: "/users" },
   ],

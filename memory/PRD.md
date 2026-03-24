@@ -4,50 +4,56 @@
 Full-stack Order Management System for CitSpray with multi-role access (Admin, Telecaller, Packaging, Dispatch, Accounts), order/customer management, Proforma Invoice creation, PDF generation, and comprehensive workflow management.
 
 ## Tech Stack
-- **Backend:** FastAPI, Motor (async MongoDB), Pydantic, JWT, Passlib, ReportLab
+- **Backend:** FastAPI, Motor (async MongoDB), Pydantic, JWT, Passlib, ReportLab, pdfplumber
 - **Frontend:** React, React Router, Tailwind CSS, Shadcn/UI, Axios
 - **Database:** MongoDB
 
-## Core Features (Implemented)
-- JWT authentication with role-based access
-- Customer management with addresses
-- Order creation, editing, status workflow (new -> packaging -> packed -> dispatched)
-- Proforma Invoice (PI) creation, editing, PDF generation, PI-to-order conversion
-- Payment tracking with screenshots
-- Packaging dashboard with image uploads
-- Dispatch management
-- PDF generation (order prints, address labels, PI PDFs)
-- Tax invoice generation with UPI QR codes
-- Formulation management
-- Item analytics
+## Amazon PDF Orders Module (Latest Updates - March 2026)
+### Core
+- Admin uploads Easy Ship / Self Ship PDF invoices
+- System parses and creates orders in `amazon_orders` collection (separate from regular orders)
+- AM-XXXX sequential numbering via `amazon_counter`
+- Duplicate prevention by Amazon Order ID
 
-## Phase 10 Features (Completed)
-1. Forward to Packaging (Admin toggle in All Orders)
-2. Tax Invoice Filter (Accounts - Uploaded/Pending)
-3. Remove Local Charges from all forms
-4. Telecaller Payment Edit (own orders, even after dispatch)
-5. Admin Full Edit Power (everything, even after dispatch)
-6. Image Upload in Packaging Update dialog (Order Summary)
+### Upload
+- Easy Ship: shipping=Amazon, no courier
+- Self Ship: shipping=Courier, **courier NOT selected during upload** — set manually per order later
 
-## Phase 10.1 - Accounts Dashboard Fixes (Completed)
-1. Date filter fix — filters by order creation date
-2. New columns: Mode of Payment, Date, GST/Non-GST, Payment Proof preview
+### Access Control
+- Admin: upload + full access + delete
+- Packaging: view + packing + dispatch + courier edit
+- Dispatch: dispatch + courier edit + view
+- Telecaller: NO access
 
-## Phase 11 - Notifications & Share (Completed)
-1. Share Packed Box Images — separate button for packed box images only
-2. Persistent Notification System — DB-backed, acknowledge to dismiss
-3. Notification Box on Dashboard — fixed height, scrollable
-4. Sound & Mobile Popup on new notifications
+### Pages
+- `/amazon-orders` — List with status + ship type filters. Upload (admin), Delete (admin, non-dispatched)
+- `/amazon-orders/:id` — Detail with packaging, dispatch
+- `/amazon-packing` — Packing queue with image uploads
+- `/amazon-dispatch` — Two tabs: Easy Ship (bulk multi-select dispatch), Self Ship (courier edit + mandatory LR dispatch)
 
-## Phase 12 - Latest Changes (Completed - March 2026)
-1. **Shipping Details in Order Summary** — New card between Customer Info and Items showing shipping method and courier/transport name. Visible to all roles.
-2. **Shipping Column in Packaging Queue** — Added Shipping column showing method and name (same format as All Orders page).
-3. **Executive Performance Date Filter** — Independent date filter (Today default, Yesterday, This Week, This Month, Custom) for the Executive Performance table in Analytics. Shows order count and revenue per executive for the selected period. Backend updated with "yesterday" period support.
+### Dispatch Rules
+- Easy Ship: bulk select + dispatch (no LR needed)
+- Self Ship: must assign courier first, then dispatch with **mandatory** LR number
+- PDF deleted from server after parsing
+
+### API Endpoints
+- `POST /api/amazon/upload-pdf` — Parse PDF, create orders
+- `GET /api/amazon/orders` — List all
+- `GET /api/amazon/orders/{id}` — Single order
+- `PUT /api/amazon/orders/{id}/packaging` — Update packaging
+- `PUT /api/amazon/orders/{id}/mark-packed` — Mark packed
+- `PUT /api/amazon/orders/{id}/dispatch` — Dispatch (LR mandatory for self_ship)
+- `POST /api/amazon/orders/bulk-dispatch` — Bulk dispatch easy_ship
+- `PUT /api/amazon/orders/{id}/courier` — Update courier name
+- `DELETE /api/amazon/orders/{id}` — Delete order (admin, non-dispatched)
+- `DELETE /api/amazon/orders/{id}/images` — Delete images
 
 ## Credentials
 - Admin: admin / admin123
-- Accounts: test_accounts / test123
+- Packaging: test_packaging_user / test123
+- Dispatch: test_dispatch_user / test123
 - Telecaller: test_tc_payment / test123
+- Accounts: test_accounts / test123
 
 ## Upcoming Tasks
 - **P1:** Pagination on all major data tables
@@ -55,8 +61,8 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 
 ## Future/Backlog
 - P3: Export to CSV/Excel
-- P3: WhatsApp integration for dispatch notifications
-- P3: Comprehensive Audit Log
+- P3: WhatsApp integration
+- P3: Audit Log
 - P3: Customer payment history ledger
 
 ## Known Mocked APIs
