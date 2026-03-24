@@ -2705,6 +2705,275 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
         headers={"Content-Disposition": f"attachment; filename={pi['pi_number']}.pdf"}
     )
 
+# ═══════════════════════════════════════════════
+#  AMAZON PDF ORDERS MODULE
+# ═══════════════════════════════════════════════
+import pdfplumber
+
+def parse_amazon_pdf_text(filepath, ship_type="easy_ship"):
+    """Parse Amazon PDF and extract orders."""
+    with pdfplumber.open(filepath) as pdf:
+        full_text = ""
+        for page in pdf.pages:
+            t = page.extract_text()
+            if t:
+                full_text += t + "\n"
+
+    blocks = re.split(r'(?=Ship to:\n)', full_text)
+    orders = []
+    seen_ids = set()
+
+    for block in blocks:
+        if "Ship to:" not in block or "Order ID:" not in block:
+            continue
+        if block.strip().startswith("I hereby confirm") or block.strip().startswith("I confirm"):
+            continue
+
+        oid_match = re.search(r'Order ID:\s*(\d{3}-\d{7}-\d{7})', block)
+        if not oid_match:
+            continue
+        amazon_order_id = oid_match.group(1)
+        if amazon_order_id in seen_ids:
+            continue
+        seen_ids.add(amazon_order_id)
+
+        ship_to_match = re.search(r'Ship to:\n(.+?)(?=\n)', block)
+        customer_name = ship_to_match.group(1).strip() if ship_to_match else ""
+
+        addr_match = re.search(r'Ship to:\n.+?\n(.*?)(?=Phone\s*:|Order ID:)', block, re.DOTALL)
+        address = ""
+        if addr_match:
+            addr_lines = [l.strip() for l in addr_match.group(1).strip().split('\n') if l.strip() and 'COD' not in l]
+            address = ", ".join(addr_lines)
+
+        phone = ""
+        if ship_type == "self_ship":
+            phone_match = re.search(r'Phone\s*:\s*(\d+)', block)
+            if phone_match:
+                phone = phone_match.group(1)
+
+        items = []
+        item_pattern = re.findall(r'^(\d+)\s+(.+?)\s+₹([\d,]+\.\d{2})\s*$', block, re.MULTILINE)
+        for qty_str, product_raw, price_str in item_pattern:
+            qty = int(qty_str)
+            price = float(price_str.replace(',', ''))
+            items.append({
+                "product_name": product_raw.strip(),
+                "quantity": qty,
+                "unit": "pcs",
+                "unit_price": price,
+                "amount": round(qty * price, 2),
+            })
+
+        grand_match = re.search(r'Grand total\s*₹([\d,]+\.\d{2})', block)
+        grand_total = float(grand_match.group(1).replace(',', '')) if grand_match else sum(i["amount"] for i in items)
+
+        if not items:
+            continue
+
+        orders.append({
+            "amazon_order_id": amazon_order_id,
+            "customer_name": customer_name,
+            "address": address,
+            "phone": phone,
+            "items": items,
+            "grand_total": grand_total,
+        })
+
+    return orders
+
+
+async def get_next_am_number():
+    """Get next AM-XXXX order number."""
+    counter = await db.amazon_counter.find_one_and_update(
+        {"_id": "amazon_order_counter"},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True,
+        projection={"_id": 0, "seq": 1}
+    )
+    seq = counter["seq"]
+    return f"AM-{seq:04d}"
+
+
+@api_router.post("/amazon/upload-pdf")
+async def upload_amazon_pdf(
+    file: UploadFile = File(...),
+    ship_type: str = Query("easy_ship"),
+    courier_name: str = Query(""),
+    user=Depends(get_current_user)
+):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    if ship_type not in ["easy_ship", "self_ship"]:
+        raise HTTPException(status_code=400, detail="Invalid ship type")
+    if ship_type == "self_ship" and not courier_name:
+        raise HTTPException(status_code=400, detail="Courier name required for self ship")
+
+    tmp_path = UPLOAD_DIR / f"tmp_amazon_{uuid.uuid4().hex}.pdf"
+    try:
+        content = await file.read()
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+        parsed = parse_amazon_pdf_text(str(tmp_path), ship_type)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"PDF parsing failed: {str(e)}")
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+    if not parsed:
+        raise HTTPException(status_code=400, detail="No orders found in PDF")
+
+    created = []
+    duplicates = []
+    for p in parsed:
+        existing = await db.amazon_orders.find_one({"amazon_order_id": p["amazon_order_id"]}, {"_id": 0})
+        if existing:
+            duplicates.append(p["amazon_order_id"])
+            continue
+
+        am_number = await get_next_am_number()
+        shipping_method = "amazon" if ship_type == "easy_ship" else "courier"
+        order = {
+            "id": str(uuid.uuid4()),
+            "am_order_number": am_number,
+            "amazon_order_id": p["amazon_order_id"],
+            "ship_type": ship_type,
+            "shipping_method": shipping_method,
+            "courier_name": courier_name if ship_type == "self_ship" else "",
+            "customer_name": p["customer_name"],
+            "address": p["address"],
+            "phone": p.get("phone", ""),
+            "items": p["items"],
+            "grand_total": p["grand_total"],
+            "status": "new",
+            "packaging": {
+                "item_packed_by": [],
+                "box_packed_by": [],
+                "checked_by": [],
+                "item_images": {},
+                "order_images": [],
+                "packed_box_images": [],
+            },
+            "dispatch": {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.amazon_orders.insert_one(order)
+        order.pop("_id", None)
+        created.append(order)
+
+    return {"created": len(created), "duplicates": len(duplicates), "duplicate_ids": duplicates, "orders": created}
+
+
+@api_router.get("/amazon/orders")
+async def list_amazon_orders(user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    orders = await db.amazon_orders.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return orders
+
+
+@api_router.get("/amazon/orders/{order_id}")
+async def get_amazon_order(order_id: str, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+@api_router.put("/amazon/orders/{order_id}/packaging")
+async def update_amazon_packaging(order_id: str, updates: dict, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "packaging"]:
+        raise HTTPException(status_code=403, detail="Packaging or admin only")
+    order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("status") == "dispatched" and user["role"] != "admin":
+        raise HTTPException(status_code=400, detail="Cannot modify dispatched order")
+
+    packaging = order.get("packaging", {})
+    for key in ["item_packed_by", "box_packed_by", "checked_by", "item_images", "order_images", "packed_box_images"]:
+        if key in updates:
+            packaging[key] = updates[key]
+
+    new_status = order.get("status", "new")
+    if new_status == "new":
+        new_status = "packaging"
+
+    await db.amazon_orders.update_one(
+        {"id": order_id},
+        {"$set": {"packaging": packaging, "status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"status": "updated"}
+
+
+@api_router.put("/amazon/orders/{order_id}/mark-packed")
+async def mark_amazon_packed(order_id: str, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    await db.amazon_orders.update_one(
+        {"id": order_id},
+        {"$set": {"status": "packed", "packaging.packed_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"status": "packed"}
+
+
+@api_router.put("/amazon/orders/{order_id}/dispatch")
+async def dispatch_amazon_order(order_id: str, data: dict = {}, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "dispatch", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    dispatch = {
+        "dispatched_at": datetime.now(timezone.utc).isoformat(),
+        "dispatched_by": user["username"],
+    }
+    if order.get("ship_type") == "self_ship":
+        dispatch["lr_number"] = data.get("lr_number", "")
+    await db.amazon_orders.update_one(
+        {"id": order_id},
+        {"$set": {"status": "dispatched", "dispatch": dispatch, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"status": "dispatched"}
+
+
+@api_router.delete("/amazon/orders/{order_id}/images")
+async def delete_amazon_order_image(
+    order_id: str,
+    image_type: str = Query(...),
+    image_url: str = Query(...),
+    item_name: str = Query(""),
+    user=Depends(get_current_user)
+):
+    if user["role"] not in ["admin", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("status") == "dispatched" and user["role"] != "admin":
+        raise HTTPException(status_code=400, detail="Cannot modify dispatched order")
+
+    packaging = order.get("packaging", {})
+    if image_type == "item_image" and item_name:
+        imgs = packaging.get("item_images", {}).get(item_name, [])
+        packaging["item_images"][item_name] = [u for u in imgs if u != image_url]
+    elif image_type == "order_image":
+        packaging["order_images"] = [u for u in packaging.get("order_images", []) if u != image_url]
+    elif image_type == "packed_box_image":
+        packaging["packed_box_images"] = [u for u in packaging.get("packed_box_images", []) if u != image_url]
+
+    await db.amazon_orders.update_one({"id": order_id}, {"$set": {"packaging": packaging, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"status": "deleted"}
+
 # Static + Mount
 app.include_router(api_router)
 app.mount("/api/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")

@@ -10,7 +10,7 @@ import {
 import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
-  FileText, TrendingUp, Bell,
+  FileText, TrendingUp, Bell, ShoppingBag,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -27,6 +27,7 @@ const NAV_ITEMS = {
     { label: "Dashboard", icon: Home, path: "/" },
     { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Packaging Queue", icon: Package, path: "/packaging" },
+    { label: "Amazon Packing", icon: ShoppingBag, path: "/amazon-packing" },
     { label: "Dispatch", icon: Truck, path: "/dispatch" },
   ],
   dispatch: [
@@ -42,6 +43,8 @@ const NAV_ITEMS = {
     { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
     { label: "Packaging", icon: Package, path: "/packaging" },
     { label: "Dispatch", icon: Truck, path: "/dispatch" },
+    { label: "Amazon Orders", icon: ShoppingBag, path: "/amazon-orders" },
+    { label: "Amazon Packing", icon: ShoppingBag, path: "/amazon-packing" },
     { label: "Item Analytics", icon: TrendingUp, path: "/item-analytics" },
     { label: "Users", icon: Settings, path: "/users" },
   ],
