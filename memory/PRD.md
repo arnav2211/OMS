@@ -21,22 +21,6 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - Formulation management
 - Item analytics
 
-## Phase 8 Features (Completed - March 2026)
-1. Print Behavior Fix
-2. Customer Deletion Restriction - Admin-only with two-step confirmation
-3. Negative Value Restriction
-4. Additional Charges System
-5. Copyable Details
-6. Shipping Method Column
-7. Edit Shipping in Dispatch
-8. Duplicate Order/PI
-9. Mobile Camera Upload Fix
-10. Camera in Edit Mode
-
-## Phase 9 Features (Completed - March 2026)
-1. Charges UI Restructured
-2. Image Compression
-
 ## Phase 10 Features (Completed - March 2026)
 1. Forward to Packaging (Admin toggle in All Orders)
 2. Tax Invoice Filter (Accounts - Uploaded/Pending)
@@ -46,13 +30,21 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 6. Image Upload in Packaging Update dialog (Order Summary)
 
 ## Phase 10.1 - Accounts Dashboard Payment Check Fixes (Completed - March 2026)
-1. **Date filter fix** — Now filters by order creation date (client-side). Works for Today, This Week, This Month, Custom range.
-2. **New columns added** — Mode of Payment, Date of Order, GST/Non-GST badge, Payment Proof preview button.
-3. **Payment screenshot preview** — Eye icon button with count opens a dialog showing all payment screenshots with clickable full-size images.
+1. Date filter fix — filters by order creation date (client-side)
+2. New columns: Mode of Payment, Date of Order, GST/Non-GST badge, Payment Proof preview
+3. Payment screenshot preview dialog
+
+## Phase 11 - Notifications & Share Features (Completed - March 2026)
+1. **Share Packed Box Images** — Renamed "Share Images" to "Share All Images". Added new "Share Packed Box Images" button that shares only packed box images (not item/order images).
+2. **Persistent Notification System** — New `notifications` MongoDB collection. Backend endpoints: POST /api/notifications (create, idempotent), GET /api/notifications (unacknowledged), PUT /api/notifications/{id}/acknowledge. Notifications persist until manually acknowledged.
+3. **Notification Box on Dashboard** — Fixed-height scrollable box at top of telecaller dashboard. Shows Packed/Dispatched badge, clickable order ID (navigates to order summary), customer name, thumbs-up acknowledge button.
+4. **Notification Sound & Mobile Popup** — Sound plays on new notifications (desktop & mobile). Toast popups appear immediately. Bell icon in header shows count and navigates to dashboard.
+5. **Trigger Logic Unchanged** — Porter/Self Arranged/Office Collection → notifies on Packed. Courier/Transport → notifies on Dispatched.
 
 ## Credentials
 - Admin: admin / admin123
-- Accounts: test_accounts / test123, accounts1
+- Accounts: test_accounts / test123
+- Telecaller: test_tc_payment / test123
 
 ## Upcoming Tasks
 - **P1:** Pagination on all major data tables
