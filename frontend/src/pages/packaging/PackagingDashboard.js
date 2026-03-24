@@ -213,6 +213,7 @@ export default function PackagingDashboard() {
                 <TableRow>
                   <TableHead className="text-xs uppercase tracking-wider">Order #</TableHead>
                   <TableHead className="text-xs uppercase tracking-wider">Customer</TableHead>
+                  <TableHead className="text-xs uppercase tracking-wider hidden sm:table-cell">Shipping</TableHead>
                   <TableHead className="text-xs uppercase tracking-wider hidden sm:table-cell">Items</TableHead>
                   <TableHead className="text-xs uppercase tracking-wider">Status</TableHead>
                   <TableHead className="text-xs uppercase tracking-wider hidden sm:table-cell">Date</TableHead>
@@ -226,6 +227,9 @@ export default function PackagingDashboard() {
                       <Link to={`/orders/${order.id}`} className="text-primary hover:underline" data-testid={`pkg-order-link-${order.order_number}`}>{order.order_number}</Link>
                     </TableCell>
                     <TableCell className="text-sm">{order.customer_name}</TableCell>
+                    <TableCell className="text-sm whitespace-nowrap hidden sm:table-cell" data-testid={`pkg-shipping-${order.order_number}`}>
+                      {order.shipping_method === "courier" ? (order.courier_name || "Courier") : order.shipping_method === "transport" ? (order.transporter_name || "Transport") : order.shipping_method?.replace(/_/g, " ") || "-"}
+                    </TableCell>
                     <TableCell className="hidden sm:table-cell">{order.items?.length}</TableCell>
                     <TableCell>
                       <Badge variant="secondary" className={`status-${order.status} text-xs uppercase`}>{order.status}</Badge>

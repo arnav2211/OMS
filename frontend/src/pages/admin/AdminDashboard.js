@@ -28,6 +28,14 @@ const PERIOD_OPTIONS = [
   { value: "custom", label: "Custom Range" },
 ];
 
+const EXEC_PERF_PERIODS = [
+  { value: "today", label: "Today" },
+  { value: "yesterday", label: "Yesterday" },
+  { value: "week", label: "This Week" },
+  { value: "month", label: "This Month" },
+  { value: "custom", label: "Custom Date" },
+];
+
 export default function AdminDashboard() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState("analytics");
@@ -55,6 +63,12 @@ export default function AdminDashboard() {
   const [execExcludeGst, setExecExcludeGst] = useState(false);
   const [execExcludeShipping, setExecExcludeShipping] = useState(false);
 
+  // Executive Performance (inside Analytics tab)
+  const [execPerfPeriod, setExecPerfPeriod] = useState("today");
+  const [execPerfDateFrom, setExecPerfDateFrom] = useState("");
+  const [execPerfDateTo, setExecPerfDateTo] = useState("");
+  const [execPerfData, setExecPerfData] = useState(null);
+
   // Admin self report
   const [adminReport, setAdminReport] = useState(null);
   const [adminPeriod, setAdminPeriod] = useState("month");
@@ -72,8 +86,9 @@ export default function AdminDashboard() {
   const [paymentSalesDateTo, setPaymentSalesDateTo] = useState("");
   const [paymentSalesExecId, setPaymentSalesExecId] = useState("");
 
-  useEffect(() => { loadAnalytics(); loadRecentOrders(); loadUsers(); loadSettings(); loadPackagingStaff(); }, []);
+  useEffect(() => { loadAnalytics(); loadRecentOrders(); loadUsers(); loadSettings(); loadPackagingStaff(); loadExecPerf(); }, []);
   useEffect(() => { loadAnalytics(); }, [period, dateFrom, dateTo, excludeGst, excludeShipping]);
+  useEffect(() => { loadExecPerf(); }, [execPerfPeriod, execPerfDateFrom, execPerfDateTo]);
 
   const loadAnalytics = async () => {
     setAnalyticsLoading(true);
@@ -89,6 +104,19 @@ export default function AdminDashboard() {
       const res = await api.get(`/reports/admin-analytics?${params.toString()}`);
       setAnalytics(res.data);
     } catch { } finally { setAnalyticsLoading(false); }
+  };
+
+  const loadExecPerf = async () => {
+    try {
+      const params = new URLSearchParams();
+      params.set("period", execPerfPeriod);
+      if (execPerfPeriod === "custom") {
+        if (execPerfDateFrom) params.set("date_from", execPerfDateFrom);
+        if (execPerfDateTo) params.set("date_to", execPerfDateTo);
+      }
+      const res = await api.get(`/reports/admin-analytics?${params.toString()}`);
+      setExecPerfData(res.data);
+    } catch { }
   };
 
   const loadRecentOrders = async () => {
@@ -294,7 +322,23 @@ export default function AdminDashboard() {
               {/* Per-Executive Breakdown */}
               {analytics.telecaller_stats?.length > 0 && (
                 <Card>
-                  <CardHeader className="pb-3"><CardTitle className="text-base">Executive Performance</CardTitle></CardHeader>
+                  <CardHeader className="pb-3">
+                    <div className="flex flex-wrap items-end justify-between gap-2">
+                      <CardTitle className="text-base">Executive Performance</CardTitle>
+                      <div className="flex flex-wrap gap-2 items-end">
+                        <Select value={execPerfPeriod} onValueChange={setExecPerfPeriod}>
+                          <SelectTrigger className="w-36 h-8 text-xs" data-testid="exec-perf-period"><SelectValue /></SelectTrigger>
+                          <SelectContent>{EXEC_PERF_PERIODS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
+                        </Select>
+                        {execPerfPeriod === "custom" && (
+                          <>
+                            <Input type="date" value={execPerfDateFrom} onChange={e => setExecPerfDateFrom(e.target.value)} className="w-32 h-8 text-xs" />
+                            <Input type="date" value={execPerfDateTo} onChange={e => setExecPerfDateTo(e.target.value)} className="w-32 h-8 text-xs" />
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </CardHeader>
                   <CardContent>
                     <Table>
                       <TableHeader><TableRow>
@@ -303,11 +347,14 @@ export default function AdminDashboard() {
                         <TableHead className="text-xs text-right">Revenue</TableHead>
                       </TableRow></TableHeader>
                       <TableBody>
-                        {analytics.telecaller_stats.map(t => (
+                        {(execPerfData?.telecaller_stats || []).length === 0 && (
+                          <TableRow><TableCell colSpan={3} className="text-center text-muted-foreground text-sm py-4">No orders for this period</TableCell></TableRow>
+                        )}
+                        {(execPerfData?.telecaller_stats || []).map(t => (
                           <TableRow key={t.id}>
                             <TableCell className="text-sm font-medium">{t.name}</TableCell>
-                            <TableCell className="text-sm text-right font-mono">{t.order_count}</TableCell>
-                            <TableCell className="text-sm text-right font-mono">{"\u20B9"}{t.total_amount?.toLocaleString("en-IN")}</TableCell>
+                            <TableCell className="text-sm text-right font-mono" data-testid={`exec-perf-orders-${t.id}`}>{t.order_count}</TableCell>
+                            <TableCell className="text-sm text-right font-mono" data-testid={`exec-perf-revenue-${t.id}`}>{"\u20B9"}{t.total_amount?.toLocaleString("en-IN")}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>

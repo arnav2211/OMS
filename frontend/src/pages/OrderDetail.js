@@ -356,6 +356,37 @@ export default function OrderDetail() {
         </CardContent>
       </Card>
 
+      {/* Shipping Details */}
+      {order.shipping_method && (
+        <Card data-testid="shipping-details-card">
+          <CardHeader className="pb-3"><CardTitle className="text-base">Shipping Details</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-sm text-muted-foreground">Shipping Method</span>
+              <span className="text-sm font-medium capitalize" data-testid="order-shipping-method">{order.shipping_method?.replace(/_/g, " ")}</span>
+            </div>
+            {order.shipping_method === "courier" && order.courier_name && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Courier Name</span>
+                <span className="text-sm" data-testid="order-courier-name">{order.courier_name}</span>
+              </div>
+            )}
+            {order.shipping_method === "transport" && order.transporter_name && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Transporter Name</span>
+                <span className="text-sm" data-testid="order-transporter-name">{order.transporter_name}</span>
+              </div>
+            )}
+            {order.dispatch?.tracking_number && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Tracking Number</span>
+                <span className="text-sm font-mono" data-testid="order-tracking">{order.dispatch.tracking_number}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Items */}
       <Card>
         <CardHeader className="pb-3"><CardTitle className="text-base">Items ({order.items?.length})</CardTitle></CardHeader>

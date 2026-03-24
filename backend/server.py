@@ -1669,6 +1669,12 @@ async def admin_analytics(
             query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
     elif period == "today":
         query["created_at"] = {"$gte": now.replace(hour=0, minute=0, second=0).isoformat()}
+    elif period == "yesterday":
+        yesterday = now - timedelta(days=1)
+        query["created_at"] = {
+            "$gte": yesterday.replace(hour=0, minute=0, second=0).isoformat(),
+            "$lte": yesterday.replace(hour=23, minute=59, second=59).isoformat()
+        }
     elif period == "week":
         week_start = now - timedelta(days=now.weekday())
         query["created_at"] = {"$gte": week_start.replace(hour=0, minute=0, second=0).isoformat()}
