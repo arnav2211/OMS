@@ -4,50 +4,61 @@
 Full-stack Order Management System for CitSpray with multi-role access (Admin, Telecaller, Packaging, Dispatch, Accounts), order/customer management, Proforma Invoice creation, PDF generation, and comprehensive workflow management.
 
 ## Tech Stack
-- **Backend:** FastAPI, Motor (async MongoDB), Pydantic, JWT, Passlib, ReportLab
+- **Backend:** FastAPI, Motor (async MongoDB), Pydantic, JWT, Passlib, ReportLab, pdfplumber
 - **Frontend:** React, React Router, Tailwind CSS, Shadcn/UI, Axios
 - **Database:** MongoDB
 
 ## Core Features (Implemented)
 - JWT authentication with role-based access
 - Customer management with addresses
-- Order creation, editing, status workflow (new -> packaging -> packed -> dispatched)
-- Proforma Invoice (PI) creation, editing, PDF generation, PI-to-order conversion
+- Order creation, editing, status workflow
+- Proforma Invoice management
 - Payment tracking with screenshots
 - Packaging dashboard with image uploads
 - Dispatch management
-- PDF generation (order prints, address labels, PI PDFs)
+- PDF generation
 - Tax invoice generation with UPI QR codes
 - Formulation management
 - Item analytics
+- Persistent notification system
+- Forward to Packaging (admin)
+- Admin full edit power post-dispatch
+- Telecaller payment edit post-dispatch
 
-## Phase 10 Features (Completed)
-1. Forward to Packaging (Admin toggle in All Orders)
-2. Tax Invoice Filter (Accounts - Uploaded/Pending)
-3. Remove Local Charges from all forms
-4. Telecaller Payment Edit (own orders, even after dispatch)
-5. Admin Full Edit Power (everything, even after dispatch)
-6. Image Upload in Packaging Update dialog (Order Summary)
+## Amazon PDF Orders Module (Completed - March 2026)
+### Overview
+Separate module for processing Amazon invoices. Admin uploads PDF → system auto-creates structured orders → packing team processes them.
 
-## Phase 10.1 - Accounts Dashboard Fixes (Completed)
-1. Date filter fix — filters by order creation date
-2. New columns: Mode of Payment, Date, GST/Non-GST, Payment Proof preview
+### Features
+- **PDF Upload:** Easy Ship (shipping=Amazon, no courier) and Self Ship (shipping=Courier, select from DTDC/Anjani/Professional/India Post)
+- **PDF Parsing:** Extracts customer name, address, phone (self-ship), Amazon Order ID, items (name, qty, price), grand total
+- **Separate Collection:** `amazon_orders` — does NOT mix with regular orders
+- **AM Numbering:** Sequential AM-0001, AM-0002... via `amazon_counter` collection
+- **Duplicate Prevention:** By Amazon Order ID
+- **Access Control:** Admin (upload + full), Packaging (view + process), Telecaller (NO access)
+- **Packing:** Same logic as /packaging — staff selection, item/order/packed box images, mark packed
+- **Dispatch:** Easy Ship = just mark dispatched. Self Ship = optional LR number
+- **Admin Override:** Can edit packaging even after dispatch
 
-## Phase 11 - Notifications & Share (Completed)
-1. Share Packed Box Images — separate button for packed box images only
-2. Persistent Notification System — DB-backed, acknowledge to dismiss
-3. Notification Box on Dashboard — fixed height, scrollable
-4. Sound & Mobile Popup on new notifications
+### Pages
+- `/amazon-orders` — Order list with filters, Upload PDF button (admin)
+- `/amazon-orders/:id` — Order detail with packaging, dispatch
+- `/amazon-packing` — Packing queue for packaging team
 
-## Phase 12 - Latest Changes (Completed - March 2026)
-1. **Shipping Details in Order Summary** — New card between Customer Info and Items showing shipping method and courier/transport name. Visible to all roles.
-2. **Shipping Column in Packaging Queue** — Added Shipping column showing method and name (same format as All Orders page).
-3. **Executive Performance Date Filter** — Independent date filter (Today default, Yesterday, This Week, This Month, Custom) for the Executive Performance table in Analytics. Shows order count and revenue per executive for the selected period. Backend updated with "yesterday" period support.
+### API Endpoints
+- `POST /api/amazon/upload-pdf` — Parse PDF, create orders
+- `GET /api/amazon/orders` — List all amazon orders
+- `GET /api/amazon/orders/{id}` — Single order
+- `PUT /api/amazon/orders/{id}/packaging` — Update packaging
+- `PUT /api/amazon/orders/{id}/mark-packed` — Mark as packed
+- `PUT /api/amazon/orders/{id}/dispatch` — Dispatch order
+- `DELETE /api/amazon/orders/{id}/images` — Delete images
 
 ## Credentials
 - Admin: admin / admin123
-- Accounts: test_accounts / test123
+- Packaging: test_packaging_user / test123
 - Telecaller: test_tc_payment / test123
+- Accounts: test_accounts / test123
 
 ## Upcoming Tasks
 - **P1:** Pagination on all major data tables
@@ -55,8 +66,8 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 
 ## Future/Backlog
 - P3: Export to CSV/Excel
-- P3: WhatsApp integration for dispatch notifications
-- P3: Comprehensive Audit Log
+- P3: WhatsApp integration
+- P3: Audit Log
 - P3: Customer payment history ledger
 
 ## Known Mocked APIs
