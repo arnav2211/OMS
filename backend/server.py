@@ -875,12 +875,12 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    # Dispatch lock: once dispatched, only formulation can be edited
-    if order.get("status") == "dispatched":
-        allowed_dispatched = {"payment_status", "amount_paid", "balance_amount"}
+    # Dispatch lock: admins can edit everything; telecallers can edit payment fields on own orders
+    if order.get("status") == "dispatched" and user["role"] != "admin":
+        allowed_dispatched = {"payment_status", "amount_paid", "balance_amount", "mode_of_payment", "payment_mode_details", "payment_screenshots"}
         non_allowed = set(updates.keys()) - allowed_dispatched - {"id", "order_number", "updated_at"}
         if non_allowed:
-            raise HTTPException(status_code=400, detail="Order is dispatched. Only payment details can be updated. Use formulation endpoint for formulation changes.")
+            raise HTTPException(status_code=400, detail="Order is dispatched. Only payment details can be updated.")
     # Telecaller can only edit their own orders
     if user["role"] == "telecaller" and order.get("telecaller_id") != user["id"]:
         raise HTTPException(status_code=403, detail="You can only edit your own orders")
@@ -900,6 +900,21 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
         raise HTTPException(status_code=404, detail="Order not found")
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated
+
+# Forward to Packaging (Admin reference flag)
+@api_router.post("/orders/{order_id}/forward-to-packaging")
+async def forward_to_packaging(order_id: str, user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    current = order.get("forwarded_to_packaging", False)
+    await db.orders.update_one(
+        {"id": order_id},
+        {"$set": {"forwarded_to_packaging": not current, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"forwarded_to_packaging": not current}
 
 # Formulation (Admin + Packaging when toggle is ON)
 @api_router.put("/orders/{order_id}/formulation")
@@ -940,6 +955,9 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    # Packaging team cannot edit after dispatch; admin can edit anytime
+    if order.get("status") == "dispatched" and user["role"] != "admin":
+        raise HTTPException(status_code=400, detail="Cannot modify packaging for a dispatched order")
 
     packaging = order.get("packaging", {})
     if "item_images" in updates:
@@ -1062,7 +1080,7 @@ async def delete_order_image(
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    if order.get("status") == "dispatched":
+    if order.get("status") == "dispatched" and user["role"] != "admin":
         raise HTTPException(status_code=400, detail="Cannot modify a dispatched order")
 
     if image_type == "payment":
