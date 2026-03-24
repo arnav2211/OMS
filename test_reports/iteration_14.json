@@ -1,0 +1,83 @@
+{
+  "summary": "Invoice Upload Feature Testing Complete - All backend tests passed (9/9), all frontend features verified working. PDF merge functionality confirmed working correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Invoice Upload Modal",
+        "issues": ["Console warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent} - minor accessibility issue"]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_invoice_upload.py",
+    "/app/test_reports/pytest/pytest_invoice_upload_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [
+    "/app/backend/tests/test_invoice_upload.py"
+  ],
+  "success_rate": {
+    "backend": "100% (9 passed, 2 skipped)",
+    "frontend": "100%"
+  },
+  "test_credentials": {
+    "admin": "admin/admin123"
+  },
+  "seed_data_creation": "None - used existing GST orders",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Invoice upload feature fully tested. PDF merge working correctly. All UI elements have proper data-testid attributes.",
+  "features_tested": {
+    "backend_apis": {
+      "POST /api/orders/{id}/invoice-upload (tax invoice only)": "PASS - Uploads single PDF correctly",
+      "POST /api/orders/{id}/invoice-upload (tax + eway)": "PASS - Merges PDFs correctly (tax first, eway second)",
+      "POST /api/orders/{id}/invoice-upload (missing tax invoice)": "PASS - Returns 422 as expected",
+      "POST /api/orders/{id}/invoice-upload (empty file)": "PASS - Returns 400 as expected",
+      "POST /api/orders/{id}/invoice-upload (non-GST order)": "PASS - Returns 400 with GST error message",
+      "POST /api/orders/{id}/invoice-upload (non-existent order)": "PASS - Returns 404",
+      "DELETE /api/orders/{id}/invoice": "PASS - Removes invoice and clears URL",
+      "GET uploaded PDF": "PASS - PDF accessible and valid"
+    },
+    "pdf_merge_verification": {
+      "test_case": "2-page tax invoice + 3-page e-way bill",
+      "result": "PASS - Merged PDF has 5 pages (tax invoice pages first, e-way bill pages second)"
+    },
+    "frontend_ui": {
+      "upload_modal_opens_on_upload_pdf_click": "PASS",
+      "upload_modal_opens_on_replace_click": "PASS",
+      "tax_invoice_field_mandatory": "PASS - Shows asterisk and 'Required' text",
+      "eway_bill_field_optional": "PASS - Shows 'Optional' text",
+      "upload_button_disabled_without_tax_invoice": "PASS",
+      "cancel_button_closes_modal": "PASS",
+      "view_invoice_link_works": "PASS - Opens PDF in new tab",
+      "delete_invoice_works": "PASS - Shows toast 'Invoice removed'",
+      "invoice_filter_all": "PASS",
+      "invoice_filter_uploaded": "PASS - Shows only orders with invoices",
+      "invoice_filter_pending": "PASS - Shows only orders without invoices"
+    },
+    "data_testid_attributes": {
+      "accounts-dashboard": "Present",
+      "tab-invoices": "Present",
+      "tab-payment": "Present",
+      "invoice-filter": "Present",
+      "invoice-upload-modal": "Present",
+      "tax-invoice-input": "Present",
+      "eway-bill-input": "Present",
+      "invoice-upload-submit": "Present",
+      "invoice-upload-cancel": "Present",
+      "upload-invoice-{id}": "Present",
+      "delete-invoice-{id}": "Present"
+    }
+  },
+  "mocked_apis": {
+    "has_mocked_apis": false,
+    "mocked_apis_list": []
+  }
+}

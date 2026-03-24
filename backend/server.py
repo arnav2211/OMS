@@ -1171,6 +1171,60 @@ async def set_order_invoice(order_id: str, body: dict, user=Depends(get_current_
     await db.orders.update_one({"id": order_id}, {"$set": {"tax_invoice_url": invoice_url, "updated_at": datetime.now(timezone.utc).isoformat()}})
     return await db.orders.find_one({"id": order_id}, {"_id": 0})
 
+@api_router.post("/orders/{order_id}/invoice-upload")
+async def upload_invoice_with_eway(
+    order_id: str,
+    tax_invoice: UploadFile = File(...),
+    eway_bill: Optional[UploadFile] = File(None),
+    user=Depends(get_current_user),
+):
+    from PyPDF2 import PdfReader, PdfWriter
+    if user["role"] not in ["admin", "accounts"]:
+        raise HTTPException(status_code=403, detail="Accounts or admin only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not order.get("gst_applicable"):
+        raise HTTPException(status_code=400, detail="Tax invoice only for GST-applicable orders")
+
+    tax_bytes = await tax_invoice.read()
+    if not tax_bytes:
+        raise HTTPException(status_code=400, detail="Tax invoice file is empty")
+
+    has_eway = eway_bill is not None and eway_bill.filename
+    eway_bytes = None
+    if has_eway:
+        eway_bytes = await eway_bill.read()
+        if not eway_bytes:
+            has_eway = False
+
+    if has_eway and eway_bytes:
+        # Merge: Tax Invoice first, then E-Way Bill
+        writer = PdfWriter()
+        tax_reader = PdfReader(io.BytesIO(tax_bytes))
+        for page in tax_reader.pages:
+            writer.add_page(page)
+        eway_reader = PdfReader(io.BytesIO(eway_bytes))
+        for page in eway_reader.pages:
+            writer.add_page(page)
+        merged_buf = io.BytesIO()
+        writer.write(merged_buf)
+        final_bytes = merged_buf.getvalue()
+    else:
+        final_bytes = tax_bytes
+
+    filename = f"{uuid.uuid4()}.pdf"
+    filepath = UPLOAD_DIR / filename
+    async with aiofiles.open(filepath, 'wb') as f:
+        await f.write(final_bytes)
+
+    invoice_url = f"/api/uploads/{filename}"
+    await db.orders.update_one({"id": order_id}, {"$set": {
+        "tax_invoice_url": invoice_url,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    return await db.orders.find_one({"id": order_id}, {"_id": 0})
+
 @api_router.delete("/orders/{order_id}/invoice")
 async def delete_order_invoice(order_id: str, user=Depends(get_current_user)):
     if user["role"] not in ["admin", "accounts"]:

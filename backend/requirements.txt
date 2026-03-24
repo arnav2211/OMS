@@ -89,6 +89,7 @@ Pygments==2.19.2
 PyJWT==2.11.0
 pymongo==4.5.0
 pyparsing==3.3.2
+PyPDF2==3.0.1
 pypdfium2==5.6.0
 pytest==9.0.2
 python-dateutil==2.9.0.post0

@@ -59,6 +59,11 @@ export default function AccountsDashboard() {
   const [uploading, setUploading] = useState({});
   const [invoiceFilter, setInvoiceFilter] = useState("all");
 
+  // Invoice upload modal state
+  const [uploadModal, setUploadModal] = useState({ open: false, orderId: null, orderNumber: "" });
+  const [taxInvoiceFile, setTaxInvoiceFile] = useState(null);
+  const [ewayBillFile, setEwayBillFile] = useState(null);
+
   // Payment check tab state
   const [allOrders, setAllOrders] = useState([]);
   const [paymentLoading, setPaymentLoading] = useState(true);
@@ -101,16 +106,25 @@ export default function AccountsDashboard() {
     } catch { } finally { setPaymentLoading(false); }
   };
 
-  const handleInvoiceUpload = async (orderId, file) => {
-    if (!file) return;
-    if (file.type !== "application/pdf") return toast.error("Only PDF files are allowed");
+  const openUploadModal = (orderId, orderNumber) => {
+    setTaxInvoiceFile(null);
+    setEwayBillFile(null);
+    setUploadModal({ open: true, orderId, orderNumber });
+  };
+
+  const handleInvoiceUpload = async () => {
+    const { orderId } = uploadModal;
+    if (!taxInvoiceFile) return toast.error("Tax Invoice is mandatory");
+    if (taxInvoiceFile.type !== "application/pdf") return toast.error("Tax Invoice must be a PDF");
+    if (ewayBillFile && ewayBillFile.type !== "application/pdf") return toast.error("E-Way Bill must be a PDF");
     setUploading(p => ({ ...p, [orderId]: true }));
     try {
       const form = new FormData();
-      form.append("file", file);
-      const uploadRes = await api.post("/upload", form, { headers: { "Content-Type": "multipart/form-data" } });
-      await api.put(`/orders/${orderId}/invoice`, { invoice_url: uploadRes.data.url });
-      toast.success("Invoice uploaded");
+      form.append("tax_invoice", taxInvoiceFile);
+      if (ewayBillFile) form.append("eway_bill", ewayBillFile);
+      await api.post(`/orders/${orderId}/invoice-upload`, form, { headers: { "Content-Type": "multipart/form-data" } });
+      toast.success("Invoice uploaded successfully");
+      setUploadModal({ open: false, orderId: null, orderNumber: "" });
       loadGstOrders();
     } catch (err) { toast.error(err.response?.data?.detail || "Upload failed"); }
     finally { setUploading(p => ({ ...p, [orderId]: false })); }
@@ -271,16 +285,12 @@ export default function AccountsDashboard() {
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <label className="cursor-pointer">
-                                <Button variant="outline" size="sm" asChild disabled={uploading[o.id]}>
-                                  <span data-testid={`upload-invoice-${o.id}`}>
-                                    <Upload className="w-3 h-3 mr-1" />
-                                    {uploading[o.id] ? "Uploading..." : o.tax_invoice_url ? "Replace" : "Upload PDF"}
-                                  </span>
-                                </Button>
-                                <input type="file" accept=".pdf,application/pdf" className="sr-only" disabled={uploading[o.id]}
-                                  onChange={e => { if (e.target.files[0]) handleInvoiceUpload(o.id, e.target.files[0]); e.target.value = ""; }} />
-                              </label>
+                              <Button variant="outline" size="sm" disabled={uploading[o.id]}
+                                onClick={() => openUploadModal(o.id, o.order_number)}
+                                data-testid={`upload-invoice-${o.id}`}>
+                                <Upload className="w-3 h-3 mr-1" />
+                                {uploading[o.id] ? "Uploading..." : o.tax_invoice_url ? "Replace" : "Upload PDF"}
+                              </Button>
                               {o.tax_invoice_url && (
                                 <Button variant="ghost" size="icon" onClick={() => handleInvoiceDelete(o.id)} data-testid={`delete-invoice-${o.id}`}>
                                   <Trash2 className="w-3 h-3 text-destructive" />
@@ -434,6 +444,86 @@ export default function AccountsDashboard() {
                 <img src={`${backendUrl}${url}`} alt={`Payment proof ${i + 1}`} className="w-full rounded-lg border object-cover aspect-square hover:opacity-80 transition-opacity" />
               </a>
             ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Invoice Upload Modal */}
+      <Dialog open={uploadModal.open} onOpenChange={open => { if (!open) setUploadModal({ open: false, orderId: null, orderNumber: "" }); }}>
+        <DialogContent className="max-w-md" data-testid="invoice-upload-modal">
+          <DialogHeader>
+            <DialogTitle>Upload Invoice — {uploadModal.orderNumber}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-5 pt-2">
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Tax Invoice <span className="text-destructive">*</span></Label>
+              <div className="relative">
+                <label className="flex items-center gap-3 border-2 border-dashed rounded-lg p-4 cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors">
+                  <div className="p-2 rounded-md bg-blue-50"><FileText className="w-5 h-5 text-blue-600" /></div>
+                  <div className="flex-1 min-w-0">
+                    {taxInvoiceFile ? (
+                      <p className="text-sm font-medium truncate">{taxInvoiceFile.name}</p>
+                    ) : (
+                      <>
+                        <p className="text-sm font-medium">Choose Tax Invoice PDF</p>
+                        <p className="text-xs text-muted-foreground">Required — PDF only</p>
+                      </>
+                    )}
+                  </div>
+                  {taxInvoiceFile && (
+                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0"
+                      onClick={e => { e.preventDefault(); setTaxInvoiceFile(null); }}>
+                      <X className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                  <input type="file" accept=".pdf,application/pdf" className="sr-only" data-testid="tax-invoice-input"
+                    onChange={e => { if (e.target.files[0]) setTaxInvoiceFile(e.target.files[0]); e.target.value = ""; }} />
+                </label>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">E-Way Bill <span className="text-muted-foreground text-xs">(Optional)</span></Label>
+              <div className="relative">
+                <label className="flex items-center gap-3 border-2 border-dashed rounded-lg p-4 cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors">
+                  <div className="p-2 rounded-md bg-amber-50"><FileText className="w-5 h-5 text-amber-600" /></div>
+                  <div className="flex-1 min-w-0">
+                    {ewayBillFile ? (
+                      <p className="text-sm font-medium truncate">{ewayBillFile.name}</p>
+                    ) : (
+                      <>
+                        <p className="text-sm font-medium">Choose E-Way Bill PDF</p>
+                        <p className="text-xs text-muted-foreground">Optional — will be merged with invoice</p>
+                      </>
+                    )}
+                  </div>
+                  {ewayBillFile && (
+                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0"
+                      onClick={e => { e.preventDefault(); setEwayBillFile(null); }}>
+                      <X className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                  <input type="file" accept=".pdf,application/pdf" className="sr-only" data-testid="eway-bill-input"
+                    onChange={e => { if (e.target.files[0]) setEwayBillFile(e.target.files[0]); e.target.value = ""; }} />
+                </label>
+              </div>
+            </div>
+
+            {taxInvoiceFile && ewayBillFile && (
+              <p className="text-xs text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
+                Both files will be merged into a single PDF (Tax Invoice first, E-Way Bill second).
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setUploadModal({ open: false, orderId: null, orderNumber: "" })}
+                data-testid="invoice-upload-cancel">Cancel</Button>
+              <Button onClick={handleInvoiceUpload} disabled={!taxInvoiceFile || uploading[uploadModal.orderId]}
+                data-testid="invoice-upload-submit">
+                <Upload className="w-4 h-4 mr-1.5" />
+                {uploading[uploadModal.orderId] ? "Uploading..." : "Upload Invoice"}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
