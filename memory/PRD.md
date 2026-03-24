@@ -48,6 +48,13 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - `DELETE /api/amazon/orders/{id}` — Delete order (admin, non-dispatched)
 - `DELETE /api/amazon/orders/{id}/images` — Delete images
 
+## Invoice Upload Enhancement (March 2026)
+- Upload modal with Tax Invoice (mandatory) + E-Way Bill (optional)
+- PDFs merged server-side via PyPDF2 (Tax Invoice first, E-Way Bill second)
+- Single combined PDF stored, used for viewing/download/sharing
+- Endpoint: `POST /api/orders/{id}/invoice-upload` (multipart: tax_invoice, eway_bill)
+- Applies to both Accounts Dashboard and Admin Accounts view
+
 ## Credentials
 - Admin: admin / admin123
 - Packaging: test_packaging_user / test123
