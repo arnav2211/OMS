@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "sonner";
 import { Upload, Trash2, FileText, CheckCircle, Clock, RefreshCw, AlertTriangle, BanknoteIcon, Eye, X } from "lucide-react";
 import { Link } from "react-router-dom";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const PERIODS = [
   { value: "today", label: "Today" },
@@ -453,6 +453,7 @@ export default function AccountsDashboard() {
         <DialogContent className="max-w-md" data-testid="invoice-upload-modal">
           <DialogHeader>
             <DialogTitle>Upload Invoice — {uploadModal.orderNumber}</DialogTitle>
+            <DialogDescription>Upload tax invoice and optionally an e-way bill PDF.</DialogDescription>
           </DialogHeader>
           <div className="space-y-5 pt-2">
             <div className="space-y-2">
