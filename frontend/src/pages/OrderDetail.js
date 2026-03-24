@@ -201,7 +201,6 @@ export default function OrderDetail() {
       if (navigator.canShare && navigator.canShare({ files })) {
         await navigator.share({ files, title: `Packing Images - ${order.order_number}` });
       } else {
-        // Desktop fallback: download each file
         files.forEach((file, i) => {
           const url = URL.createObjectURL(file);
           const a = document.createElement("a");
@@ -213,7 +212,44 @@ export default function OrderDetail() {
           URL.revokeObjectURL(url);
         });
         toast.success("Images downloaded. Opening WhatsApp...");
-        // Open WhatsApp if customer phone available
+        if (customerPhone) {
+          const clean = customerPhone.replace(/[^0-9]/g, "");
+          const waPhone = clean.startsWith("91") ? clean : `91${clean}`;
+          setTimeout(() => window.open(`https://wa.me/${waPhone}`, "_blank"), 500);
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") toast.error("Share failed");
+    }
+  };
+
+  const packedBoxImageUrls = order.packaging?.packed_box_images || [];
+
+  const sharePackedBoxImages = async () => {
+    if (!packedBoxImageUrls.length) return toast.error("No packed box images to share");
+    try {
+      const blobs = await Promise.all(
+        packedBoxImageUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
+      );
+      const files = blobs.map((blob, i) => {
+        const ext = blob.type.includes("png") ? "png" : "jpg";
+        return new File([blob], `packed-box-${order.order_number}-${i + 1}.${ext}`, { type: blob.type });
+      });
+
+      if (navigator.canShare && navigator.canShare({ files })) {
+        await navigator.share({ files, title: `Packed Box Images - ${order.order_number}` });
+      } else {
+        files.forEach((file) => {
+          const url = URL.createObjectURL(file);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = file.name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        });
+        toast.success("Packed box images downloaded. Opening WhatsApp...");
         if (customerPhone) {
           const clean = customerPhone.replace(/[^0-9]/g, "");
           const waPhone = clean.startsWith("91") ? clean : `91${clean}`;
@@ -319,6 +355,37 @@ export default function OrderDetail() {
           <div className="flex justify-between"><span className="text-sm text-muted-foreground">Created</span><span className="text-sm">{new Date(order.created_at).toLocaleString("en-IN")}</span></div>
         </CardContent>
       </Card>
+
+      {/* Shipping Details */}
+      {order.shipping_method && (
+        <Card data-testid="shipping-details-card">
+          <CardHeader className="pb-3"><CardTitle className="text-base">Shipping Details</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-sm text-muted-foreground">Shipping Method</span>
+              <span className="text-sm font-medium capitalize" data-testid="order-shipping-method">{order.shipping_method?.replace(/_/g, " ")}</span>
+            </div>
+            {order.shipping_method === "courier" && order.courier_name && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Courier Name</span>
+                <span className="text-sm" data-testid="order-courier-name">{order.courier_name}</span>
+              </div>
+            )}
+            {order.shipping_method === "transport" && order.transporter_name && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Transporter Name</span>
+                <span className="text-sm" data-testid="order-transporter-name">{order.transporter_name}</span>
+              </div>
+            )}
+            {order.dispatch?.tracking_number && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Tracking Number</span>
+                <span className="text-sm font-mono" data-testid="order-tracking">{order.dispatch.tracking_number}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Items */}
       <Card>
@@ -487,9 +554,16 @@ export default function OrderDetail() {
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">Packing Images</CardTitle>
               {canShareImages && allPackingImageUrls.length > 0 && (
-                <Button variant="outline" size="sm" onClick={sharePackingImages} data-testid="share-packing-images-btn">
-                  <Share2 className="w-4 h-4 mr-1 text-green-600" /> Share Images
-                </Button>
+                <div className="flex gap-2 flex-wrap">
+                  <Button variant="outline" size="sm" onClick={sharePackingImages} data-testid="share-packing-images-btn">
+                    <Share2 className="w-4 h-4 mr-1 text-green-600" /> Share All Images
+                  </Button>
+                  {packedBoxImageUrls.length > 0 && (
+                    <Button variant="outline" size="sm" onClick={sharePackedBoxImages} data-testid="share-packed-box-images-btn">
+                      <Share2 className="w-4 h-4 mr-1 text-blue-600" /> Share Packed Box Images
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
           </CardHeader>

@@ -843,6 +843,53 @@ async def get_my_notifications(since: str = "", user=Depends(get_current_user)):
     }, fields).to_list(50)
     return packed + dispatched
 
+# ── Persistent Notifications ──
+@api_router.get("/notifications")
+async def get_notifications(user=Depends(get_current_user)):
+    """Get all unacknowledged notifications for the current user."""
+    notifs = await db.notifications.find(
+        {"user_id": user["id"], "acknowledged": False},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(100)
+    return notifs
+
+@api_router.post("/notifications")
+async def create_notification(data: dict, user=Depends(get_current_user)):
+    """Create a persistent notification. Idempotent by order_id + type."""
+    order_id = data.get("order_id")
+    ntype = data.get("type")
+    if not order_id or not ntype:
+        raise HTTPException(status_code=400, detail="order_id and type required")
+    existing = await db.notifications.find_one(
+        {"user_id": user["id"], "order_id": order_id, "type": ntype}, {"_id": 0}
+    )
+    if existing:
+        return existing
+    notif = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "order_id": order_id,
+        "order_number": data.get("order_number", ""),
+        "customer_name": data.get("customer_name", ""),
+        "type": ntype,
+        "shipping_method": data.get("shipping_method", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "acknowledged": False,
+    }
+    await db.notifications.insert_one(notif)
+    notif.pop("_id", None)
+    return notif
+
+@api_router.put("/notifications/{notif_id}/acknowledge")
+async def acknowledge_notification(notif_id: str, user=Depends(get_current_user)):
+    result = await db.notifications.update_one(
+        {"id": notif_id, "user_id": user["id"]},
+        {"$set": {"acknowledged": True}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"status": "acknowledged"}
+
 @api_router.get("/orders/{order_id}")
 async def get_order(order_id: str, user=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
@@ -1622,6 +1669,12 @@ async def admin_analytics(
             query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
     elif period == "today":
         query["created_at"] = {"$gte": now.replace(hour=0, minute=0, second=0).isoformat()}
+    elif period == "yesterday":
+        yesterday = now - timedelta(days=1)
+        query["created_at"] = {
+            "$gte": yesterday.replace(hour=0, minute=0, second=0).isoformat(),
+            "$lte": yesterday.replace(hour=23, minute=59, second=59).isoformat()
+        }
     elif period == "week":
         week_start = now - timedelta(days=now.weekday())
         query["created_at"] = {"$gte": week_start.replace(hour=0, minute=0, second=0).isoformat()}

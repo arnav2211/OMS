@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -68,7 +68,7 @@ export default function Layout({ children }) {
     navigate("/login");
   };
 
-  const playNotifSound = () => {
+  const playNotifSound = useCallback(() => {
     try {
       const ctx = new AudioContext();
       const osc = ctx.createOscillator();
@@ -80,7 +80,20 @@ export default function Layout({ children }) {
       gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
       osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.5);
     } catch { /* audio context not available */ }
-  };
+  }, []);
+
+  // Load persistent notification count
+  const refreshNotifCount = useCallback(async () => {
+    if (user?.role !== "telecaller") return;
+    try {
+      const res = await api.get("/notifications");
+      setNotifCount(res.data?.length || 0);
+    } catch {}
+  }, [user?.role]);
+
+  useEffect(() => {
+    refreshNotifCount();
+  }, [refreshNotifCount]);
 
   useEffect(() => {
     if (user?.role !== "telecaller") return;
@@ -93,12 +106,24 @@ export default function Layout({ children }) {
           const newSince = new Date().toISOString();
           lastCheckRef.current = newSince;
           localStorage.setItem("citspray_last_notif_check", newSince);
-          setNotifCount(c => c + notifs.length);
+          // Persist each notification to DB
+          for (const n of notifs) {
+            try {
+              await api.post("/notifications", {
+                order_id: n.id,
+                order_number: n.order_number,
+                customer_name: n.customer_name,
+                type: n.status,
+                shipping_method: n.shipping_method,
+              });
+            } catch {}
+          }
+          refreshNotifCount();
           notifs.forEach(n => {
             const msg = n.status === "packed"
               ? `Order ${n.order_number} is Packed and ready!`
               : `Order ${n.order_number} has been Dispatched!`;
-            toast.success(msg, { duration: 6000, description: n.customer_name });
+            toast.success(msg, { duration: 8000, description: n.customer_name });
           });
           playNotifSound();
         }
@@ -107,7 +132,7 @@ export default function Layout({ children }) {
     poll(); // immediate check on mount
     const interval = setInterval(poll, 30000);
     return () => clearInterval(interval);
-  }, [user?.role]);
+  }, [user?.role, playNotifSound, refreshNotifCount]);
 
   return (
     <div className="flex h-screen overflow-hidden" data-testid="app-layout">
@@ -193,7 +218,7 @@ export default function Layout({ children }) {
           {user?.role === "telecaller" && notifCount > 0 && (
             <button
               className="relative p-2 rounded-lg hover:bg-accent transition-colors"
-              onClick={() => setNotifCount(0)}
+              onClick={() => navigate("/")}
               data-testid="notification-bell"
             >
               <Bell className="w-5 h-5" />

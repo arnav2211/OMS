@@ -7,10 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Package, Truck, ClipboardList, Eye, DollarSign, CheckCircle } from "lucide-react";
+import { Plus, Package, Truck, ClipboardList, Eye, DollarSign, CheckCircle, Bell, ThumbsUp } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 const STATUS_STYLES = {
   new: "status-new",
@@ -32,6 +33,10 @@ export default function TelecallerDashboard() {
   const [salesDateFrom, setSalesDateFrom] = useState("");
   const [salesDateTo, setSalesDateTo] = useState("");
 
+  // Notifications
+  const [notifications, setNotifications] = useState([]);
+  const [notifLoading, setNotifLoading] = useState(true);
+
   // Payment-received sales state
   const [paymentSalesPeriod, setPaymentSalesPeriod] = useState("today");
   const [paymentSalesData, setPaymentSalesData] = useState(null);
@@ -40,7 +45,22 @@ export default function TelecallerDashboard() {
   const [paymentSalesDateFrom, setPaymentSalesDateFrom] = useState("");
   const [paymentSalesDateTo, setPaymentSalesDateTo] = useState("");
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { loadData(); loadNotifications(); }, []);
+
+  const loadNotifications = async () => {
+    setNotifLoading(false);
+    try {
+      const res = await api.get("/notifications");
+      setNotifications(res.data || []);
+    } catch {} finally { setNotifLoading(false); }
+  };
+
+  const acknowledgeNotif = async (notifId) => {
+    try {
+      await api.put(`/notifications/${notifId}/acknowledge`);
+      setNotifications(prev => prev.filter(n => n.id !== notifId));
+    } catch { }
+  };
 
   const loadData = async () => {
     try {
@@ -102,6 +122,45 @@ export default function TelecallerDashboard() {
           </Button>
         </Link>
       </div>
+
+      {/* Notification Box */}
+      {notifications.length > 0 && (
+        <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20" data-testid="notification-box">
+          <CardHeader className="pb-2 pt-3 px-4">
+            <div className="flex items-center gap-2">
+              <Bell className="w-4 h-4 text-amber-600" />
+              <CardTitle className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                Notifications ({notifications.length})
+              </CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent className="px-4 pb-3">
+            <ScrollArea className="max-h-48">
+              <div className="space-y-2">
+                {notifications.map(n => (
+                  <div key={n.id} className="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-white dark:bg-card border text-sm" data-testid={`notif-${n.id}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge variant="secondary" className={`text-xs ${n.type === "packed" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>
+                          {n.type === "packed" ? "Packed" : "Dispatched"}
+                        </Badge>
+                        <Link to={`/orders/${n.order_id}`} className="font-mono text-primary hover:underline font-medium" data-testid={`notif-order-link-${n.id}`}>
+                          {n.order_number}
+                        </Link>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5 truncate">{n.customer_name}</p>
+                    </div>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-green-600 hover:text-green-700 hover:bg-green-50"
+                      onClick={() => acknowledgeNotif(n.id)} data-testid={`notif-ack-${n.id}`} title="Acknowledge">
+                      <ThumbsUp className="w-4 h-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
