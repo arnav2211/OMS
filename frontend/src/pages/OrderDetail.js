@@ -201,7 +201,6 @@ export default function OrderDetail() {
       if (navigator.canShare && navigator.canShare({ files })) {
         await navigator.share({ files, title: `Packing Images - ${order.order_number}` });
       } else {
-        // Desktop fallback: download each file
         files.forEach((file, i) => {
           const url = URL.createObjectURL(file);
           const a = document.createElement("a");
@@ -213,7 +212,44 @@ export default function OrderDetail() {
           URL.revokeObjectURL(url);
         });
         toast.success("Images downloaded. Opening WhatsApp...");
-        // Open WhatsApp if customer phone available
+        if (customerPhone) {
+          const clean = customerPhone.replace(/[^0-9]/g, "");
+          const waPhone = clean.startsWith("91") ? clean : `91${clean}`;
+          setTimeout(() => window.open(`https://wa.me/${waPhone}`, "_blank"), 500);
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") toast.error("Share failed");
+    }
+  };
+
+  const packedBoxImageUrls = order.packaging?.packed_box_images || [];
+
+  const sharePackedBoxImages = async () => {
+    if (!packedBoxImageUrls.length) return toast.error("No packed box images to share");
+    try {
+      const blobs = await Promise.all(
+        packedBoxImageUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
+      );
+      const files = blobs.map((blob, i) => {
+        const ext = blob.type.includes("png") ? "png" : "jpg";
+        return new File([blob], `packed-box-${order.order_number}-${i + 1}.${ext}`, { type: blob.type });
+      });
+
+      if (navigator.canShare && navigator.canShare({ files })) {
+        await navigator.share({ files, title: `Packed Box Images - ${order.order_number}` });
+      } else {
+        files.forEach((file) => {
+          const url = URL.createObjectURL(file);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = file.name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        });
+        toast.success("Packed box images downloaded. Opening WhatsApp...");
         if (customerPhone) {
           const clean = customerPhone.replace(/[^0-9]/g, "");
           const waPhone = clean.startsWith("91") ? clean : `91${clean}`;
@@ -487,9 +523,16 @@ export default function OrderDetail() {
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">Packing Images</CardTitle>
               {canShareImages && allPackingImageUrls.length > 0 && (
-                <Button variant="outline" size="sm" onClick={sharePackingImages} data-testid="share-packing-images-btn">
-                  <Share2 className="w-4 h-4 mr-1 text-green-600" /> Share Images
-                </Button>
+                <div className="flex gap-2 flex-wrap">
+                  <Button variant="outline" size="sm" onClick={sharePackingImages} data-testid="share-packing-images-btn">
+                    <Share2 className="w-4 h-4 mr-1 text-green-600" /> Share All Images
+                  </Button>
+                  {packedBoxImageUrls.length > 0 && (
+                    <Button variant="outline" size="sm" onClick={sharePackedBoxImages} data-testid="share-packed-box-images-btn">
+                      <Share2 className="w-4 h-4 mr-1 text-blue-600" /> Share Packed Box Images
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
           </CardHeader>
