@@ -65,6 +65,16 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - GST Invoice Upload Status column (Uploaded/Pending/Not Required) in All Orders for non-Accounts roles
 - Mobile print fix: improved popup handling and iframe fallback for Android
 
+## Phase 16 Enhancements (March 2026 - Batch 3)
+- Executive Reports period filter fixed (uses IST timezone for Today/Yesterday/Week/Month)
+- Pincode auto-fill removed; replaced with searchable Indian States/UTs dropdown
+- Customer Alias field added (searchable alongside name, phone, GST)
+- Dispatch page Order IDs now clickable (link to Order Summary)
+- Packing role can update dispatch fields from Order Summary
+- Admin + Packing can Mark Packed / Undo Packed from Order Summary
+- Packing role gets Share Images (all + packed box) in Order Summary
+- New endpoints: `PUT /api/orders/{id}/mark-packed`, `PUT /api/orders/{id}/undo-packed`
+
 ## Credentials
 - Admin: admin / admin123
 - Packaging: test_packaging_user / test123
