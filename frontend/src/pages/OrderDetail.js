@@ -15,7 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { mobilePrintPdf } from "@/lib/mobilePrint";
 
@@ -732,6 +732,7 @@ export default function OrderDetail() {
                 <History className="w-4 h-4 mr-1" /> History
               </Button>
             </DialogTitle>
+            <DialogDescription>Set formulations for order items and free samples.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {formulationItems.map((item, i) => (

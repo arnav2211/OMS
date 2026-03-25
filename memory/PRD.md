@@ -55,6 +55,16 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - Endpoint: `POST /api/orders/{id}/invoice-upload` (multipart: tax_invoice, eway_bill)
 - Applies to both Accounts Dashboard and Admin Accounts view
 
+## UI/UX Enhancements (March 2026 - Batch 2)
+- Customer GST number displayed in Order Summary with copy button
+- Addresses formatted in multi-line readable format with copy buttons (billing + shipping)
+- Customer edit option added to Create Order, Edit Order, Create PI, Edit PI forms
+- Free samples now support formulation (same role-based visibility rules)
+- Extra Shipping Details optional field in order creation/editing, shown in Order Summary
+- GST/Non-GST column in All Orders for Accounts role
+- GST Invoice Upload Status column (Uploaded/Pending/Not Required) in All Orders for non-Accounts roles
+- Mobile print fix: improved popup handling and iframe fallback for Android
+
 ## Credentials
 - Admin: admin / admin123
 - Packaging: test_packaging_user / test123
