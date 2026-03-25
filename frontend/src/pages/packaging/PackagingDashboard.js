@@ -173,7 +173,7 @@ export default function PackagingDashboard() {
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     fetch(url).then(res => res.blob()).then(blob => {
       if (isMobile) {
-        mobilePrintPdf(blob);
+        mobilePrintPdf(blob, `packing-sheet-${orderId}.pdf`);
       } else {
         const blobUrl = URL.createObjectURL(blob);
         const iframe = document.createElement("iframe");

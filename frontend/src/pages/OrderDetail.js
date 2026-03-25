@@ -138,7 +138,13 @@ export default function OrderDetail() {
   };
 
   const openDispatch = () => {
-    setDispatchData({ courier_name: order.courier_name || "", transporter_name: order.transporter_name || "", lr_no: "", dispatch_type: order.shipping_method || "" });
+    const d = order.dispatch || {};
+    setDispatchData({
+      courier_name: d.courier_name || order.courier_name || "",
+      transporter_name: d.transporter_name || order.transporter_name || "",
+      lr_no: d.lr_no || "",
+      dispatch_type: d.dispatch_type || order.shipping_method || "",
+    });
     setShowDispatch(true);
   };
 
@@ -157,7 +163,7 @@ export default function OrderDetail() {
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     fetch(url).then(res => res.blob()).then(blob => {
       if (isMobile) {
-        mobilePrintPdf(blob);
+        mobilePrintPdf(blob, `${order.order_number || "order"}.pdf`);
       } else {
         const blobUrl = URL.createObjectURL(blob);
         const iframe = document.createElement("iframe");
@@ -406,24 +412,30 @@ export default function OrderDetail() {
       </Card>
 
       {/* Shipping Details */}
-      {order.shipping_method && (
+      {(order.shipping_method || order.dispatch) && (
         <Card data-testid="shipping-details-card">
           <CardHeader className="pb-3"><CardTitle className="text-base">Shipping Details</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">Shipping Method</span>
-              <span className="text-sm font-medium capitalize" data-testid="order-shipping-method">{order.shipping_method?.replace(/_/g, " ")}</span>
+              <span className="text-sm font-medium capitalize" data-testid="order-shipping-method">{(order.dispatch?.dispatch_type || order.shipping_method || "")?.replace(/_/g, " ")}</span>
             </div>
-            {order.shipping_method === "courier" && order.courier_name && (
+            {(order.dispatch?.courier_name || order.courier_name) && (
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Courier Name</span>
-                <span className="text-sm" data-testid="order-courier-name">{order.courier_name}</span>
+                <span className="text-sm" data-testid="order-courier-name">{order.dispatch?.courier_name || order.courier_name}</span>
               </div>
             )}
-            {order.shipping_method === "transport" && order.transporter_name && (
+            {(order.dispatch?.transporter_name || order.transporter_name) && (
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Transporter Name</span>
-                <span className="text-sm" data-testid="order-transporter-name">{order.transporter_name}</span>
+                <span className="text-sm" data-testid="order-transporter-name">{order.dispatch?.transporter_name || order.transporter_name}</span>
+              </div>
+            )}
+            {order.dispatch?.lr_no && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">LR No</span>
+                <span className="text-sm font-mono" data-testid="order-lr">{order.dispatch.lr_no}</span>
               </div>
             )}
             {order.dispatch?.tracking_number && (

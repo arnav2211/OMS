@@ -180,16 +180,17 @@ export default function AdminDashboard() {
   };
 
   // Load executive report
-  const loadExecReport = async (execId) => {
+  const loadExecReport = async (execId, overridePeriod) => {
     setSelectedExec(execId);
+    const period = overridePeriod !== undefined ? overridePeriod : execPeriod;
     try {
       const params = new URLSearchParams();
       params.set("telecaller_id", execId);
-      if (execPeriod === "custom") {
+      if (period === "custom") {
         if (execDateFrom) params.set("date_from", execDateFrom);
         if (execDateTo) params.set("date_to", execDateTo);
       } else {
-        params.set("period", execPeriod);
+        params.set("period", period);
       }
       params.set("exclude_gst", execExcludeGst.toString());
       params.set("exclude_shipping", execExcludeShipping.toString());
@@ -476,7 +477,7 @@ export default function AdminDashboard() {
                 </div>
                 <div>
                   <Label className="text-xs">Period</Label>
-                  <Select value={execPeriod} onValueChange={v => { setExecPeriod(v); if (selectedExec) setTimeout(() => loadExecReport(selectedExec), 0); }}>
+                  <Select value={execPeriod} onValueChange={v => { setExecPeriod(v); if (selectedExec) loadExecReport(selectedExec, v); }}>
                     <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
                     <SelectContent>{PERIOD_OPTIONS.map(p => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
                   </Select>
