@@ -492,6 +492,7 @@ export default function EditOrder() {
   const saveNewAddress = async () => {
     if (!newAddr.address_line || !newAddr.city || !newAddr.state || !newAddr.pincode) return toast.error("All address fields required");
     if (!/^\d{6}$/.test(newAddr.pincode)) return toast.error("Pincode must be 6 digits");
+    if (!INDIAN_STATES.includes(newAddr.state)) return toast.error("Please select a valid State/UT from the dropdown");
     try {
       const res = await api.post(`/customers/${order.customer_id}/addresses`, newAddr);
       if (addressTarget === "billing") { setBillingAddress(res.data); if (sameAsBilling) setShippingAddress(res.data); }

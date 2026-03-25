@@ -296,7 +296,7 @@ export default function CreateOrder() {
     }
     if (!/^\d{6}$/.test(newAddr.pincode)) return toast.error("Pincode must be 6 digits");
     if (!/^[a-zA-Z\s]+$/.test(newAddr.city)) return toast.error("City must contain only letters");
-    if (!/^[a-zA-Z\s]+$/.test(newAddr.state)) return toast.error("State must contain only letters");
+    if (!INDIAN_STATES.includes(newAddr.state)) return toast.error("Please select a valid State/UT from the dropdown");
 
     try {
       const res = await api.post(`/customers/${selectedCustomer.id}/addresses`, newAddr);
