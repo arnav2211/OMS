@@ -83,7 +83,9 @@ export default function AllOrders() {
   };
 
   const filteredOrders = orders.filter(o => {
-    if (statusFilter !== "all" && o.status !== statusFilter) return false;
+    if (statusFilter === "yet_to_dispatch") {
+      if (o.status === "dispatched") return false;
+    } else if (statusFilter !== "all" && o.status !== statusFilter) return false;
     if (payStatusFilter !== "all" && o.payment_status !== payStatusFilter) return false;
     if (checkStatusFilter !== "all" && (o.payment_check_status || "pending") !== checkStatusFilter) return false;
     if (search) {
@@ -198,6 +200,7 @@ export default function AllOrders() {
               <SelectTrigger className="w-32 h-8 text-xs" data-testid="status-filter-select"><SelectValue placeholder="Status" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="yet_to_dispatch">Yet to dispatch</SelectItem>
                 <SelectItem value="new">New</SelectItem>
                 <SelectItem value="packaging">Packaging</SelectItem>
                 <SelectItem value="packed">Packed</SelectItem>
