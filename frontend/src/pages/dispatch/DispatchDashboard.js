@@ -141,7 +141,9 @@ export default function DispatchDashboard() {
               <TableBody>
                 {orders.map((order) => (
                   <TableRow key={order.id} data-testid={`dispatch-order-${order.order_number}`}>
-                    <TableCell className="font-mono font-medium text-sm">{order.order_number}</TableCell>
+                    <TableCell className="font-mono font-medium text-sm">
+                      <Link to={`/orders/${order.id}`} className="text-primary hover:underline" data-testid={`dispatch-order-link-${order.order_number}`}>{order.order_number}</Link>
+                    </TableCell>
                     <TableCell className="text-sm">{order.customer_name}</TableCell>
                     <TableCell className="text-sm">{getShippingLabel(order.shipping_method)}</TableCell>
                     <TableCell>

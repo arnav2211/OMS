@@ -11,11 +11,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Plus, Trash2, Search, UserPlus, Download, MapPin, FileText, ArrowRight, Share2, Copy } from "lucide-react";
+import { Plus, Trash2, Search, UserPlus, Download, MapPin, FileText, ArrowRight, Share2, Copy, Edit } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Link } from "react-router-dom";
+import { INDIAN_STATES } from "@/lib/indianStates";
 import { useAuth } from "@/contexts/AuthContext";
 
 const UNITS = ["mL", "L", "g", "Kg", "pcs", ""];
@@ -94,9 +95,12 @@ export default function PIBuilder() {
   const [addressTarget, setAddressTarget] = useState("billing");
   const [newAddr, setNewAddr] = useState(emptyAddress());
   const [pincodeLoading, setPincodeLoading] = useState(false);
+  const [stateSearch, setStateSearch] = useState("");
   const [showNewCustomer, setShowNewCustomer] = useState(false);
   const [newCust, setNewCust] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "" });
   const [sharing, setSharing] = useState({});
+  const [showEditCustomer, setShowEditCustomer] = useState(false);
+  const [editCustData, setEditCustData] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
 
   const canShare = ["admin", "telecaller"].includes(user?.role);
 
@@ -114,7 +118,8 @@ export default function PIBuilder() {
   const filteredCustomers = customers.filter(c =>
     c.name?.toLowerCase().includes(customerSearch.toLowerCase()) ||
     c.phone_numbers?.some(p => p.includes(customerSearch)) ||
-    c.gst_no?.toLowerCase().includes(customerSearch.toLowerCase())
+    c.gst_no?.toLowerCase().includes(customerSearch.toLowerCase()) ||
+    c.alias?.toLowerCase().includes(customerSearch.toLowerCase())
   );
 
   const createCustomer = async () => {
@@ -128,6 +133,28 @@ export default function PIBuilder() {
       setShowNewCustomer(false);
       toast.success("Customer created");
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+  };
+
+  const openEditCustomer = () => {
+    setEditCustData({
+      name: selectedCustomer.name || "", gst_no: selectedCustomer.gst_no || "",
+      phone_numbers: selectedCustomer.phone_numbers?.length ? [...selectedCustomer.phone_numbers] : [""],
+      email: selectedCustomer.email || "", alias: selectedCustomer.alias || "",
+    });
+    setShowEditCustomer(true);
+  };
+
+  const saveEditCustomer = async () => {
+    if (!editCustData.name) return toast.error("Name required");
+    const phones = editCustData.phone_numbers.filter(Boolean);
+    if (phones.length === 0) return toast.error("At least one phone number required");
+    try {
+      const res = await api.put(`/customers/${selectedCustomer.id}`, { ...editCustData, phone_numbers: phones });
+      setSelectedCustomer(res.data);
+      setCustomers(prev => prev.map(c => c.id === res.data.id ? res.data : c));
+      setShowEditCustomer(false);
+      toast.success("Customer updated");
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed to update"); }
   };
 
   const updateItem = (idx, field, value) => {
@@ -162,21 +189,10 @@ export default function PIBuilder() {
   }, 0);
   const grandTotal = Math.ceil(subtotal + totalGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst);
 
-  const lookupPincode = async (pincode) => {
-    if (!/^\d{6}$/.test(pincode)) return;
-    setPincodeLoading(true);
-    try {
-      const res = await api.get(`/pincode/${pincode}`);
-      if (res.data.city || res.data.state) {
-        setNewAddr(p => ({ ...p, city: res.data.city || p.city, state: res.data.state || p.state }));
-        toast.success(`${res.data.city}, ${res.data.state}`);
-      }
-    } catch { } finally { setPincodeLoading(false); }
-  };
-
   const saveNewAddress = async () => {
     if (!newAddr.address_line || !newAddr.city || !newAddr.state || !newAddr.pincode) return toast.error("All address fields required");
     if (!/^\d{6}$/.test(newAddr.pincode)) return toast.error("Pincode must be 6 digits");
+    if (!INDIAN_STATES.includes(newAddr.state)) return toast.error("Please select a valid State/UT from the dropdown");
     try {
       const res = await api.post(`/customers/${selectedCustomer.id}/addresses`, newAddr);
       if (addressTarget === "billing") { setBillingAddress(res.data); if (sameAsBilling) setShippingAddress(res.data); }
@@ -377,7 +393,10 @@ export default function PIBuilder() {
                     <p className="font-medium">{selectedCustomer.name}</p>
                     <p className="text-sm text-muted-foreground">{selectedCustomer.phone_numbers?.join(", ")}</p>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => { setSelectedCustomer(null); setBillingAddress(null); setShippingAddress(null); }}>Change</Button>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={openEditCustomer} data-testid="pi-edit-customer-btn"><Edit className="w-3 h-3 mr-1" /> Edit</Button>
+                    <Button variant="outline" size="sm" onClick={() => { setSelectedCustomer(null); setBillingAddress(null); setShippingAddress(null); }}>Change</Button>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -623,18 +642,64 @@ export default function PIBuilder() {
               <Input value={newAddr.pincode} onChange={e => {
                 const v = e.target.value.replace(/\D/g, "").slice(0, 6);
                 setNewAddr({ ...newAddr, pincode: v });
-                if (v.length === 6) lookupPincode(v);
               }} maxLength={6} />
-              {pincodeLoading && <p className="text-xs text-muted-foreground mt-1">Looking up...</p>}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><Label>City *</Label><Input value={newAddr.city} onChange={e => setNewAddr({ ...newAddr, city: e.target.value })} /></div>
-              <div><Label>State *</Label><Input value={newAddr.state} onChange={e => setNewAddr({ ...newAddr, state: e.target.value })} /></div>
+              <div>
+                <Label>State *</Label>
+                <div className="relative">
+                  <Input value={newAddr.state} onChange={e => { setNewAddr({ ...newAddr, state: e.target.value }); setStateSearch(e.target.value); }}
+                    placeholder="Type to search..." autoComplete="off" />
+                  {stateSearch && !INDIAN_STATES.includes(newAddr.state) && (
+                    <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-40 overflow-y-auto">
+                      {INDIAN_STATES.filter(s => s.toLowerCase().includes(stateSearch.toLowerCase())).map(s => (
+                        <button key={s} type="button" className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent"
+                          onClick={() => { setNewAddr({ ...newAddr, state: s }); setStateSearch(""); }}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddAddress(false)}>Cancel</Button>
             <Button onClick={saveNewAddress}>Save Address</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Customer Dialog */}
+      <Dialog open={showEditCustomer} onOpenChange={setShowEditCustomer}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit Customer</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-2"><Label>Customer / Company Name *</Label><Input value={editCustData.name} onChange={e => setEditCustData({ ...editCustData, name: e.target.value })} data-testid="edit-cust-name" /></div>
+              <div className="col-span-2"><Label>GST No.</Label><Input value={editCustData.gst_no} onChange={e => setEditCustData({ ...editCustData, gst_no: e.target.value.toUpperCase() })} placeholder="e.g. 27AABCU9603R1ZM" data-testid="edit-cust-gst" /></div>
+            </div>
+            <Separator />
+            <h4 className="text-sm font-semibold">Contact</h4>
+            {editCustData.phone_numbers.map((ph, i) => (
+              <div key={i} className="flex gap-2">
+                <div className="flex items-center gap-1 flex-1">
+                  <span className="text-sm text-muted-foreground whitespace-nowrap">+91</span>
+                  <Input value={ph} onChange={e => { const phones = [...editCustData.phone_numbers]; phones[i] = e.target.value; setEditCustData({ ...editCustData, phone_numbers: phones }); }} placeholder="10-digit number" data-testid={`edit-cust-phone-${i}`} />
+                </div>
+                {i === editCustData.phone_numbers.length - 1 && (
+                  <Button variant="outline" size="icon" onClick={() => setEditCustData({ ...editCustData, phone_numbers: [...editCustData.phone_numbers, ""] })}><Plus className="w-4 h-4" /></Button>
+                )}
+              </div>
+            ))}
+            <div><Label className="text-xs">Email (optional)</Label><Input type="email" value={editCustData.email} onChange={e => setEditCustData({ ...editCustData, email: e.target.value })} data-testid="edit-cust-email" /></div>
+            <div><Label className="text-xs">Alias (optional)</Label><Input value={editCustData.alias || ""} onChange={e => setEditCustData({ ...editCustData, alias: e.target.value })} placeholder="Short name / nickname" data-testid="edit-cust-alias" /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEditCustomer(false)}>Cancel</Button>
+            <Button onClick={saveEditCustomer} data-testid="save-edit-customer-btn">Save Changes</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
