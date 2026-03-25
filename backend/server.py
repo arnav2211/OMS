@@ -141,6 +141,7 @@ class OrderItemModel(BaseModel):
 class FreeSampleModel(BaseModel):
     item_name: str = ""
     description: str = ""
+    formulation: str = ""
 
 class AdditionalChargeModel(BaseModel):
     name: str = ""
@@ -168,6 +169,7 @@ class OrderCreate(BaseModel):
     payment_mode_details: str = ""
     billing_address_id: str = ""
     shipping_address_id: str = ""
+    extra_shipping_details: str = ""
 
 class FormulationUpdate(BaseModel):
     items: List[Dict[str, Any]]
@@ -715,6 +717,7 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "billing_address": billing_addr,
         "shipping_address": shipping_addr,
         "free_samples": [s.model_dump() for s in req.free_samples],
+        "extra_shipping_details": req.extra_shipping_details,
         "telecaller_id": user["id"],
         "telecaller_name": user["name"],
         "packaging": {
@@ -987,9 +990,19 @@ async def update_formulation(order_id: str, req: FormulationUpdate, user=Depends
             # Match by position if no index provided
             if "formulation" in update_item:
                 items[i]["formulation"] = update_item["formulation"]
+    # Also handle free_samples formulations if provided
+    update_set = {"items": items, "updated_at": datetime.now(timezone.utc).isoformat()}
+    free_samples_update = [it for it in req.items if it.get("is_free_sample")]
+    if free_samples_update:
+        free_samples = order.get("free_samples", [])
+        for fs_update in free_samples_update:
+            fs_idx = fs_update.get("fs_index")
+            if fs_idx is not None and 0 <= fs_idx < len(free_samples):
+                free_samples[fs_idx]["formulation"] = fs_update.get("formulation", "")
+        update_set["free_samples"] = free_samples
     await db.orders.update_one(
         {"id": order_id},
-        {"$set": {"items": items, "updated_at": datetime.now(timezone.utc).isoformat()}}
+        {"$set": update_set}
     )
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated

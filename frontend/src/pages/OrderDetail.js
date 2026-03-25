@@ -38,6 +38,7 @@ export default function OrderDetail() {
   const [showDispatch, setShowDispatch] = useState(false);
   const [showFormulation, setShowFormulation] = useState(false);
   const [formulationItems, setFormulationItems] = useState([]);
+  const [formulationFreeSamples, setFormulationFreeSamples] = useState([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [showHistory, setShowHistory] = useState(false);
@@ -47,6 +48,7 @@ export default function OrderDetail() {
   const [dispatchData, setDispatchData] = useState({ courier_name: "", transporter_name: "", lr_no: "", dispatch_type: "" });
   const [previewImage, setPreviewImage] = useState(null);
   const [customerPhone, setCustomerPhone] = useState("");
+  const [customerGst, setCustomerGst] = useState("");
 
   useEffect(() => { loadOrder(); }, [id]);
 
@@ -61,6 +63,7 @@ export default function OrderDetail() {
       api.get(`/customers/${order.customer_id}`).then(r => {
         const phones = r.data?.phone_numbers || [];
         if (phones.length) setCustomerPhone(phones[0]);
+        if (r.data?.gst_no) setCustomerGst(r.data.gst_no);
       }).catch(() => {});
     }
   }, [order?.customer_id]);
@@ -93,6 +96,9 @@ export default function OrderDetail() {
       product_name: i.product_name, formulation: i.formulation || "",
       qty: i.qty, unit: i.unit, amount: i.amount || 0, gst_applicable: order.gst_applicable,
     })));
+    setFormulationFreeSamples((order.free_samples || []).map(s => ({
+      item_name: s.item_name, description: s.description || "", formulation: s.formulation || "",
+    })));
     setShowFormulation(true);
   };
 
@@ -108,7 +114,9 @@ export default function OrderDetail() {
   const saveFormulation = async () => {
     setSaving(true);
     try {
-      await api.put(`/orders/${id}/formulation`, { items: formulationItems });
+      const items = formulationItems.map((item, i) => ({ index: i, formulation: item.formulation }));
+      const fsSamples = formulationFreeSamples.map((s, i) => ({ is_free_sample: true, fs_index: i, formulation: s.formulation }));
+      await api.put(`/orders/${id}/formulation`, { items: [...items, ...fsSamples] });
       toast.success("Formulations updated"); setShowFormulation(false); loadOrder();
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
     finally { setSaving(false); }
@@ -335,20 +343,34 @@ export default function OrderDetail() {
               </button>
             </div>
           )}
-          {order.billing_address && (
-            <div className="flex justify-between items-start">
-              <span className="text-sm text-muted-foreground">Billing Address</span>
-              <button className="text-sm text-right max-w-[60%] flex items-start gap-1 hover:text-primary transition-colors" onClick={() => copyToClipboard(`${order.billing_address.address_line}, ${order.billing_address.city}, ${order.billing_address.state} - ${order.billing_address.pincode}`, "Billing address")} data-testid="copy-billing-address-btn">
-                {order.billing_address.address_line}, {order.billing_address.city}, {order.billing_address.state} - {order.billing_address.pincode} <ClipboardCopy className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          {customerGst && (
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">GST Number</span>
+              <button className="text-sm font-mono font-medium flex items-center gap-1 hover:text-primary transition-colors" onClick={() => copyToClipboard(customerGst, "GST number")} data-testid="copy-gst-btn">
+                {customerGst} <ClipboardCopy className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
+          {order.billing_address && (
+            <div className="flex justify-between items-start gap-4">
+              <span className="text-sm text-muted-foreground shrink-0">Billing Address</span>
+              <div className="text-sm text-right max-w-[60%] flex items-start gap-1">
+                <span className="leading-relaxed">{order.billing_address.address_line}{order.billing_address.city ? `,\n${order.billing_address.city}` : ""}{order.billing_address.state ? `,\n${order.billing_address.state}` : ""}{order.billing_address.pincode ? ` - ${order.billing_address.pincode}` : ""}</span>
+                <button className="shrink-0 mt-0.5 hover:text-primary transition-colors" onClick={() => copyToClipboard(`${order.billing_address.address_line}, ${order.billing_address.city}, ${order.billing_address.state} - ${order.billing_address.pincode}`, "Billing address")} data-testid="copy-billing-address-btn">
+                  <ClipboardCopy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
           {order.shipping_address && (
-            <div className="flex justify-between items-start">
-              <span className="text-sm text-muted-foreground">Shipping Address</span>
-              <button className="text-sm text-right max-w-[60%] flex items-start gap-1 hover:text-primary transition-colors" onClick={() => copyToClipboard(`${order.shipping_address.address_line}, ${order.shipping_address.city}, ${order.shipping_address.state} - ${order.shipping_address.pincode}`, "Shipping address")} data-testid="copy-shipping-address-btn">
-                {order.shipping_address.address_line}, {order.shipping_address.city}, {order.shipping_address.state} - {order.shipping_address.pincode} <ClipboardCopy className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-              </button>
+            <div className="flex justify-between items-start gap-4">
+              <span className="text-sm text-muted-foreground shrink-0">Shipping Address</span>
+              <div className="text-sm text-right max-w-[60%] flex items-start gap-1">
+                <span className="leading-relaxed">{order.shipping_address.address_line}{order.shipping_address.city ? `,\n${order.shipping_address.city}` : ""}{order.shipping_address.state ? `,\n${order.shipping_address.state}` : ""}{order.shipping_address.pincode ? ` - ${order.shipping_address.pincode}` : ""}</span>
+                <button className="shrink-0 mt-0.5 hover:text-primary transition-colors" onClick={() => copyToClipboard(`${order.shipping_address.address_line}, ${order.shipping_address.city}, ${order.shipping_address.state} - ${order.shipping_address.pincode}`, "Shipping address")} data-testid="copy-shipping-address-btn">
+                  <ClipboardCopy className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           )}
           {order.purpose && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Purpose</span><span className="text-sm">{order.purpose}</span></div>}
@@ -381,6 +403,12 @@ export default function OrderDetail() {
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Tracking Number</span>
                 <span className="text-sm font-mono" data-testid="order-tracking">{order.dispatch.tracking_number}</span>
+              </div>
+            )}
+            {order.extra_shipping_details && (
+              <div className="flex justify-between items-start">
+                <span className="text-sm text-muted-foreground">Extra Details</span>
+                <span className="text-sm text-right max-w-[60%]" data-testid="extra-shipping-details">{order.extra_shipping_details}</span>
               </div>
             )}
           </CardContent>
@@ -536,10 +564,15 @@ export default function OrderDetail() {
           <CardContent>
             <div className="space-y-1" data-testid="free-samples-list">
               {order.free_samples.map((s, i) => (
-                <div key={i} className="flex items-center gap-2 text-sm p-2 rounded bg-secondary/50">
-                  <span className="text-xs font-mono text-muted-foreground">{i + 1}.</span>
-                  <span className="font-medium">{s.item_name}</span>
-                  {s.description && <span className="text-muted-foreground">- {s.description}</span>}
+                <div key={i} className="text-sm p-2 rounded bg-secondary/50 space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono text-muted-foreground">{i + 1}.</span>
+                    <span className="font-medium">{s.item_name}</span>
+                    {s.description && <span className="text-muted-foreground">- {s.description}</span>}
+                  </div>
+                  {showFormulations && s.formulation && (
+                    <p className="text-xs text-amber-600 ml-6">{s.formulation}</p>
+                  )}
                 </div>
               ))}
             </div>
@@ -715,6 +748,26 @@ export default function OrderDetail() {
                 }} placeholder="Enter formulation..." className="min-h-[80px]" data-testid={`formulation-input-${i}`} />
               </div>
             ))}
+            {formulationFreeSamples.length > 0 && (
+              <>
+                <Separator />
+                <Label className="text-sm font-medium text-muted-foreground">Free Samples</Label>
+                {formulationFreeSamples.map((sample, i) => (
+                  <div key={`fs-${i}`} className="space-y-1">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                      <Label className="text-sm font-medium">{sample.item_name}</Label>
+                      {sample.description && <span className="text-xs text-muted-foreground">{sample.description}</span>}
+                      <Badge variant="outline" className="text-xs">Free Sample</Badge>
+                    </div>
+                    <Textarea value={sample.formulation} onChange={(e) => {
+                      const updated = [...formulationFreeSamples];
+                      updated[i] = { ...updated[i], formulation: e.target.value };
+                      setFormulationFreeSamples(updated);
+                    }} placeholder="Enter formulation for free sample..." className="min-h-[80px]" data-testid={`fs-formulation-input-${i}`} />
+                  </div>
+                ))}
+              </>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowFormulation(false)}>Cancel</Button>

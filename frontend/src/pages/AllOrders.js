@@ -264,6 +264,8 @@ export default function AllOrders() {
                     <TableHead className="text-xs uppercase whitespace-nowrap">Amount</TableHead>
                     <TableHead className="text-xs uppercase whitespace-nowrap">Status</TableHead>
                     <TableHead className="text-xs uppercase whitespace-nowrap">Payment</TableHead>
+                    {user?.role === "accounts" && <TableHead className="text-xs uppercase whitespace-nowrap">GST</TableHead>}
+                    {user?.role !== "accounts" && <TableHead className="text-xs uppercase whitespace-nowrap">Invoice</TableHead>}
                     {showPaymentCheck && <TableHead className="text-xs uppercase whitespace-nowrap">Check</TableHead>}
                     {user?.role === "admin" && <TableHead className="text-xs uppercase whitespace-nowrap">Executive</TableHead>}
                     <TableHead className="text-xs uppercase whitespace-nowrap">Date</TableHead>
@@ -290,6 +292,20 @@ export default function AllOrders() {
                         <TableCell className="text-sm font-mono whitespace-nowrap">{"\u20B9"}{o.grand_total?.toLocaleString("en-IN")}</TableCell>
                         <TableCell><Badge className={`${STATUS_COLORS[o.status] || "bg-gray-100"} text-xs`}>{o.status}</Badge></TableCell>
                         <TableCell><Badge variant="outline" className="text-xs">{o.payment_status}</Badge></TableCell>
+                        {user?.role === "accounts" && (
+                          <TableCell><Badge variant="outline" className={`text-xs ${o.gst_applicable ? "border-blue-300 text-blue-700" : "border-gray-300 text-gray-500"}`} data-testid={`gst-badge-${o.id}`}>{o.gst_applicable ? "GST" : "Non-GST"}</Badge></TableCell>
+                        )}
+                        {user?.role !== "accounts" && (
+                          <TableCell>
+                            {o.gst_applicable ? (
+                              <Badge className={`text-xs ${o.tax_invoice_url ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`} data-testid={`invoice-status-${o.id}`}>
+                                {o.tax_invoice_url ? "Uploaded" : "Pending"}
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground" data-testid={`invoice-status-${o.id}`}>Not Required</span>
+                            )}
+                          </TableCell>
+                        )}
                         {showPaymentCheck && (
                           <TableCell>
                             <Badge className={`${CHECK_COLORS[checkStatus] || "bg-gray-100"} text-xs`} data-testid={`check-badge-${o.id}`}>
