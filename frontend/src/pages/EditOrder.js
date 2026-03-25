@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { Plus, Trash2, MapPin, ArrowLeft, Upload, X, Edit } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { INDIAN_STATES } from "@/lib/indianStates";
 
 const UNITS = ["mL", "L", "g", "Kg", "pcs", ""];
 const SHIPPING_METHODS = [
@@ -415,10 +416,11 @@ export default function EditOrder() {
   const [addressTarget, setAddressTarget] = useState("billing");
   const [newAddr, setNewAddr] = useState(emptyAddress());
   const [pincodeLoading, setPincodeLoading] = useState(false);
+  const [stateSearch, setStateSearch] = useState("");
   const [paymentScreenshots, setPaymentScreenshots] = useState([]);
   const [extraShippingDetails, setExtraShippingDetails] = useState("");
   const [showEditCustomer, setShowEditCustomer] = useState(false);
-  const [editCustData, setEditCustData] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "" });
+  const [editCustData, setEditCustData] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
 
   useEffect(() => { loadOrder(); }, [orderId]);
 
@@ -486,18 +488,7 @@ export default function EditOrder() {
   const grandTotal = Math.ceil(subtotal + totalItemGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst);
   const balanceAmount = paymentStatus === "full" ? 0 : paymentStatus === "partial" ? Math.max(0, grandTotal - amountPaid) : grandTotal;
 
-  const lookupPincode = async (pincode) => {
-    if (!/^\d{6}$/.test(pincode)) return;
-    setPincodeLoading(true);
-    try {
-      const res = await api.get(`/pincode/${pincode}`);
-      if (res.data.city || res.data.state) {
-        setNewAddr(p => ({ ...p, city: res.data.city || p.city, state: res.data.state || p.state }));
-        toast.success(`${res.data.city}, ${res.data.state}`);
-      }
-    } catch {} finally { setPincodeLoading(false); }
-  };
-
+  // State search for address
   const saveNewAddress = async () => {
     if (!newAddr.address_line || !newAddr.city || !newAddr.state || !newAddr.pincode) return toast.error("All address fields required");
     if (!/^\d{6}$/.test(newAddr.pincode)) return toast.error("Pincode must be 6 digits");
@@ -531,7 +522,7 @@ export default function EditOrder() {
       setEditCustData({
         name: c.name || "", gst_no: c.gst_no || "",
         phone_numbers: c.phone_numbers?.length ? [...c.phone_numbers] : [""],
-        email: c.email || "",
+        email: c.email || "", alias: c.alias || "",
       });
       setShowEditCustomer(true);
     }).catch(() => toast.error("Failed to load customer"));
@@ -957,13 +948,27 @@ export default function EditOrder() {
               <Input value={newAddr.pincode} onChange={e => {
                 const v = e.target.value.replace(/\D/g, "").slice(0, 6);
                 setNewAddr({ ...newAddr, pincode: v });
-                if (v.length === 6) lookupPincode(v);
               }} maxLength={6} />
-              {pincodeLoading && <p className="text-xs text-muted-foreground mt-1">Looking up...</p>}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><Label>City *</Label><Input value={newAddr.city} onChange={e => setNewAddr({ ...newAddr, city: e.target.value })} /></div>
-              <div><Label>State *</Label><Input value={newAddr.state} onChange={e => setNewAddr({ ...newAddr, state: e.target.value })} /></div>
+              <div>
+                <Label>State *</Label>
+                <div className="relative">
+                  <Input value={newAddr.state} onChange={e => { setNewAddr({ ...newAddr, state: e.target.value }); setStateSearch(e.target.value); }}
+                    placeholder="Type to search..." autoComplete="off" />
+                  {stateSearch && !INDIAN_STATES.includes(newAddr.state) && (
+                    <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-40 overflow-y-auto">
+                      {INDIAN_STATES.filter(s => s.toLowerCase().includes(stateSearch.toLowerCase())).map(s => (
+                        <button key={s} type="button" className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent"
+                          onClick={() => { setNewAddr({ ...newAddr, state: s }); setStateSearch(""); }}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
           <DialogFooter>
@@ -999,6 +1004,7 @@ export default function EditOrder() {
               </div>
             ))}
             <div><Label className="text-xs">Email (optional)</Label><Input type="email" value={editCustData.email} onChange={e => setEditCustData({ ...editCustData, email: e.target.value })} data-testid="edit-cust-email" /></div>
+            <div><Label className="text-xs">Alias (optional)</Label><Input value={editCustData.alias || ""} onChange={e => setEditCustData({ ...editCustData, alias: e.target.value })} placeholder="Short name / nickname" data-testid="edit-cust-alias" /></div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowEditCustomer(false)}>Cancel</Button>

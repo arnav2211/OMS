@@ -49,6 +49,7 @@ export default function OrderDetail() {
   const [previewImage, setPreviewImage] = useState(null);
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerGst, setCustomerGst] = useState("");
+  const [statusUpdating, setStatusUpdating] = useState(false);
 
   useEffect(() => { loadOrder(); }, [id]);
 
@@ -80,9 +81,9 @@ export default function OrderDetail() {
   const canEditFormulation = user?.role === "admin" || (user?.role === "packaging" && formulationVisible);
   const showFormulations = user?.role === "admin" || (user?.role === "packaging" && formulationVisible);
   const canEditPackaging = user?.role === "admin" || (user?.role === "packaging" && !isDispatched);
-  const canEditDispatch = ["admin", "dispatch"].includes(user?.role);
+  const canEditDispatch = ["admin", "dispatch", "packaging"].includes(user?.role);
   const canSharePI = ["admin", "telecaller"].includes(user?.role);
-  const canShareImages = ["admin", "telecaller"].includes(user?.role);
+  const canShareImages = ["admin", "telecaller", "packaging"].includes(user?.role);
   // Telecaller can edit payment on own orders even after dispatch
   const canEditPayment = isAdmin || (user?.role === "telecaller" && order?.telecaller_id === user?.id);
 
@@ -300,6 +301,26 @@ export default function OrderDetail() {
     }
   };
 
+  const markPacked = async () => {
+    setStatusUpdating(true);
+    try {
+      await api.put(`/orders/${id}/mark-packed`);
+      toast.success("Order marked as Packed");
+      loadOrder();
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+    finally { setStatusUpdating(false); }
+  };
+
+  const undoPacked = async () => {
+    setStatusUpdating(true);
+    try {
+      await api.put(`/orders/${id}/undo-packed`);
+      toast.success("Order reverted to Packaging");
+      loadOrder();
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+    finally { setStatusUpdating(false); }
+  };
+
   return (
     <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6 px-1 sm:px-0" data-testid="order-detail-page">
       <div className="flex items-center justify-between">
@@ -323,6 +344,12 @@ export default function OrderDetail() {
           )}
           {canEditFormulation && <Button variant="outline" size="sm" onClick={openFormulation} data-testid="formulation-btn"><FileText className="w-4 h-4 mr-1" /> Formulation</Button>}
           {canEditFormulation && <Button variant="outline" size="sm" onClick={loadFormulationHistory} data-testid="formulation-history-btn"><History className="w-4 h-4 mr-1" /> History</Button>}
+          {["admin", "packaging"].includes(user?.role) && ["new", "packaging"].includes(order.status) && (
+            <Button variant="default" size="sm" onClick={markPacked} disabled={statusUpdating} data-testid="mark-packed-btn"><Package className="w-4 h-4 mr-1" /> Mark Packed</Button>
+          )}
+          {["admin", "packaging"].includes(user?.role) && order.status === "packed" && (
+            <Button variant="outline" size="sm" onClick={undoPacked} disabled={statusUpdating} data-testid="undo-packed-btn">Undo Packed</Button>
+          )}
           {user?.role === "admin" && <Button variant="destructive" size="sm" onClick={() => setShowDeleteConfirm(true)} data-testid="delete-order-btn"><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>}
           {user?.role === "telecaller" && canEditOrder && !isDispatched && <Button variant="destructive" size="sm" onClick={() => setShowDeleteConfirm(true)} data-testid="delete-order-btn"><Trash2 className="w-4 h-4 mr-1" /> Delete</Button>}
         </div>
@@ -354,8 +381,8 @@ export default function OrderDetail() {
           {order.billing_address && (
             <div className="flex justify-between items-start gap-4">
               <span className="text-sm text-muted-foreground shrink-0">Billing Address</span>
-              <div className="text-sm text-right max-w-[60%] flex items-start gap-1">
-                <span className="leading-relaxed">{order.billing_address.address_line}{order.billing_address.city ? `,\n${order.billing_address.city}` : ""}{order.billing_address.state ? `,\n${order.billing_address.state}` : ""}{order.billing_address.pincode ? ` - ${order.billing_address.pincode}` : ""}</span>
+              <div className="text-sm text-right max-w-[65%] flex items-start gap-1">
+                <span className="leading-relaxed whitespace-pre-line break-words">{order.billing_address.address_line}{order.billing_address.city ? `\n${order.billing_address.city}` : ""}{order.billing_address.state ? `, ${order.billing_address.state}` : ""}{order.billing_address.pincode ? ` - ${order.billing_address.pincode}` : ""}</span>
                 <button className="shrink-0 mt-0.5 hover:text-primary transition-colors" onClick={() => copyToClipboard(`${order.billing_address.address_line}, ${order.billing_address.city}, ${order.billing_address.state} - ${order.billing_address.pincode}`, "Billing address")} data-testid="copy-billing-address-btn">
                   <ClipboardCopy className="w-3.5 h-3.5" />
                 </button>
@@ -365,8 +392,8 @@ export default function OrderDetail() {
           {order.shipping_address && (
             <div className="flex justify-between items-start gap-4">
               <span className="text-sm text-muted-foreground shrink-0">Shipping Address</span>
-              <div className="text-sm text-right max-w-[60%] flex items-start gap-1">
-                <span className="leading-relaxed">{order.shipping_address.address_line}{order.shipping_address.city ? `,\n${order.shipping_address.city}` : ""}{order.shipping_address.state ? `,\n${order.shipping_address.state}` : ""}{order.shipping_address.pincode ? ` - ${order.shipping_address.pincode}` : ""}</span>
+              <div className="text-sm text-right max-w-[65%] flex items-start gap-1">
+                <span className="leading-relaxed whitespace-pre-line break-words">{order.shipping_address.address_line}{order.shipping_address.city ? `\n${order.shipping_address.city}` : ""}{order.shipping_address.state ? `, ${order.shipping_address.state}` : ""}{order.shipping_address.pincode ? ` - ${order.shipping_address.pincode}` : ""}</span>
                 <button className="shrink-0 mt-0.5 hover:text-primary transition-colors" onClick={() => copyToClipboard(`${order.shipping_address.address_line}, ${order.shipping_address.city}, ${order.shipping_address.state} - ${order.shipping_address.pincode}`, "Shipping address")} data-testid="copy-shipping-address-btn">
                   <ClipboardCopy className="w-3.5 h-3.5" />
                 </button>

@@ -125,6 +125,7 @@ class CustomerCreate(BaseModel):
     gst_no: Optional[str] = ""
     phone_numbers: List[str] = []
     email: Optional[str] = ""
+    alias: Optional[str] = ""
 
 class OrderItemModel(BaseModel):
     product_name: str
@@ -433,6 +434,7 @@ async def create_customer(req: CustomerCreate, user=Depends(get_current_user)):
         "gst_no": req.gst_no.upper().strip() if req.gst_no else "",
         "phone_numbers": phones,
         "email": req.email.strip() if req.email else "",
+        "alias": req.alias.strip() if req.alias else "",
         "created_by": user["id"],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat()
@@ -449,6 +451,7 @@ async def list_customers(search: Optional[str] = None, user=Depends(get_current_
             {"name": {"$regex": search, "$options": "i"}},
             {"phone_numbers": {"$regex": search, "$options": "i"}},
             {"gst_no": {"$regex": search, "$options": "i"}},
+            {"alias": {"$regex": search, "$options": "i"}},
         ]}
     customers = await db.customers.find(query, {"_id": 0}).sort("name", 1).to_list(500)
     return customers
@@ -493,6 +496,7 @@ async def update_customer(customer_id: str, req: CustomerCreate, user=Depends(ge
         "gst_no": req.gst_no.upper().strip() if req.gst_no else "",
         "phone_numbers": phones,
         "email": req.email.strip() if req.email else "",
+        "alias": req.alias.strip() if req.alias else "",
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     result = await db.customers.update_one({"id": customer_id}, {"$set": update_data})
@@ -1051,6 +1055,35 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated
 
+@api_router.put("/orders/{order_id}/mark-packed")
+async def mark_order_packed(order_id: str, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "packaging"]:
+        raise HTTPException(status_code=403, detail="Admin or packaging only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order["status"] not in ["new", "packaging"]:
+        raise HTTPException(status_code=400, detail="Can only mark new/packaging orders as packed")
+    packaging = order.get("packaging", {})
+    packaging["packed_at"] = datetime.now(timezone.utc).isoformat()
+    await db.orders.update_one({"id": order_id}, {"$set": {"status": "packed", "packaging": packaging, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return await db.orders.find_one({"id": order_id}, {"_id": 0})
+
+@api_router.put("/orders/{order_id}/undo-packed")
+async def undo_packed(order_id: str, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "packaging"]:
+        raise HTTPException(status_code=403, detail="Admin or packaging only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order["status"] != "packed":
+        raise HTTPException(status_code=400, detail="Only packed orders can be reverted")
+    packaging = order.get("packaging", {})
+    packaging["packed_at"] = ""
+    await db.orders.update_one({"id": order_id}, {"$set": {"status": "packaging", "packaging": packaging, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return await db.orders.find_one({"id": order_id}, {"_id": 0})
+
+
 # Dispatch
 @api_router.put("/orders/{order_id}/dispatch")
 async def update_dispatch(order_id: str, req: DispatchUpdate, user=Depends(get_current_user)):
@@ -1535,7 +1568,8 @@ async def telecaller_sales(
     # If admin provides telecaller_id, use that; otherwise use own id
     target_id = telecaller_id if (telecaller_id and user["role"] == "admin") else user["id"]
     query = {"telecaller_id": target_id, "status": {"$ne": "cancelled"}}
-    now = datetime.now(timezone.utc)
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(ist)
 
     # Custom date range takes priority over period
     if date_from or date_to:
@@ -1544,12 +1578,15 @@ async def telecaller_sales(
         if date_to:
             query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
     elif period == "today":
-        query["created_at"] = {"$gte": now.replace(hour=0, minute=0, second=0).isoformat()}
+        today_start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        query["created_at"] = {"$gte": today_start.astimezone(timezone.utc).isoformat()}
     elif period == "week":
-        week_start = now - timedelta(days=now.weekday())
-        query["created_at"] = {"$gte": week_start.replace(hour=0, minute=0, second=0).isoformat()}
+        week_start = now_ist - timedelta(days=now_ist.weekday())
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        query["created_at"] = {"$gte": week_start.astimezone(timezone.utc).isoformat()}
     elif period == "month":
-        query["created_at"] = {"$gte": now.replace(day=1, hour=0, minute=0, second=0).isoformat()}
+        month_start = now_ist.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        query["created_at"] = {"$gte": month_start.astimezone(timezone.utc).isoformat()}
 
     orders = await db.orders.find(query, {"_id": 0}).to_list(5000)
     total_orders = len(orders)
@@ -1589,22 +1626,28 @@ async def payment_received_sales(
         raise HTTPException(status_code=403, detail="Admin or telecaller only")
     target_id = telecaller_id if (telecaller_id and user["role"] == "admin") else user["id"]
     query = {"telecaller_id": target_id, "payment_check_status": "received"}
-    now = datetime.now(timezone.utc)
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(ist)
     if date_from or date_to:
         date_filter = {}
         if date_from: date_filter["$gte"] = date_from
         if date_to:   date_filter["$lte"] = date_to + "T23:59:59"
         query["payment_checked_at"] = date_filter
     elif period == "today":
-        query["payment_checked_at"] = {"$gte": now.replace(hour=0, minute=0, second=0).isoformat()}
+        today_start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        query["payment_checked_at"] = {"$gte": today_start.astimezone(timezone.utc).isoformat()}
     elif period == "yesterday":
-        y = now - timedelta(days=1)
-        query["payment_checked_at"] = {"$gte": y.replace(hour=0, minute=0, second=0).isoformat(), "$lte": y.replace(hour=23, minute=59, second=59).isoformat()}
+        y_ist = now_ist - timedelta(days=1)
+        yday_start = y_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        yday_end = y_ist.replace(hour=23, minute=59, second=59, microsecond=0)
+        query["payment_checked_at"] = {"$gte": yday_start.astimezone(timezone.utc).isoformat(), "$lte": yday_end.astimezone(timezone.utc).isoformat()}
     elif period == "week":
-        ws = now - timedelta(days=now.weekday())
-        query["payment_checked_at"] = {"$gte": ws.replace(hour=0, minute=0, second=0).isoformat()}
+        ws = now_ist - timedelta(days=now_ist.weekday())
+        ws = ws.replace(hour=0, minute=0, second=0, microsecond=0)
+        query["payment_checked_at"] = {"$gte": ws.astimezone(timezone.utc).isoformat()}
     elif period == "month":
-        query["payment_checked_at"] = {"$gte": now.replace(day=1, hour=0, minute=0, second=0).isoformat()}
+        ms = now_ist.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        query["payment_checked_at"] = {"$gte": ms.astimezone(timezone.utc).isoformat()}
     orders = await db.orders.find(query, {"_id": 0}).to_list(5000)
     total_amount, product_sales = 0, 0
     for o in orders:
@@ -1728,25 +1771,32 @@ async def admin_analytics(
     admin=Depends(require_admin)
 ):
     query = {"status": {"$ne": "cancelled"}}
-    now = datetime.now(timezone.utc)
+    # Use IST for period calculations (UTC+5:30)
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(ist)
     if date_from or date_to:
         if date_from:
             query.setdefault("created_at", {})["$gte"] = date_from
         if date_to:
             query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
     elif period == "today":
-        query["created_at"] = {"$gte": now.replace(hour=0, minute=0, second=0).isoformat()}
+        today_start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        query["created_at"] = {"$gte": today_start.astimezone(timezone.utc).isoformat()}
     elif period == "yesterday":
-        yesterday = now - timedelta(days=1)
+        yesterday_ist = now_ist - timedelta(days=1)
+        yday_start = yesterday_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        yday_end = yesterday_ist.replace(hour=23, minute=59, second=59, microsecond=0)
         query["created_at"] = {
-            "$gte": yesterday.replace(hour=0, minute=0, second=0).isoformat(),
-            "$lte": yesterday.replace(hour=23, minute=59, second=59).isoformat()
+            "$gte": yday_start.astimezone(timezone.utc).isoformat(),
+            "$lte": yday_end.astimezone(timezone.utc).isoformat()
         }
     elif period == "week":
-        week_start = now - timedelta(days=now.weekday())
-        query["created_at"] = {"$gte": week_start.replace(hour=0, minute=0, second=0).isoformat()}
+        week_start = now_ist - timedelta(days=now_ist.weekday())
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        query["created_at"] = {"$gte": week_start.astimezone(timezone.utc).isoformat()}
     elif period == "month":
-        query["created_at"] = {"$gte": now.replace(day=1, hour=0, minute=0, second=0).isoformat()}
+        month_start = now_ist.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        query["created_at"] = {"$gte": month_start.astimezone(timezone.utc).isoformat()}
 
     orders = await db.orders.find(query, {"_id": 0}).to_list(5000)
     total_orders = len(orders)

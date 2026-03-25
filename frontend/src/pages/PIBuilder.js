@@ -16,6 +16,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Link } from "react-router-dom";
+import { INDIAN_STATES } from "@/lib/indianStates";
 import { useAuth } from "@/contexts/AuthContext";
 
 const UNITS = ["mL", "L", "g", "Kg", "pcs", ""];
@@ -94,11 +95,12 @@ export default function PIBuilder() {
   const [addressTarget, setAddressTarget] = useState("billing");
   const [newAddr, setNewAddr] = useState(emptyAddress());
   const [pincodeLoading, setPincodeLoading] = useState(false);
+  const [stateSearch, setStateSearch] = useState("");
   const [showNewCustomer, setShowNewCustomer] = useState(false);
   const [newCust, setNewCust] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "" });
   const [sharing, setSharing] = useState({});
   const [showEditCustomer, setShowEditCustomer] = useState(false);
-  const [editCustData, setEditCustData] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "" });
+  const [editCustData, setEditCustData] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
 
   const canShare = ["admin", "telecaller"].includes(user?.role);
 
@@ -116,7 +118,8 @@ export default function PIBuilder() {
   const filteredCustomers = customers.filter(c =>
     c.name?.toLowerCase().includes(customerSearch.toLowerCase()) ||
     c.phone_numbers?.some(p => p.includes(customerSearch)) ||
-    c.gst_no?.toLowerCase().includes(customerSearch.toLowerCase())
+    c.gst_no?.toLowerCase().includes(customerSearch.toLowerCase()) ||
+    c.alias?.toLowerCase().includes(customerSearch.toLowerCase())
   );
 
   const createCustomer = async () => {
@@ -136,7 +139,7 @@ export default function PIBuilder() {
     setEditCustData({
       name: selectedCustomer.name || "", gst_no: selectedCustomer.gst_no || "",
       phone_numbers: selectedCustomer.phone_numbers?.length ? [...selectedCustomer.phone_numbers] : [""],
-      email: selectedCustomer.email || "",
+      email: selectedCustomer.email || "", alias: selectedCustomer.alias || "",
     });
     setShowEditCustomer(true);
   };
@@ -185,18 +188,6 @@ export default function PIBuilder() {
     return s;
   }, 0);
   const grandTotal = Math.ceil(subtotal + totalGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst);
-
-  const lookupPincode = async (pincode) => {
-    if (!/^\d{6}$/.test(pincode)) return;
-    setPincodeLoading(true);
-    try {
-      const res = await api.get(`/pincode/${pincode}`);
-      if (res.data.city || res.data.state) {
-        setNewAddr(p => ({ ...p, city: res.data.city || p.city, state: res.data.state || p.state }));
-        toast.success(`${res.data.city}, ${res.data.state}`);
-      }
-    } catch { } finally { setPincodeLoading(false); }
-  };
 
   const saveNewAddress = async () => {
     if (!newAddr.address_line || !newAddr.city || !newAddr.state || !newAddr.pincode) return toast.error("All address fields required");
@@ -650,13 +641,27 @@ export default function PIBuilder() {
               <Input value={newAddr.pincode} onChange={e => {
                 const v = e.target.value.replace(/\D/g, "").slice(0, 6);
                 setNewAddr({ ...newAddr, pincode: v });
-                if (v.length === 6) lookupPincode(v);
               }} maxLength={6} />
-              {pincodeLoading && <p className="text-xs text-muted-foreground mt-1">Looking up...</p>}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><Label>City *</Label><Input value={newAddr.city} onChange={e => setNewAddr({ ...newAddr, city: e.target.value })} /></div>
-              <div><Label>State *</Label><Input value={newAddr.state} onChange={e => setNewAddr({ ...newAddr, state: e.target.value })} /></div>
+              <div>
+                <Label>State *</Label>
+                <div className="relative">
+                  <Input value={newAddr.state} onChange={e => { setNewAddr({ ...newAddr, state: e.target.value }); setStateSearch(e.target.value); }}
+                    placeholder="Type to search..." autoComplete="off" />
+                  {stateSearch && !INDIAN_STATES.includes(newAddr.state) && (
+                    <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-40 overflow-y-auto">
+                      {INDIAN_STATES.filter(s => s.toLowerCase().includes(stateSearch.toLowerCase())).map(s => (
+                        <button key={s} type="button" className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent"
+                          onClick={() => { setNewAddr({ ...newAddr, state: s }); setStateSearch(""); }}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
           <DialogFooter>
@@ -689,6 +694,7 @@ export default function PIBuilder() {
               </div>
             ))}
             <div><Label className="text-xs">Email (optional)</Label><Input type="email" value={editCustData.email} onChange={e => setEditCustData({ ...editCustData, email: e.target.value })} data-testid="edit-cust-email" /></div>
+            <div><Label className="text-xs">Alias (optional)</Label><Input value={editCustData.alias || ""} onChange={e => setEditCustData({ ...editCustData, alias: e.target.value })} placeholder="Short name / nickname" data-testid="edit-cust-alias" /></div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowEditCustomer(false)}>Cancel</Button>

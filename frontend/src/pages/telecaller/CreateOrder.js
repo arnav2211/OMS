@@ -15,6 +15,8 @@ import { Plus, Trash2, Search, UserPlus, MapPin, Edit } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import { useAuth } from "@/contexts/AuthContext";
+import { INDIAN_STATES } from "@/lib/indianStates";
 
 const UNITS = ["mL", "L", "g", "Kg", "pcs", ""];
 const SHIPPING_METHODS = [
@@ -105,7 +107,7 @@ export default function CreateOrder() {
   const [customerSearch, setCustomerSearch] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [showNewCustomer, setShowNewCustomer] = useState(false);
-  const [newCust, setNewCust] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "" });
+  const [newCust, setNewCust] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
   const [newCustAddresses, setNewCustAddresses] = useState([]);
   const [purpose, setPurpose] = useState("");
   const [items, setItems] = useState([emptyItem()]);
@@ -135,7 +137,7 @@ export default function CreateOrder() {
   const [pincodeLoading, setPincodeLoading] = useState(false);
   const [extraShippingDetails, setExtraShippingDetails] = useState("");
   const [showEditCustomer, setShowEditCustomer] = useState(false);
-  const [editCustData, setEditCustData] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "" });
+  const [editCustData, setEditCustData] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
 
   useEffect(() => {
     api.get("/customers").then((r) => setCustomers(r.data)).catch(() => {});
@@ -212,7 +214,8 @@ export default function CreateOrder() {
     (c) =>
       c.name?.toLowerCase().includes(customerSearch.toLowerCase()) ||
       c.phone_numbers?.some((p) => p.includes(customerSearch)) ||
-      c.gst_no?.toLowerCase().includes(customerSearch.toLowerCase())
+      c.gst_no?.toLowerCase().includes(customerSearch.toLowerCase()) ||
+      c.alias?.toLowerCase().includes(customerSearch.toLowerCase())
   );
 
   const updateItem = (idx, field, value) => {
@@ -283,21 +286,8 @@ export default function CreateOrder() {
     finally { setGstLoading(false); }
   };
 
-  // Pincode auto-fill
-  const lookupPincode = async (pincode, target) => {
-    if (!/^\d{6}$/.test(pincode)) return;
-    setPincodeLoading(true);
-    try {
-      const res = await api.get(`/pincode/${pincode}`);
-      if (res.data.city || res.data.state) {
-        if (target === "newAddr") {
-          setNewAddr(p => ({ ...p, city: res.data.city || p.city, state: res.data.state || p.state }));
-        }
-        toast.success(`${res.data.city}, ${res.data.state}`);
-      }
-    } catch { /* silent */ }
-    finally { setPincodeLoading(false); }
-  };
+  // Pincode field (no auto-fill, manual entry only)
+  const [stateSearch, setStateSearch] = useState("");
 
   // Save new address
   const saveNewAddress = async () => {
@@ -348,6 +338,7 @@ export default function CreateOrder() {
       gst_no: selectedCustomer.gst_no || "",
       phone_numbers: selectedCustomer.phone_numbers?.length ? [...selectedCustomer.phone_numbers] : [""],
       email: selectedCustomer.email || "",
+      alias: selectedCustomer.alias || "",
     });
     setShowEditCustomer(true);
   };
@@ -793,6 +784,7 @@ export default function CreateOrder() {
               </div>
             ))}
             <div><Label className="text-xs">Email (optional)</Label><Input type="email" value={newCust.email} onChange={(e) => setNewCust({ ...newCust, email: e.target.value })} data-testid="new-cust-email" /></div>
+            <div><Label className="text-xs">Alias (optional)</Label><Input value={newCust.alias} onChange={(e) => setNewCust({ ...newCust, alias: e.target.value })} placeholder="Short name / nickname" data-testid="new-cust-alias" /></div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowNewCustomer(false)}>Cancel</Button>
@@ -813,13 +805,27 @@ export default function CreateOrder() {
               <Input value={newAddr.pincode} onChange={e => {
                 const v = e.target.value.replace(/\D/g, "").slice(0, 6);
                 setNewAddr({ ...newAddr, pincode: v });
-                if (v.length === 6) lookupPincode(v, "newAddr");
               }} placeholder="6-digit pincode" maxLength={6} data-testid="addr-pincode" />
-              {pincodeLoading && <p className="text-xs text-muted-foreground mt-1">Looking up pincode...</p>}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><Label>City *</Label><Input value={newAddr.city} onChange={e => setNewAddr({ ...newAddr, city: e.target.value })} data-testid="addr-city" /></div>
-              <div><Label>State *</Label><Input value={newAddr.state} onChange={e => setNewAddr({ ...newAddr, state: e.target.value })} data-testid="addr-state" /></div>
+              <div>
+                <Label>State *</Label>
+                <div className="relative">
+                  <Input value={newAddr.state} onChange={e => { setNewAddr({ ...newAddr, state: e.target.value }); setStateSearch(e.target.value); }}
+                    placeholder="Type to search..." data-testid="addr-state" autoComplete="off" />
+                  {stateSearch && !INDIAN_STATES.includes(newAddr.state) && (
+                    <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-40 overflow-y-auto">
+                      {INDIAN_STATES.filter(s => s.toLowerCase().includes(stateSearch.toLowerCase())).map(s => (
+                        <button key={s} type="button" className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent"
+                          onClick={() => { setNewAddr({ ...newAddr, state: s }); setStateSearch(""); }}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
           <DialogFooter>
@@ -855,6 +861,7 @@ export default function CreateOrder() {
               </div>
             ))}
             <div><Label className="text-xs">Email (optional)</Label><Input type="email" value={editCustData.email} onChange={e => setEditCustData({ ...editCustData, email: e.target.value })} data-testid="edit-cust-email" /></div>
+            <div><Label className="text-xs">Alias (optional)</Label><Input value={editCustData.alias || ""} onChange={e => setEditCustData({ ...editCustData, alias: e.target.value })} placeholder="Short name / nickname" data-testid="edit-cust-alias" /></div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowEditCustomer(false)}>Cancel</Button>
