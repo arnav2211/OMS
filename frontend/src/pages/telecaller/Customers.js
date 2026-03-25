@@ -11,6 +11,7 @@ import { Search, UserPlus, Edit, Trash2, ChevronDown, ChevronUp, MapPin, Plus } 
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
+import { INDIAN_STATES } from "@/lib/indianStates";
 
 export default function Customers() {
   const { user } = useAuth();
@@ -23,7 +24,7 @@ export default function Customers() {
   const [customerOrders, setCustomerOrders] = useState([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
-  const [form, setForm] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "" });
+  const [form, setForm] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
 
   // Address management
   const [showAddresses, setShowAddresses] = useState(null);
@@ -32,6 +33,7 @@ export default function Customers() {
   const [addrForm, setAddrForm] = useState({ address_line: "", city: "", state: "", pincode: "", label: "" });
   const [editingAddrId, setEditingAddrId] = useState(null);
   const [pincodeLoading, setPincodeLoading] = useState(false);
+  const [stateSearch, setStateSearch] = useState("");
 
   useEffect(() => { loadCustomers(); }, []);
 
@@ -48,13 +50,13 @@ export default function Customers() {
 
   const openEdit = (c) => {
     setEditingId(c.id);
-    setForm({ name: c.name, gst_no: c.gst_no || "", phone_numbers: c.phone_numbers?.length ? [...c.phone_numbers] : [""], email: c.email || "" });
+    setForm({ name: c.name, gst_no: c.gst_no || "", phone_numbers: c.phone_numbers?.length ? [...c.phone_numbers] : [""], email: c.email || "", alias: c.alias || "" });
     setShowDialog(true);
   };
 
   const openNew = () => {
     setEditingId(null);
-    setForm({ name: "", gst_no: "", phone_numbers: [""], email: "" });
+    setForm({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
     setShowDialog(true);
   };
 
@@ -104,19 +106,6 @@ export default function Customers() {
     setShowAddresses(customerId); loadAddresses(customerId);
   };
 
-  const lookupPincode = async (pincode) => {
-    if (!/^\d{6}$/.test(pincode)) return;
-    setPincodeLoading(true);
-    try {
-      const res = await api.get(`/pincode/${pincode}`);
-      if (res.data.city || res.data.state) {
-        setAddrForm(p => ({ ...p, city: res.data.city || p.city, state: res.data.state || p.state }));
-        toast.success(`${res.data.city}, ${res.data.state}`);
-      }
-    } catch { }
-    finally { setPincodeLoading(false); }
-  };
-
   const openNewAddr = (customerId) => {
     setEditingAddrId(null);
     setAddrForm({ address_line: "", city: "", state: "", pincode: "", label: "" });
@@ -133,7 +122,7 @@ export default function Customers() {
     if (!addrForm.address_line || !addrForm.city || !addrForm.state || !addrForm.pincode) return toast.error("All address fields are required");
     if (!/^\d{6}$/.test(addrForm.pincode)) return toast.error("Pincode must be 6 digits");
     if (!/^[a-zA-Z\s]+$/.test(addrForm.city)) return toast.error("City must contain only letters");
-    if (!/^[a-zA-Z\s]+$/.test(addrForm.state)) return toast.error("State must contain only letters");
+    if (!INDIAN_STATES.includes(addrForm.state)) return toast.error("Please select a valid State/UT from the dropdown");
     try {
       if (editingAddrId) { await api.put(`/customers/${showAddresses}/addresses/${editingAddrId}`, addrForm); toast.success("Address updated"); }
       else { await api.post(`/customers/${showAddresses}/addresses`, addrForm); toast.success("Address added"); }
@@ -275,6 +264,7 @@ export default function Customers() {
               </div>
             ))}
             <div><Label className="text-xs">Email (optional)</Label><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} data-testid="cust-dialog-email" /></div>
+            <div><Label className="text-xs">Alias (optional)</Label><Input value={form.alias || ""} onChange={(e) => setForm({ ...form, alias: e.target.value })} placeholder="Short name / nickname" data-testid="cust-dialog-alias" /></div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDialog(false)}>Cancel</Button>
@@ -295,13 +285,27 @@ export default function Customers() {
               <Input value={addrForm.pincode} onChange={e => {
                 const v = e.target.value.replace(/\D/g, "").slice(0, 6);
                 setAddrForm({ ...addrForm, pincode: v });
-                if (v.length === 6) lookupPincode(v);
               }} maxLength={6} data-testid="addr-dialog-pincode" />
-              {pincodeLoading && <p className="text-xs text-muted-foreground mt-1">Looking up...</p>}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><Label>City *</Label><Input value={addrForm.city} onChange={e => setAddrForm({ ...addrForm, city: e.target.value })} data-testid="addr-dialog-city" /></div>
-              <div><Label>State *</Label><Input value={addrForm.state} onChange={e => setAddrForm({ ...addrForm, state: e.target.value })} data-testid="addr-dialog-state" /></div>
+              <div>
+                <Label>State *</Label>
+                <div className="relative">
+                  <Input value={addrForm.state} onChange={e => { setAddrForm({ ...addrForm, state: e.target.value }); setStateSearch(e.target.value); }}
+                    placeholder="Type to search..." autoComplete="off" data-testid="addr-dialog-state" />
+                  {stateSearch && !INDIAN_STATES.includes(addrForm.state) && (
+                    <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-40 overflow-y-auto">
+                      {INDIAN_STATES.filter(s => s.toLowerCase().includes(stateSearch.toLowerCase())).map(s => (
+                        <button key={s} type="button" className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent"
+                          onClick={() => { setAddrForm({ ...addrForm, state: s }); setStateSearch(""); }}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
           <DialogFooter>

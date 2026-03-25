@@ -135,7 +135,7 @@ export default function AllOrders() {
       const res = await api.post("/orders/print-addresses", { order_ids: [...selectedOrders] }, { responseType: "blob" });
       const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
       if (isMobile) {
-        mobilePrintPdf(new Blob([res.data], { type: "application/pdf" }));
+        mobilePrintPdf(new Blob([res.data], { type: "application/pdf" }), "addresses.pdf");
       } else {
         const blobUrl = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
         const iframe = document.createElement("iframe");
