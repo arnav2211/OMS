@@ -26,6 +26,7 @@ const CHECK_COLORS = {
   pending_recheck: "bg-red-100 text-red-800",
 };
 const CHECK_LABELS = { received: "Checked", pending: "Pending", pending_recheck: "Re-check" };
+const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
 
 export default function AllOrders() {
   const { user } = useAuth();
@@ -35,6 +36,8 @@ export default function AllOrders() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [payStatusFilter, setPayStatusFilter] = useState("all");
   const [checkStatusFilter, setCheckStatusFilter] = useState("all");
+  const [shippingFilter, setShippingFilter] = useState("all");
+  const [courierFilter, setCourierFilter] = useState("all");
   const [periodFilter, setPeriodFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -88,6 +91,11 @@ export default function AllOrders() {
     } else if (statusFilter !== "all" && o.status !== statusFilter) return false;
     if (payStatusFilter !== "all" && o.payment_status !== payStatusFilter) return false;
     if (checkStatusFilter !== "all" && (o.payment_check_status || "pending") !== checkStatusFilter) return false;
+    if (shippingFilter !== "all" && (o.shipping_method || "") !== shippingFilter) return false;
+    if (shippingFilter === "courier" && courierFilter !== "all") {
+      const courierName = (o.dispatch?.courier_name || o.courier_name || "").trim().toLowerCase();
+      if (courierName !== courierFilter.toLowerCase()) return false;
+    }
     if (search) {
       const q = search.toLowerCase();
       if (!o.order_number?.toLowerCase().includes(q) && !o.customer_name?.toLowerCase().includes(q) && !o.customer_alias?.toLowerCase().includes(q) && !o.customer_phone?.some(p => p?.includes(q)) && !o.customer_gst_no?.toLowerCase().includes(q)) return false;
@@ -207,6 +215,35 @@ export default function AllOrders() {
                 <SelectItem value="dispatched">Dispatched</SelectItem>
               </SelectContent>
             </Select>
+            {/* Shipping filter */}
+            <Select
+              value={shippingFilter}
+              onValueChange={(v) => {
+                setShippingFilter(v);
+                if (v !== "courier") setCourierFilter("all");
+              }}
+            >
+              <SelectTrigger className="w-36 h-8 text-xs" data-testid="shipping-filter"><SelectValue placeholder="Shipping" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Shipping</SelectItem>
+                <SelectItem value="courier">Courier</SelectItem>
+                <SelectItem value="transport">Transport</SelectItem>
+                <SelectItem value="porter">Porter</SelectItem>
+                <SelectItem value="office_collection">Office Collection</SelectItem>
+                <SelectItem value="self_arranged">Self Arranged Shipping</SelectItem>
+              </SelectContent>
+            </Select>
+            {shippingFilter === "courier" && (
+              <Select value={courierFilter} onValueChange={setCourierFilter}>
+                <SelectTrigger className="w-36 h-8 text-xs" data-testid="courier-filter"><SelectValue placeholder="Courier Name" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Couriers</SelectItem>
+                  {COURIER_OPTIONS.map((courier) => (
+                    <SelectItem key={courier} value={courier}>{courier}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             {/* Payment status */}
             <Select value={payStatusFilter} onValueChange={setPayStatusFilter}>
               <SelectTrigger className="w-36 h-8 text-xs" data-testid="pay-status-filter"><SelectValue placeholder="Payment" /></SelectTrigger>
