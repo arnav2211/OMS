@@ -103,6 +103,10 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - PDF generation always fetches fresh customer data from DB
 - OrderDetail.js uses enriched order response (no separate customer API call needed)
 
+## Packing Slip & PI Listing Enhancements (March 2026)
+- Packing slip PDF now shows customer alias below customer name (only when alias exists)
+- PI listing table shows "Created By" column (admin only) showing who created each PI
+
 ## Upcoming Tasks
 - **P1:** Pagination on all major data tables
 - **P2:** Refactor server.py into modular FastAPI routers

@@ -2016,6 +2016,8 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
     # ── 4. CUSTOMER ──
     if customer:
         cust_lines = [f"<b>{customer.get('name','')}</b>"]
+        if customer.get('alias'):
+            cust_lines.append(f"<font color='#6B7280'><i>{customer['alias']}</i></font>")
         if customer.get('phone_numbers'):
             cust_lines.append(f"<font color='#6B7280'>Ph:</font> {', '.join(customer['phone_numbers'])}")
         sa = order.get("shipping_address")

@@ -340,6 +340,7 @@ export default function PIBuilder() {
                     <TableHead className="text-xs text-right whitespace-nowrap">Amount</TableHead>
                     <TableHead className="text-xs whitespace-nowrap">Date</TableHead>
                     <TableHead className="text-xs whitespace-nowrap">Status</TableHead>
+                    {user?.role === "admin" && <TableHead className="text-xs whitespace-nowrap">Created By</TableHead>}
                     <TableHead className="text-xs whitespace-nowrap">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -351,6 +352,7 @@ export default function PIBuilder() {
                       <TableCell className="text-sm text-right font-mono">{"\u20B9"}{pi.grand_total}</TableCell>
                       <TableCell className="text-sm whitespace-nowrap">{new Date(pi.created_at).toLocaleDateString("en-IN")}</TableCell>
                       <TableCell><Badge variant="secondary" className="text-xs">{pi.status}</Badge></TableCell>
+                      {user?.role === "admin" && <TableCell className="text-sm whitespace-nowrap">{pi.created_by_name || "-"}</TableCell>}
                       <TableCell>
                         <div className="flex gap-1">
                           <Button variant="ghost" size="icon" onClick={() => downloadPI(pi)} title="Download PDF" data-testid={`download-pi-${pi.id}`}><Download className="w-4 h-4" /></Button>
