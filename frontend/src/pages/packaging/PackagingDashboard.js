@@ -243,7 +243,7 @@ export default function PackagingDashboard() {
                     <TableCell className="font-mono font-medium text-sm">
                       <Link to={`/orders/${order.id}`} className="text-primary hover:underline" data-testid={`pkg-order-link-${order.order_number}`}>{order.order_number}</Link>
                     </TableCell>
-                    <TableCell className="text-sm">{order.customer_name}</TableCell>
+                    <TableCell className="text-sm">{order.customer_name}{order.customer_alias ? <span className="text-xs text-muted-foreground ml-1">({order.customer_alias})</span> : ""}</TableCell>
                     <TableCell className="text-sm whitespace-nowrap hidden sm:table-cell" data-testid={`pkg-shipping-${order.order_number}`}>
                       {order.shipping_method === "courier" ? (order.courier_name || "Courier") : order.shipping_method === "transport" ? (order.transporter_name || "Transport") : order.shipping_method?.replace(/_/g, " ") || "-"}
                     </TableCell>

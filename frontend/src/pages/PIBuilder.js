@@ -347,7 +347,7 @@ export default function PIBuilder() {
                   {filtered.map(pi => (
                     <TableRow key={pi.id} data-testid={`pi-row-${pi.id}`}>
                       <TableCell className="font-mono text-sm font-medium">{pi.pi_number}</TableCell>
-                      <TableCell className="text-sm">{pi.customer_name}</TableCell>
+                      <TableCell className="text-sm">{pi.customer_name}{pi.customer_alias ? <span className="text-xs text-muted-foreground ml-1">({pi.customer_alias})</span> : ""}</TableCell>
                       <TableCell className="text-sm text-right font-mono">{"\u20B9"}{pi.grand_total}</TableCell>
                       <TableCell className="text-sm whitespace-nowrap">{new Date(pi.created_at).toLocaleDateString("en-IN")}</TableCell>
                       <TableCell><Badge variant="secondary" className="text-xs">{pi.status}</Badge></TableCell>

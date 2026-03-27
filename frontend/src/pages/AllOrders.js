@@ -88,7 +88,7 @@ export default function AllOrders() {
     if (checkStatusFilter !== "all" && (o.payment_check_status || "pending") !== checkStatusFilter) return false;
     if (search) {
       const q = search.toLowerCase();
-      if (!o.order_number?.toLowerCase().includes(q) && !o.customer_name?.toLowerCase().includes(q)) return false;
+      if (!o.order_number?.toLowerCase().includes(q) && !o.customer_name?.toLowerCase().includes(q) && !o.customer_alias?.toLowerCase().includes(q) && !o.customer_phone?.some(p => p?.includes(q)) && !o.customer_gst_no?.toLowerCase().includes(q)) return false;
     }
     if (periodFilter !== "all") {
       const now = new Date();
@@ -173,7 +173,7 @@ export default function AllOrders() {
           <div className="flex flex-wrap gap-2 items-end">
             <div className="relative flex-1 min-w-[140px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input placeholder="Search..." className="pl-9 h-8 text-sm" value={search} onChange={e => setSearch(e.target.value)} data-testid="orders-search-input" />
+              <Input placeholder="Search by order #, customer, alias, phone, GST..." className="pl-9 h-8 text-sm" value={search} onChange={e => setSearch(e.target.value)} data-testid="orders-search-input" />
             </div>
             {/* Period */}
             <Select value={periodFilter} onValueChange={setPeriodFilter}>
@@ -288,7 +288,7 @@ export default function AllOrders() {
                             {o.order_number}
                           </Link>
                         </TableCell>
-                        <TableCell className="text-sm">{o.customer_name}</TableCell>
+                        <TableCell className="text-sm">{o.customer_name}{o.customer_alias ? <span className="text-xs text-muted-foreground ml-1">({o.customer_alias})</span> : ""}</TableCell>
                         <TableCell className="text-sm font-mono whitespace-nowrap">{"\u20B9"}{o.grand_total?.toLocaleString("en-IN")}</TableCell>
                         <TableCell><Badge className={`${STATUS_COLORS[o.status] || "bg-gray-100"} text-xs`}>{o.status}</Badge></TableCell>
                         <TableCell><Badge variant="outline" className="text-xs">{o.payment_status}</Badge></TableCell>

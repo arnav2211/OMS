@@ -160,7 +160,7 @@ export default function DispatchDashboard() {
                     <TableCell className="font-mono font-medium text-sm">
                       <Link to={`/orders/${order.id}`} className="text-primary hover:underline" data-testid={`dispatch-order-link-${order.order_number}`}>{order.order_number}</Link>
                     </TableCell>
-                    <TableCell className="text-sm">{order.customer_name}</TableCell>
+                    <TableCell className="text-sm">{order.customer_name}{order.customer_alias ? <span className="text-xs text-muted-foreground ml-1">({order.customer_alias})</span> : ""}</TableCell>
                     <TableCell className="text-sm">{getShippingLabel(order.shipping_method)}</TableCell>
                     <TableCell>
                       <Badge variant="secondary" className={`status-${order.status} text-xs uppercase`}>{order.status}</Badge>

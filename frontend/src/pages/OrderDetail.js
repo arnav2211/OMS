@@ -49,6 +49,7 @@ export default function OrderDetail() {
   const [previewImage, setPreviewImage] = useState(null);
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerGst, setCustomerGst] = useState("");
+  const [customerAlias, setCustomerAlias] = useState("");
   const [statusUpdating, setStatusUpdating] = useState(false);
 
   useEffect(() => { loadOrder(); }, [id]);
@@ -65,6 +66,7 @@ export default function OrderDetail() {
         const phones = r.data?.phone_numbers || [];
         if (phones.length) setCustomerPhone(phones[0]);
         if (r.data?.gst_no) setCustomerGst(r.data.gst_no);
+        setCustomerAlias(r.data?.alias || "");
       }).catch(() => {});
     }
   }, [order?.customer_id]);
@@ -367,7 +369,7 @@ export default function OrderDetail() {
       <Card>
         <CardHeader className="pb-3"><CardTitle className="text-base">Customer Information</CardTitle></CardHeader>
         <CardContent className="space-y-2">
-          <div className="flex justify-between"><span className="text-sm text-muted-foreground">Customer</span><span className="text-sm font-medium">{order.customer_name}</span></div>
+          <div className="flex justify-between"><span className="text-sm text-muted-foreground">Customer</span><span className="text-sm font-medium">{order.customer_name}{customerAlias ? <span className="text-muted-foreground font-normal"> ({customerAlias})</span> : ""}</span></div>
           {customerPhone && (
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Phone</span>

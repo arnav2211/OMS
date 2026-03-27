@@ -502,6 +502,10 @@ async def update_customer(customer_id: str, req: CustomerCreate, user=Depends(ge
     result = await db.customers.update_one({"id": customer_id}, {"$set": update_data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Customer not found")
+    # Propagate customer_name to all orders and PIs referencing this customer
+    new_name = update_data["name"]
+    await db.orders.update_many({"customer_id": customer_id}, {"$set": {"customer_name": new_name}})
+    await db.proforma_invoices.update_many({"customer_id": customer_id}, {"$set": {"customer_name": new_name}})
     updated = await db.customers.find_one({"id": customer_id}, {"_id": 0})
     return updated
 
@@ -915,6 +919,12 @@ async def get_order(order_id: str, user=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    # Enrich with customer alias
+    if order.get("customer_id"):
+        cust = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0, "alias": 1, "name": 1})
+        if cust:
+            order["customer_alias"] = cust.get("alias", "")
+            order["customer_name"] = cust.get("name", order.get("customer_name", ""))
     # Hide telecaller info for non-admin (keep telecaller_id for telecaller's own-order check)
     if user["role"] == "telecaller":
         order.pop("telecaller_name", None)
@@ -2237,6 +2247,12 @@ async def get_pi(pi_id: str, user=Depends(get_current_user)):
     pi = await db.proforma_invoices.find_one({"id": pi_id}, {"_id": 0})
     if not pi:
         raise HTTPException(status_code=404, detail="PI not found")
+    # Enrich with customer alias and latest name
+    if pi.get("customer_id"):
+        cust = await db.customers.find_one({"id": pi["customer_id"]}, {"_id": 0, "alias": 1, "name": 1})
+        if cust:
+            pi["customer_alias"] = cust.get("alias", "")
+            pi["customer_name"] = cust.get("name", pi.get("customer_name", ""))
     return pi
 
 @api_router.put("/proforma-invoices/{pi_id}")

@@ -87,6 +87,14 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - Format: "Product Name — Description  Qty: X unit  Amt: ₹Y"
 - Description shown only when available, hidden gracefully when empty
 
+## Alias Unification (March 2026)
+- Alias is stored centrally on the customer document (single source of truth)
+- `PUT /api/customers/{id}` propagates `customer_name` to all orders & PIs when customer is updated
+- `GET /api/orders/{id}` and `GET /api/proforma-invoices/{id}` enrich with latest `customer_alias` and `customer_name` from customer
+- Alias shown in: Order Detail, All Orders table, PI list, Packaging table, Dispatch table
+- All Orders search expanded: order #, customer name, alias, phone, GST
+- Updating alias in any place (Customers, Create Order, Edit Order, Create PI, Edit PI) reflects everywhere immediately
+
 ## Upcoming Tasks
 - **P1:** Pagination on all major data tables
 - **P2:** Refactor server.py into modular FastAPI routers
