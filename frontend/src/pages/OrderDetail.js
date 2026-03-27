@@ -369,6 +369,12 @@ export default function OrderDetail() {
         <CardHeader className="pb-3"><CardTitle className="text-base">Customer Information</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           <div className="flex justify-between"><span className="text-sm text-muted-foreground">Customer</span><span className="text-sm font-medium">{order.customer_name}{customerAlias ? <span className="text-muted-foreground font-normal"> ({customerAlias})</span> : ""}</span></div>
+          {isAdmin && (
+            <div className="flex justify-between">
+              <span className="text-sm text-muted-foreground">Executive</span>
+              <span className="text-sm">{order.telecaller_name || "-"}</span>
+            </div>
+          )}
           {customerPhone && (
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Phone</span>
@@ -774,6 +780,12 @@ export default function OrderDetail() {
             </DialogTitle>
             <DialogDescription>Set formulations for order items and free samples.</DialogDescription>
           </DialogHeader>
+          {["admin", "packaging"].includes(user?.role) && order.purpose && (
+            <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+              <span className="text-muted-foreground">Purpose: </span>
+              <span className="font-medium">{order.purpose}</span>
+            </div>
+          )}
           <div className="space-y-4">
             {formulationItems.map((item, i) => (
               <div key={i} className="space-y-1">
