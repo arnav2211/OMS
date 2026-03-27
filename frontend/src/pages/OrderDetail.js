@@ -368,13 +368,13 @@ export default function OrderDetail() {
       <Card>
         <CardHeader className="pb-3"><CardTitle className="text-base">Customer Information</CardTitle></CardHeader>
         <CardContent className="space-y-2">
-          <div className="flex justify-between"><span className="text-sm text-muted-foreground">Customer</span><span className="text-sm font-medium">{order.customer_name}{customerAlias ? <span className="text-muted-foreground font-normal"> ({customerAlias})</span> : ""}</span></div>
-          {isAdmin && (
+        {isAdmin && (
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">Executive</span>
               <span className="text-sm">{order.telecaller_name || "-"}</span>
             </div>
           )}
+          <div className="flex justify-between"><span className="text-sm text-muted-foreground">Customer</span><span className="text-sm font-medium">{order.customer_name}{customerAlias ? <span className="text-muted-foreground font-normal"> ({customerAlias})</span> : ""}</span></div>
           {customerPhone && (
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Phone</span>
