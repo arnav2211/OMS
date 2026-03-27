@@ -90,10 +90,18 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 ## Alias Unification (March 2026)
 - Alias is stored centrally on the customer document (single source of truth)
 - `PUT /api/customers/{id}` propagates `customer_name` to all orders & PIs when customer is updated
-- `GET /api/orders/{id}` and `GET /api/proforma-invoices/{id}` enrich with latest `customer_alias` and `customer_name` from customer
+- All detail and list endpoints enrich with latest customer data (name, alias, phone, GST, email)
 - Alias shown in: Order Detail, All Orders table, PI list, Packaging table, Dispatch table
 - All Orders search expanded: order #, customer name, alias, phone, GST
-- Updating alias in any place (Customers, Create Order, Edit Order, Create PI, Edit PI) reflects everywhere immediately
+
+## Customer Master Data Sync (March 2026)
+- All customer-linked data (name, alias, phone, GST, email) stays synced across the system
+- `PUT /api/customers/{id}` propagates `customer_name` to all orders & PIs documents
+- `GET /api/orders/{id}` and `GET /api/proforma-invoices/{id}` enrich with full live customer data
+- Order/PI list endpoints enrich phone, GST, alias from customer at query time
+- Duplicate order/PI and Convert PI endpoints fetch live customer name
+- PDF generation always fetches fresh customer data from DB
+- OrderDetail.js uses enriched order response (no separate customer API call needed)
 
 ## Upcoming Tasks
 - **P1:** Pagination on all major data tables

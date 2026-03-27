@@ -919,12 +919,15 @@ async def get_order(order_id: str, user=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    # Enrich with customer alias
+    # Enrich with full customer data
     if order.get("customer_id"):
-        cust = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0, "alias": 1, "name": 1})
+        cust = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0, "alias": 1, "name": 1, "phone_numbers": 1, "gst_no": 1, "email": 1})
         if cust:
             order["customer_alias"] = cust.get("alias", "")
             order["customer_name"] = cust.get("name", order.get("customer_name", ""))
+            order["customer_phone"] = cust.get("phone_numbers", [])
+            order["customer_gst_no"] = cust.get("gst_no", "")
+            order["customer_email"] = cust.get("email", "")
     # Hide telecaller info for non-admin (keep telecaller_id for telecaller's own-order check)
     if user["role"] == "telecaller":
         order.pop("telecaller_name", None)
@@ -2247,12 +2250,15 @@ async def get_pi(pi_id: str, user=Depends(get_current_user)):
     pi = await db.proforma_invoices.find_one({"id": pi_id}, {"_id": 0})
     if not pi:
         raise HTTPException(status_code=404, detail="PI not found")
-    # Enrich with customer alias and latest name
+    # Enrich with full customer data
     if pi.get("customer_id"):
-        cust = await db.customers.find_one({"id": pi["customer_id"]}, {"_id": 0, "alias": 1, "name": 1})
+        cust = await db.customers.find_one({"id": pi["customer_id"]}, {"_id": 0, "alias": 1, "name": 1, "phone_numbers": 1, "gst_no": 1, "email": 1})
         if cust:
             pi["customer_alias"] = cust.get("alias", "")
             pi["customer_name"] = cust.get("name", pi.get("customer_name", ""))
+            pi["customer_phone"] = cust.get("phone_numbers", [])
+            pi["customer_gst_no"] = cust.get("gst_no", "")
+            pi["customer_email"] = cust.get("email", "")
     return pi
 
 @api_router.put("/proforma-invoices/{pi_id}")
@@ -2350,9 +2356,11 @@ async def duplicate_order(order_id: str, user=Depends(get_current_user)):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     # Return the order data needed for pre-filling a new form
+    # Fetch live customer name
+    cust = await db.customers.find_one({"id": order.get("customer_id", "")}, {"_id": 0, "name": 1})
     return {
         "customer_id": order.get("customer_id", ""),
-        "customer_name": order.get("customer_name", ""),
+        "customer_name": cust["name"] if cust else order.get("customer_name", ""),
         "purpose": order.get("purpose", ""),
         "items": order.get("items", []),
         "gst_applicable": order.get("gst_applicable", False),
@@ -2379,9 +2387,11 @@ async def duplicate_pi(pi_id: str, user=Depends(get_current_user)):
     pi = await db.proforma_invoices.find_one({"id": pi_id}, {"_id": 0})
     if not pi:
         raise HTTPException(status_code=404, detail="PI not found")
+    # Fetch live customer name
+    cust = await db.customers.find_one({"id": pi.get("customer_id", "")}, {"_id": 0, "name": 1})
     return {
         "customer_id": pi.get("customer_id", ""),
-        "customer_name": pi.get("customer_name", ""),
+        "customer_name": cust["name"] if cust else pi.get("customer_name", ""),
         "items": pi.get("items", []),
         "gst_applicable": pi.get("gst_applicable", False),
         "show_rate": pi.get("show_rate", True),
@@ -2411,12 +2421,12 @@ async def convert_pi_to_order(pi_id: str, body: dict, user=Depends(get_current_u
         {"_id": "order_number"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True
     )
     order_number = f"CS-{counter['seq']:04d}"
-    await db.customers.find_one({"id": pi["customer_id"]}, {"_id": 0})
+    customer = await db.customers.find_one({"id": pi["customer_id"]}, {"_id": 0})
     order_doc = {
         "id": str(uuid.uuid4()),
         "order_number": order_number,
         "customer_id": pi["customer_id"],
-        "customer_name": pi["customer_name"],
+        "customer_name": customer["name"] if customer else pi["customer_name"],
         "purpose": body.get("purpose", ""),
         "items": pi["items"],
         "gst_applicable": pi["gst_applicable"],

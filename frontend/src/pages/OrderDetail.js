@@ -62,14 +62,13 @@ export default function OrderDetail() {
 
   useEffect(() => {
     if (order?.customer_id) {
-      api.get(`/customers/${order.customer_id}`).then(r => {
-        const phones = r.data?.phone_numbers || [];
-        if (phones.length) setCustomerPhone(phones[0]);
-        if (r.data?.gst_no) setCustomerGst(r.data.gst_no);
-        setCustomerAlias(r.data?.alias || "");
-      }).catch(() => {});
+      // Customer data is now enriched in the order response
+      const phones = order.customer_phone || [];
+      if (phones.length) setCustomerPhone(phones[0]);
+      setCustomerGst(order.customer_gst_no || "");
+      setCustomerAlias(order.customer_alias || "");
     }
-  }, [order?.customer_id]);
+  }, [order?.customer_id, order?.customer_phone, order?.customer_gst_no, order?.customer_alias]);
 
   const loadOrder = async () => {
     try { const res = await api.get(`/orders/${id}`); setOrder(res.data); }
