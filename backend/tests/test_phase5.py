@@ -7,7 +7,7 @@ import requests
 import os
 import re
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://packaging-workflow-2.preview.emergentagent.com')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://order-search-1.preview.emergentagent.com')
 
 class TestPhase5:
     """Phase 5 feature tests"""

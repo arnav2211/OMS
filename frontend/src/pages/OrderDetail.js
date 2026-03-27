@@ -49,6 +49,7 @@ export default function OrderDetail() {
   const [previewImage, setPreviewImage] = useState(null);
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerGst, setCustomerGst] = useState("");
+  const [customerAlias, setCustomerAlias] = useState("");
   const [statusUpdating, setStatusUpdating] = useState(false);
 
   useEffect(() => { loadOrder(); }, [id]);
@@ -61,13 +62,13 @@ export default function OrderDetail() {
 
   useEffect(() => {
     if (order?.customer_id) {
-      api.get(`/customers/${order.customer_id}`).then(r => {
-        const phones = r.data?.phone_numbers || [];
-        if (phones.length) setCustomerPhone(phones[0]);
-        if (r.data?.gst_no) setCustomerGst(r.data.gst_no);
-      }).catch(() => {});
+      // Customer data is now enriched in the order response
+      const phones = order.customer_phone || [];
+      if (phones.length) setCustomerPhone(phones[0]);
+      setCustomerGst(order.customer_gst_no || "");
+      setCustomerAlias(order.customer_alias || "");
     }
-  }, [order?.customer_id]);
+  }, [order?.customer_id, order?.customer_phone, order?.customer_gst_no, order?.customer_alias]);
 
   const loadOrder = async () => {
     try { const res = await api.get(`/orders/${id}`); setOrder(res.data); }
@@ -94,7 +95,7 @@ export default function OrderDetail() {
 
   const openFormulation = () => {
     setFormulationItems(order.items.map(i => ({
-      product_name: i.product_name, formulation: i.formulation || "",
+      product_name: i.product_name, description: i.description || "", formulation: i.formulation || "",
       qty: i.qty, unit: i.unit, amount: i.amount || 0, gst_applicable: order.gst_applicable,
     })));
     setFormulationFreeSamples((order.free_samples || []).map(s => ({
@@ -367,7 +368,7 @@ export default function OrderDetail() {
       <Card>
         <CardHeader className="pb-3"><CardTitle className="text-base">Customer Information</CardTitle></CardHeader>
         <CardContent className="space-y-2">
-          <div className="flex justify-between"><span className="text-sm text-muted-foreground">Customer</span><span className="text-sm font-medium">{order.customer_name}</span></div>
+          <div className="flex justify-between"><span className="text-sm text-muted-foreground">Customer</span><span className="text-sm font-medium">{order.customer_name}{customerAlias ? <span className="text-muted-foreground font-normal"> ({customerAlias})</span> : ""}</span></div>
           {customerPhone && (
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Phone</span>
@@ -778,6 +779,7 @@ export default function OrderDetail() {
               <div key={i} className="space-y-1">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
                   <Label className="text-sm font-medium">{item.product_name}</Label>
+                  {item.description && <span className="text-xs text-muted-foreground">— {item.description}</span>}
                   <span className="text-xs text-muted-foreground">Qty: {item.qty} {item.unit}</span>
                   {item.amount > 0 && <span className="text-xs text-muted-foreground">Amt: {"\u20B9"}{item.amount}{item.gst_applicable ? " (excl. GST)" : ""}</span>}
                 </div>

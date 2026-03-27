@@ -1,95 +1,61 @@
 <analysis>**original_problem_statement:**
-The user has requested a series of features and bug fixes for the CitSpray Order Management System. The work has been iterative, with new requests following the completion of previous ones.
-
-**Initial Request (10-point list):**
-1.  **Print Behavior Fix:** Directly trigger the browser's print dialog.
-2.  **Customer Deletion Restriction:** Restrict deletion to Admins with a two-step confirmation.
-3.  **Negative Value Restriction:** Prevent negative numbers for  and .
-4.  **Shipping/Local Charges Rework:** Create a new Additional Charges section for multiple custom charges with optional GST.
-5.  **Copyable Details:** Make phone number and addresses copyable on the Order Detail page.
-6.  **Shipping Method Column:** Add to the  table.
-7.  **Edit Shipping in Dispatch:** Allow editing shipping details from the Dispatch dashboard.
-8.  **Duplicate Order/PI:** Add a Duplicate button for Orders and Proforma Invoices.
-9.  **Mobile Camera Upload Bug Fix:** Fix image uploads from mobile cameras.
-10. **Camera Option in Edit Mode:** Add the Camera upload option to all edit modes.
-
-**Subsequent Requests:**
-*   **Mobile Print Fixes:** A series of fixes to address cross-origin errors, blank pages, and PDF rendering issues on Android devices.
-*   **Charges UI & Image Compression:** A rework of the charges UI to have three distinct sections (Shipping, Local, Additional) and implementation of client-side image compression for all uploads.
-*   **Formulation History:** Fix a visibility bug for the Packaging role and add the history button to more locations.
-*   **Accounts Dashboard:** Add an Unpaid Orders metric and filter unpaid orders from the Payment Check view.
-
-**Latest Request (Currently being addressed):**
-1.  **Forward to Packaging Button:** For Admin reference only, add a button on each order row in All Orders to mark it as forwarded to packaging. This should not trigger other logic.
-2.  **Tax Invoice Filter:** In the Accounts dashboard, add a filter for Tax Invoices to show Uploaded vs. Pending Upload.
-3.  **Remove Local Charges:** Completely remove the Local Charges field from all create/edit forms (Order & PI).
-4.  **Telecaller Payment Edit:** Allow Telecallers to edit payment details (status, mode, screenshots) for their own orders, even after dispatch.
-5.  **Admin Full Edit Power:** Admins should be able to edit everything in an order, even after it's dispatched.
-6.  **Image Uploads in Order Summary:** Add the full image upload/edit capabilities (same as the packaging page) to the packaging/update section within the Order Detail page. This should be editable by Packaging pre-dispatch and by Admin anytime.
+The user requested a series of comprehensive feature additions and UI/UX improvements for their CitSpray Order Management System:
+1. **Invoice Upload Flow:** Modal in Accounts Dashboard asking for mandatory Tax Invoice and optional E-Way Bill. If both are provided, merge them server-side into a single PDF (Tax Invoice first, E-Way Bill second).
+2. **Order Summary Improvements:** Customer GST number with a copy button, Addresses in multi-line readable format with copy buttons, Formulation support for free samples, and Extra Shipping Details field.
+3. **Customer Editing:** Ability to edit customer details directly from Create Order, Edit Order, and Create PI forms.
+4. **All Orders Table:** GST/Non-GST column for Accounts role, and GST Invoice Upload Status for other roles. 
+5. **State/UT Dropdown:** Replace pincode-based city/state auto-fill with a mandatory, searchable State/UT dropdown across all address forms.
+6. **Executive Reports & Admin Filters:** Fix the period filter to use IST timezone instead of UTC so Today filters accurately. Add an Alias field to customers to allow searching by Alias.
+7. **Mobile Print Fix:** Fix mobile print button so it uses native Web Share API () on mobile while preserving standard PDF print functionality on desktop.
+8. **Search Functionality:** Add comprehensive search bars to Proforma Invoice, Packaging, and Dispatch modules allowing search by Customer Name, Alias, Phone Number, GST Number, and Order/PI ID.
 
 **User's preferred language**: English
+**INSTRUCTION**: Respond in English only.
 
 **what currently exists?**
-A full-stack Order Management System (FastAPI, React, MongoDB) with JWT authentication and multiple user roles. In this session, the application has been significantly enhanced: all 10 items from the initial list were implemented, the mobile print functionality was rebuilt from the ground up using  to ensure Android compatibility, a new three-section charges UI was created, client-side image compression was added for all uploads, and various role-specific features and bug fixes were completed.
+A mature, full-stack Order Management System. It includes sophisticated role-based routing (Admin, Accounts, Telecaller, Packaging, Dispatch), Amazon PDF order parsing, an advanced persistent notification system, and an extensive reporting/analytics dashboard. Recently, PDF merging for invoices (Tax + E-way) via , strict Indian State dropdown validation for addresses, and a native Web Share API integration for mobile printing were successfully implemented. 
 
 **Last working item**:
-The agent received a new 6-point list of features and fixes. It has just started exploring the codebase to understand the implementation details for this new request.
-
-    - Last item agent was working: Analyzing the code for the new 6-point request, including the Forward to Packaging button, new filters for Accounts, removal of Local Charges, and expanded editing permissions for Admin/Telecaller roles.
-    - Status: NOT STARTED
-    - Agent Testing Done: N
-    - Which testing method agent to use? both
+    - Last item agent was working: Implementing comprehensive search bars in the Proforma Invoice (), Packaging (), and Dispatch () modules. The agent successfully modified the frontend and enriched the backend  endpoint to include customer data for searchability.
+    - Status: TESTING PENDING
+    - Agent Testing Done: Y (Smoke test via screenshots)
+    - Which testing method agent to use? testing_agent_v3_fork
     - User Testing Done: N
 
 **All Pending/In progress Issue list**:
-  - Issue 1: Implement the latest 6-point feature and fix request (P0)
-  - Issue 2: Missing Pagination/Query Optimization (P1)
-  - Issue 3: Refactor  monolith (P2)
+  - Issue 1: Missing Pagination/Query Optimization (P1)
+  - Issue 2: Refactor  monolith (P2)
   
   Issues Detail:
   - Issue 1: 
-     - **Description**: This is the user's current request, containing 6 distinct items as detailed in the .
-     - Attempted fixes: The agent has begun reading relevant files (, , , , ) to gather context. No code has been modified yet.
-     - Next debug checklist: 
-       - **Forward to Packaging:** Add a boolean field like  to the  model in . Add a new button in  row that calls a new endpoint to toggle this flag for admins. Display the status visually.
-       - **Accounts Filter:** In , add a new state and a  component to filter the Tax Invoices list based on whether  exists.
-       - **Remove Local Charges:** Remove the Local Charges input field and associated state/logic from , , and . Ensure the submission logic no longer tries to create a Local Charges entry in .
-       - **Telecaller Edit Permissions:** Modify the payment details section in  to be editable for the order's creator () regardless of dispatch status. A backend endpoint may need permission adjustments.
-       - **Admin Edit Permissions:** In  and , wrap all  checks with an additional  to give admins full editing power.
-       - **Image Upload in Summary:** The  component inside  needs to be updated to include the full image upload/edit/delete functionality found in , respecting the new edit permissions (Admin anytime, Packaging pre-dispatch).
-     - Why fix this issue and what will be achieved with the fix? This will complete the user's latest set of requirements, improving administrative workflows and role-specific capabilities.
+     - Attempted fixes: None in this session.
+     - Next debug checklist: Modify all list endpoints in  to accept  and  query parameters. Apply these parameters to the MongoDB  queries. Add pagination controls to frontend list components.
+     - Why fix this issue and what will be achieved with the fix? To prevent application slowdowns and ensure the system remains scalable as data volume increases.
      - Status:  NOT STARTED
      - Is recurring issue? N
      - Should Test frontend/backend/both after fix? both
      - Blocked on other issue: None
-
   - Issue 2: 
-     - **Description**: The application lacks pagination on all major list views (, , etc.), posing a significant performance risk as the database grows.
-     - Status:  NOT STARTED
-     - Is recurring issue? N
-     - Should Test frontend/backend/both after fix? both
-     - Blocked on other issue: None
-
-  - Issue 3: 
-     - **Description**: The main backend file, , has grown to over 2600 lines, making it difficult to maintain.
+     - Attempted fixes: None. The backend file  has grown to over 3,100 lines.
+     - Next debug checklist: Create a new directory structure (e.g., ). Systematically move related groups of endpoints into their own files using FastAPI's . Include routers in main .
+     - Why fix this issue and what will be achieved with the fix? To improve code organization, maintainability, and developer velocity.
      - Status:  NOT STARTED
      - Is recurring issue? N
      - Should Test frontend/backend/both after fix? backend
      - Blocked on other issue: None
 
 **In progress Task List**:
-  - Task 1: Implement the latest 6-point feature request (P0)
-     - Where to resume: The agent has finished reading relevant files. The next step is to plan and begin implementation, starting with the backend changes for the Forward to Packaging button.
-     - What will be achieved with this? Completion of the user's latest feature set.
-     - Status:  NOT STARTED
+  - Task 1: Complete Testing for Search Features
+     - Where to resume: Run the  to thoroughly validate the newly implemented search bars on the PIBuilder, Packaging, and Dispatch dashboards.
+     - What will be achieved with this? Assure bug-free deployment of the cross-module search functionality.
+     - Status: TESTING PENDING
      - Should Test frontend/backend/both after fix? both
      - Blocked on something: None
 
 **Upcoming and Future Tasks**
     Upcoming Tasks:
-    - **P1: Implement Pagination:** Add pagination to all major data tables (, , etc.) to improve performance.
+    - **P1: Implement Pagination:** Add pagination to all major data tables (, , ) to improve performance.
     - **P2: Refactor :** Break the monolithic backend file into modular FastAPI routers.
-
     Future Tasks:
     - **P3:** Export to CSV/Excel functionality.
     - **P3:** WhatsApp integration for automated dispatch notifications.
@@ -97,125 +63,160 @@ The agent received a new 6-point list of features and fixes. It has just started
     - **P3:** Create a customer payment history ledger.
 
 **Completed work in this session**
-- **Initial 10-Point List (DONE):**
-  - **Print Behavior Fix:** Implemented direct print dialog trigger.
-  - **Customer Deletion:** Restricted to Admins with a two-step confirmation.
-  - **Negative Value Restriction:** Added  validation on UI and backend.
-  - **Additional Charges System:** Implemented a flexible system for custom charges.
-  - **Copyable Details:** Added copy-to-clipboard for order details.
-  - **Shipping Method Column:** Added to the All Orders table.
-  - **Edit Shipping in Dispatch:** Enabled editing shipping details in the dispatch modal.
-  - **Duplicate Order/PI:** Added duplication functionality.
-  - **Mobile Camera Upload:** Fixed backend to handle extensionless mobile uploads.
-  - **Camera Option in Edit Mode:** Added camera option to all relevant edit forms.
-- **Mobile Print Rework (DONE):**
-  - Iteratively fixed cross-origin errors, blank pages, and PDF rendering failures on Android by implementing a -based solution that converts PDF pages to images before printing.
-- **Charges UI Rework (DONE):**
-  - Restructured the UI to have three distinct sections: Shipping Charges, Local Charges, and Additional Charges, without changing the backend logic.
-- **Image Compression (DONE):**
-  - Implemented client-side image compression () for all file uploads, drastically reducing file size.
-- **Formulation History Fixes (DONE):**
-  - Corrected a visibility bug for the Packaging role and added the history button to the Order Detail summary and Edit Formulation dialog.
-- **Accounts Dashboard Update (DONE):**
-  - Added an Unpaid Orders metric card and filtered unpaid orders from the Payment Check list.
+- Invoice Upload Modal with PyPDF2 merging (Tax + E-Way Bill) (DONE)
+- Customer GST + Address multi-line formatting with copy buttons (DONE)
+- Customer editing directly from Create Order / Edit Order / PI forms (DONE)
+- Free sample formulation support (DONE)
+- Extra shipping details field (DONE)
+- GST / Invoice Upload Status columns in  (DONE)
+- Pincode-based auto-fill removed; strict State/UT dropdown added () (DONE)
+- Customer Alias field added across all customer forms and searches (DONE)
+- Executive Reports Period Filter bug fixed by applying IST timezone conversions (DONE)
+- Mobile print feature rewritten to use Web Share API () for mobile browsers (DONE)
+- Order Summary updated to sync and display correct Dispatch Details (DONE)
+- Search bars added to PI, Packaging, and Dispatch modules (Code implementation DONE, Testing pending)
 
 **Earlier issues found/mentioned but not fixed**
-   - Issue 1: **Missing Pagination/Query Optimization**
-     - Debug checklist: Review all  calls in . Add  and  based on query parameters. Update frontend components (, ) to include pagination controls.
-     - Why to solve this issue and what will be achieved with this? To prevent application slowdowns and ensure the system remains scalable.
-     - Should Test frontend/backend/both after fix: both
-     - Is recurring issue? N
+   - Issue 1: Pagination implementation on major lists (carried forward as technical debt).
+   - Issue 2:  refactoring into modular routers.
 
 **Known issue recurrence from previous fork**
-  - **Mobile Print Failure:** While the mobile *camera upload* issue was resolved, the *mobile print* functionality proved to be a significant recurring issue in this session, requiring multiple attempts and a complete architectural change (from iframe to ) to finally resolve for Android devices.
+  - Issue recurrence in previous fork: The printing functionality failing on mobile devices.
+  - Recurrence count: 1
+  - Status: RESOLVED (Native Share API implemented as a robust fallback for Android/iOS)
 
 **Code Architecture**
 
 
 **Key Technical Concepts**
-- **Backend:** FastAPI, Motor (async MongoDB driver), Pydantic, JWT, Passlib, ReportLab.
-- **Frontend:** React, React Router, Tailwind CSS, Shadcn/UI, Axios, **pdf.js**.
-- **Database:** MongoDB.
+- Backend: FastAPI, Motor (MongoDB), Pydantic, JWT, usage: pdfplumber [-h] [--structure | --structure-text]
+                  [--format {csv,json,text}] [--types TYPES [TYPES ...]]
+                  [--include-attrs INCLUDE_ATTRS [INCLUDE_ATTRS ...]]
+                  [--exclude-attrs EXCLUDE_ATTRS [EXCLUDE_ATTRS ...]]
+                  [--laparams LAPARAMS] [--precision PRECISION]
+                  [--pages PAGES [PAGES ...]] [--indent INDENT]
+                  [infile]
+
+positional arguments:
+  infile
+
+options:
+  -h, --help            show this help message and exit
+  --structure           Write the structure tree as JSON. All other arguments
+                        except --pages, --laparams, and --indent will be
+                        ignored
+  --structure-text      Write the structure tree as JSON including text
+                        contents. All other arguments except --pages,
+                        --laparams, and --indent will be ignored
+  --format {csv,json,text}
+  --types TYPES [TYPES ...]
+  --include-attrs INCLUDE_ATTRS [INCLUDE_ATTRS ...]
+                        Include *only* these object attributes in output.
+  --exclude-attrs EXCLUDE_ATTRS [EXCLUDE_ATTRS ...]
+                        Exclude these object attributes from output.
+  --laparams LAPARAMS
+  --precision PRECISION
+  --pages PAGES [PAGES ...]
+  --indent INDENT       Indent level for JSON pretty-printing. (PDF parsing),  (PDF merging).
+- Frontend: React, React Router, Tailwind CSS, Shadcn/UI.
+- File APIs: Native Web Share API ().
 
 **key DB schema**
+  - **customers:** 
   - **orders:** 
-  - **users:** 
 
 **changes in tech stack**
-  - **Added:**  (v5.4.624) to the frontend dependencies for handling mobile PDF printing.
+  - **Added:**  installed in the backend for merging multiple PDFs (Tax Invoice + E-way Bill). 
 
 **All files of reference**
-- : Heavily modified to support almost all completed features. Will require further modification for the Forward to Packaging button.
-- : Will be modified to remove local charges.
-- : Will be modified to remove local charges and adjust admin permissions.
-- : Will be modified to remove local charges.
-- : Will be modified for Telecaller/Admin permissions and to add image uploads to the packaging summary.
-- : To be updated to add the Forward to Packaging button for admins.
-- : To be updated with the new invoice filter.
-- : New utility for image compression.
-- : New utility for mobile printing.
+- : NEW file storing constant array of valid states.
+- : Enriched  endpoints to include customer data for searching, updated period filter logic to use IST ().
+- : Redesigned to use native Share functionality to fix Android popup blocker bugs.
 
 **Areas that need refactoring**:
-- **:** Now over 2600 lines, this remains the highest priority for refactoring into modular FastAPI routers.
-- **Data Fetching:** The lack of pagination on list endpoints is a critical performance risk that needs to be addressed.
+- **:** Monolith size is a severe risk. Modularization is imperative.
+- **Frontend Data Fetching:** Major list views still lack backend-driven pagination.
 
 **key api endpoints**
-- **To be created:**
-    - 
-- **Modified (this session):**
-    - , : Updated for new charge system and permissions.
-    - , : Updated for new charge system.
-    - : Logic enhanced to handle mobile camera uploads correctly.
-    - , : New endpoints.
-    - : New endpoint.
-    - : Added  count.
-- **To be modified:**
-    - Potentially need a new endpoint or modified permissions on  to allow telecallers to edit payment details post-dispatch.
+-  (Accepts  and optional , merges with PyPDF2).
+-  (Allows toggling 'packed' status).
+-  (Fixed period filtering).
 
 **Critical Info for New Agent**
-- **Your immediate task is to implement the latest 6-point request.** The previous agent has already read the relevant files.
-- **DO NOT re-implement Local Charges in the backend.** The user now wants it completely removed. This is a UI-only change.
-- **Admin Full Edit Power:** This is a key requirement. You must ensure that for any , all edit restrictions, especially those based on , are bypassed.
-- **Telecaller Payment Edit:** This will require careful changes in  to allow editing the payment section for the order creator post-dispatch. You might need to create a dedicated backend endpoint for this to avoid granting broad edit access.
-- **Image Upload in Order Summary:** This involves enhancing the  component within . It should have the same functionality as the main  for adding/removing packing images, and respect the new Admin/Packaging edit permissions.
-- Proceed with the tasks in the order they were requested, starting with the Forward to Packaging button.
+- **State Validation:** The State/UT field in all address forms requires strict matching against the  array. Do not remove this validation.
+- **Mobile Printing:** On mobile, clicking print uses the  API to export the PDF. Do not attempt to load PDFs into hidden iframes on mobile as it causes browser locks.
+- **PyPDF2 Installation Issue:** The agent ran Looking in indexes: https://pypi.org/simple, https://d33sy5i8bnduwe.cloudfront.net/simple/
+Requirement already satisfied: PyPDF2 in /root/.venv/lib/python3.11/site-packages (3.0.1) but did *not* run . You must execute this to ensure the container environment persists correctly.
 
 **documents and test reports created in this job**
   - 
-  -  (from testing agent)
-  -  (updated multiple times)
+  - 
+  - 
+  - 
 
 **Last 10 User Messages and any pending HUMAN messages** 
-1. : Reported that mobile print fix was not working and an unnecessary blank page was appearing. (COMPLETED)
-2. : Acknowledged and fixed the blank page issue by adjusting CSS. (COMPLETED)
-3. : Confirmed the blank page issue was still present. (COMPLETED)
-4. : Re-investigated and found a CSS override, then fixed it properly. (COMPLETED)
-5. : Requested a new feature for the Accounts Dashboard (Unpaid orders metric) and a filter change. (COMPLETED)
-6. : Implemented and verified the Accounts Dashboard changes. (COMPLETED)
-7. : Provided the new 6-point list of features and fixes. This is the current task. (PENDING)
-8. : Acknowledged the request and started exploring the codebase. (IN PROGRESS)
-9. : (No message, agent is working)
-10. : Continued exploring the codebase by viewing  and other files. (IN PROGRESS)
+1. : Request to modify Accounts Dashboard Invoice upload to open a modal accepting mandatory Tax Invoice and optional E-way Bill, merging them into one.
+2. : Massive batch of UI requests (GST copy button, Multi-line addresses, Customer direct editing, Free sample formulations, extra shipping details, mobile print fix).
+3. : Another batch of fixes (Executive report period filter mapping, State dropdown replacing pincode auto-fill, Customer Alias field, Packing role dispatch controls and image sharing).
+4. : Enforce mandatory validation on the State Dropdown to match list.
+5. : Bug reports (Alias missing in , Print button fails on mobile, Executive report Today filter mapping issue, Dispatch details syncing in order summary).
+6. : Continue (Agent took screenshots, user prompted to proceed).
+7. : Continue (Testing agent skipped due to user prompt).
+8. : Request to have print buttons use native Share functionality on mobile context instead of printing.
+9. : Request to add a robust Search bar (Customer, Alias, Phone, GST, ID) to PIBuilder, Packaging, and Dispatch modules.
+10. : Continue (Agent executed search bar logic, waiting to run testing agent).
 
 **Project Health Check:**
-- **Broken:** None currently reported.
-- **Mocked:** GST verification (), Pincode lookup ().
-- **Warnings:** The  file is a monolith (>2600 lines) and urgently needs refactoring. The application lacks pagination on major list views, which is a significant performance risk.
+- Broken: None.
+- Mocked: GST verification (), Pincode lookup ().
 
 **3rd Party Integrations**
-- : For all PDF generation.
--  & : For generating UPI QR codes in PDFs.
-- : (v5.4.624) Client-side library for rendering PDFs as images for mobile printing.
+- usage: pdfplumber [-h] [--structure | --structure-text]
+                  [--format {csv,json,text}] [--types TYPES [TYPES ...]]
+                  [--include-attrs INCLUDE_ATTRS [INCLUDE_ATTRS ...]]
+                  [--exclude-attrs EXCLUDE_ATTRS [EXCLUDE_ATTRS ...]]
+                  [--laparams LAPARAMS] [--precision PRECISION]
+                  [--pages PAGES [PAGES ...]] [--indent INDENT]
+                  [infile]
+
+positional arguments:
+  infile
+
+options:
+  -h, --help            show this help message and exit
+  --structure           Write the structure tree as JSON. All other arguments
+                        except --pages, --laparams, and --indent will be
+                        ignored
+  --structure-text      Write the structure tree as JSON including text
+                        contents. All other arguments except --pages,
+                        --laparams, and --indent will be ignored
+  --format {csv,json,text}
+  --types TYPES [TYPES ...]
+  --include-attrs INCLUDE_ATTRS [INCLUDE_ATTRS ...]
+                        Include *only* these object attributes in output.
+  --exclude-attrs EXCLUDE_ATTRS [EXCLUDE_ATTRS ...]
+                        Exclude these object attributes from output.
+  --laparams LAPARAMS
+  --precision PRECISION
+  --pages PAGES [PAGES ...]
+  --indent INDENT       Indent level for JSON pretty-printing.: PDF parsing.
+- : PDF generation.
+- : PDF merging.
+(No integrations require Emergent LLM Key)
 
 **Testing status**
-  - Testing agent used after significant changes: YES (multiple times)
+  - Testing agent used after significant changes: YES (Iterations 14, 15, 16 completed successfully)
   - Troubleshoot agent used after agent stuck in loop: NO
   - Test files created: []
-  - Known regressions: None.
+  - Known regressions: None, but testing for the final Search Bar feature is pending.
 
 **Credentials to test flow:**
-- **Username:** 
-- **Password:** 
+- **Admin:**  / 
+- **Accounts:**  / 
+- **Packaging:**  / 
+- **Dispatch:**  / 
+- **Telecaller:**  / 
 
 **What agent forgot to execute**
-The agent has not forgotten anything; it is currently in the process of analyzing the codebase to address the user's most recent 6-point request. Implementation has not yet begun.</analysis>
+The agent installed  via terminal (Looking in indexes: https://pypi.org/simple, https://d33sy5i8bnduwe.cloudfront.net/simple/
+Requirement already satisfied: PyPDF2 in /root/.venv/lib/python3.11/site-packages (3.0.1)) but forgot to update the requirements file (). Please run this command immediately to ensure build stability. The agent also implemented search bars for three modules but was interrupted before invoking  to validate the UI changes.</analysis>

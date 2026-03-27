@@ -101,6 +101,7 @@ export default function PIBuilder() {
   const [sharing, setSharing] = useState({});
   const [showEditCustomer, setShowEditCustomer] = useState(false);
   const [editCustData, setEditCustData] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
+  const [piSearch, setPiSearch] = useState("");
 
   const canShare = ["admin", "telecaller"].includes(user?.role);
 
@@ -314,8 +315,23 @@ export default function PIBuilder() {
       {!showBuilder && (
         <Card>
           <CardContent className="pt-6">
+            {piList.length > 0 && (
+              <div className="mb-4 relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input placeholder="Search by PI number, customer, phone, GST..." className="pl-9 max-w-sm" value={piSearch} onChange={e => setPiSearch(e.target.value)} data-testid="pi-list-search" />
+              </div>
+            )}
             {loading ? <p className="text-center py-8 text-muted-foreground">Loading...</p> :
-             piList.length === 0 ? <p className="text-center py-8 text-muted-foreground">No proforma invoices yet.</p> : (
+             piList.length === 0 ? <p className="text-center py-8 text-muted-foreground">No proforma invoices yet.</p> : (() => {
+              const q = piSearch.toLowerCase();
+              const filtered = q ? piList.filter(pi =>
+                pi.pi_number?.toLowerCase().includes(q) ||
+                pi.customer_name?.toLowerCase().includes(q) ||
+                pi.customer_phone?.some?.(p => p.includes(q)) ||
+                pi.customer_gst?.toLowerCase().includes(q) ||
+                pi.customer_alias?.toLowerCase().includes(q)
+              ) : piList;
+              return filtered.length === 0 ? <p className="text-center py-8 text-muted-foreground">No results for "{piSearch}"</p> : (
               <Table className="min-w-[600px]">
                 <TableHeader>
                   <TableRow>
@@ -324,17 +340,19 @@ export default function PIBuilder() {
                     <TableHead className="text-xs text-right whitespace-nowrap">Amount</TableHead>
                     <TableHead className="text-xs whitespace-nowrap">Date</TableHead>
                     <TableHead className="text-xs whitespace-nowrap">Status</TableHead>
+                    {user?.role === "admin" && <TableHead className="text-xs whitespace-nowrap">Created By</TableHead>}
                     <TableHead className="text-xs whitespace-nowrap">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {piList.map(pi => (
+                  {filtered.map(pi => (
                     <TableRow key={pi.id} data-testid={`pi-row-${pi.id}`}>
                       <TableCell className="font-mono text-sm font-medium">{pi.pi_number}</TableCell>
-                      <TableCell className="text-sm">{pi.customer_name}</TableCell>
+                      <TableCell className="text-sm">{pi.customer_name}{pi.customer_alias ? <span className="text-xs text-muted-foreground ml-1">({pi.customer_alias})</span> : ""}</TableCell>
                       <TableCell className="text-sm text-right font-mono">{"\u20B9"}{pi.grand_total}</TableCell>
                       <TableCell className="text-sm whitespace-nowrap">{new Date(pi.created_at).toLocaleDateString("en-IN")}</TableCell>
                       <TableCell><Badge variant="secondary" className="text-xs">{pi.status}</Badge></TableCell>
+                      {user?.role === "admin" && <TableCell className="text-sm whitespace-nowrap">{pi.created_by_name || "-"}</TableCell>}
                       <TableCell>
                         <div className="flex gap-1">
                           <Button variant="ghost" size="icon" onClick={() => downloadPI(pi)} title="Download PDF" data-testid={`download-pi-${pi.id}`}><Download className="w-4 h-4" /></Button>
@@ -376,7 +394,7 @@ export default function PIBuilder() {
                   ))}
                 </TableBody>
               </Table>
-            )}
+            ); })()}
           </CardContent>
         </Card>
       )}

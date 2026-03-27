@@ -82,6 +82,31 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - Telecaller: test_tc_payment / test123
 - Accounts: test_accounts / test123
 
+## Edit Formulation Enhancement (March 2026)
+- Item description now displayed alongside product name in Edit Formulation dialog
+- Format: "Product Name — Description  Qty: X unit  Amt: ₹Y"
+- Description shown only when available, hidden gracefully when empty
+
+## Alias Unification (March 2026)
+- Alias is stored centrally on the customer document (single source of truth)
+- `PUT /api/customers/{id}` propagates `customer_name` to all orders & PIs when customer is updated
+- All detail and list endpoints enrich with latest customer data (name, alias, phone, GST, email)
+- Alias shown in: Order Detail, All Orders table, PI list, Packaging table, Dispatch table
+- All Orders search expanded: order #, customer name, alias, phone, GST
+
+## Customer Master Data Sync (March 2026)
+- All customer-linked data (name, alias, phone, GST, email) stays synced across the system
+- `PUT /api/customers/{id}` propagates `customer_name` to all orders & PIs documents
+- `GET /api/orders/{id}` and `GET /api/proforma-invoices/{id}` enrich with full live customer data
+- Order/PI list endpoints enrich phone, GST, alias from customer at query time
+- Duplicate order/PI and Convert PI endpoints fetch live customer name
+- PDF generation always fetches fresh customer data from DB
+- OrderDetail.js uses enriched order response (no separate customer API call needed)
+
+## Packing Slip & PI Listing Enhancements (March 2026)
+- Packing slip PDF now shows customer alias below customer name (only when alias exists)
+- PI listing table shows "Created By" column (admin only) showing who created each PI
+
 ## Upcoming Tasks
 - **P1:** Pagination on all major data tables
 - **P2:** Refactor server.py into modular FastAPI routers

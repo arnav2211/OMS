@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Truck, Send, Eye } from "lucide-react";
+import { Truck, Send, Eye, Search } from "lucide-react";
 
 const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
 const NO_LR_METHODS = ["porter", "self_arranged", "office_collection"];
@@ -26,6 +26,7 @@ export default function DispatchDashboard() {
   const [transporterName, setTransporterName] = useState("");
   const [lrNo, setLrNo] = useState("");
   const [editShippingMethod, setEditShippingMethod] = useState("");
+  const [dispSearch, setDispSearch] = useState("");
 
   useEffect(() => { loadOrders(); }, []);
 
@@ -126,7 +127,22 @@ export default function DispatchDashboard() {
               <Truck className="w-12 h-12 mx-auto mb-3 opacity-30" />
               <p>No orders ready for dispatch</p>
             </div>
-          ) : (
+          ) : (() => {
+            const q = dispSearch.toLowerCase();
+            const filtered = q ? orders.filter(o =>
+              o.order_number?.toLowerCase().includes(q) ||
+              o.customer_name?.toLowerCase().includes(q) ||
+              o.customer_phone?.some?.(p => p.includes(q)) ||
+              o.customer_gst_no?.toLowerCase().includes(q) ||
+              o.customer_alias?.toLowerCase().includes(q)
+            ) : orders;
+            return (
+            <>
+            <div className="mb-4 relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input placeholder="Search by order #, customer, phone, GST, alias..." className="pl-9 max-w-sm" value={dispSearch} onChange={e => setDispSearch(e.target.value)} data-testid="dispatch-search" />
+            </div>
+            {filtered.length === 0 ? <p className="text-center py-8 text-muted-foreground">No results for "{dispSearch}"</p> : (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -139,12 +155,12 @@ export default function DispatchDashboard() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {orders.map((order) => (
+                {filtered.map((order) => (
                   <TableRow key={order.id} data-testid={`dispatch-order-${order.order_number}`}>
                     <TableCell className="font-mono font-medium text-sm">
                       <Link to={`/orders/${order.id}`} className="text-primary hover:underline" data-testid={`dispatch-order-link-${order.order_number}`}>{order.order_number}</Link>
                     </TableCell>
-                    <TableCell className="text-sm">{order.customer_name}</TableCell>
+                    <TableCell className="text-sm">{order.customer_name}{order.customer_alias ? <span className="text-xs text-muted-foreground ml-1">({order.customer_alias})</span> : ""}</TableCell>
                     <TableCell className="text-sm">{getShippingLabel(order.shipping_method)}</TableCell>
                     <TableCell>
                       <Badge variant="secondary" className={`status-${order.status} text-xs uppercase`}>{order.status}</Badge>
@@ -162,7 +178,9 @@ export default function DispatchDashboard() {
                 ))}
               </TableBody>
             </Table>
-          )}
+            )}
+            </>
+            ); })()}
         </CardContent>
       </Card>
 

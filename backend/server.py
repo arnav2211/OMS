@@ -502,6 +502,10 @@ async def update_customer(customer_id: str, req: CustomerCreate, user=Depends(ge
     result = await db.customers.update_one({"id": customer_id}, {"$set": update_data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Customer not found")
+    # Propagate customer_name to all orders and PIs referencing this customer
+    new_name = update_data["name"]
+    await db.orders.update_many({"customer_id": customer_id}, {"$set": {"customer_name": new_name}})
+    await db.proforma_invoices.update_many({"customer_id": customer_id}, {"$set": {"customer_name": new_name}})
     updated = await db.customers.find_one({"id": customer_id}, {"_id": 0})
     return updated
 
@@ -796,11 +800,24 @@ async def list_orders(
 
     orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
+    # Enrich with customer phone/gst/alias for search
+    cust_ids = list(set(o.get("customer_id", "") for o in orders if o.get("customer_id")))
+    custs = {}
+    if cust_ids:
+        async for c in db.customers.find({"id": {"$in": cust_ids}}, {"_id": 0, "id": 1, "phone_numbers": 1, "gst_no": 1, "alias": 1}):
+            custs[c["id"]] = c
+
     # Get settings for formulation visibility
     settings = await db.settings.find_one({"_id": "global"})
     show_formulation_global = settings.get("show_formulation", False) if settings else False
 
     for o in orders:
+        # Enrich with customer details
+        c = custs.get(o.get("customer_id"), {})
+        o["customer_phone"] = c.get("phone_numbers", [])
+        o["customer_gst_no"] = c.get("gst_no", "")
+        o["customer_alias"] = c.get("alias", "")
+
         # Hide telecaller info for non-admin
         if user["role"] != "admin":
             if view_all:
@@ -902,6 +919,15 @@ async def get_order(order_id: str, user=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    # Enrich with full customer data
+    if order.get("customer_id"):
+        cust = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0, "alias": 1, "name": 1, "phone_numbers": 1, "gst_no": 1, "email": 1})
+        if cust:
+            order["customer_alias"] = cust.get("alias", "")
+            order["customer_name"] = cust.get("name", order.get("customer_name", ""))
+            order["customer_phone"] = cust.get("phone_numbers", [])
+            order["customer_gst_no"] = cust.get("gst_no", "")
+            order["customer_email"] = cust.get("email", "")
     # Hide telecaller info for non-admin (keep telecaller_id for telecaller's own-order check)
     if user["role"] == "telecaller":
         order.pop("telecaller_name", None)
@@ -1990,6 +2016,8 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
     # ── 4. CUSTOMER ──
     if customer:
         cust_lines = [f"<b>{customer.get('name','')}</b>"]
+        if customer.get('alias'):
+            cust_lines.append(f"<font color='#6B7280'><i>{customer['alias']}</i></font>")
         if customer.get('phone_numbers'):
             cust_lines.append(f"<font color='#6B7280'>Ph:</font> {', '.join(customer['phone_numbers'])}")
         sa = order.get("shipping_address")
@@ -2206,6 +2234,17 @@ async def list_pis(user=Depends(get_current_user)):
     if user["role"] == "telecaller":
         query["created_by"] = user["id"]
     pis = await db.proforma_invoices.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    # Enrich with customer details for search
+    cust_ids = list(set(p.get("customer_id", "") for p in pis if p.get("customer_id")))
+    custs = {}
+    if cust_ids:
+        async for c in db.customers.find({"id": {"$in": cust_ids}}, {"_id": 0, "id": 1, "phone_numbers": 1, "gst_no": 1, "alias": 1}):
+            custs[c["id"]] = c
+    for pi in pis:
+        c = custs.get(pi.get("customer_id"), {})
+        pi["customer_phone"] = c.get("phone_numbers", [])
+        pi["customer_gst"] = c.get("gst_no", "")
+        pi["customer_alias"] = c.get("alias", "")
     return pis
 
 @api_router.get("/proforma-invoices/{pi_id}")
@@ -2213,6 +2252,15 @@ async def get_pi(pi_id: str, user=Depends(get_current_user)):
     pi = await db.proforma_invoices.find_one({"id": pi_id}, {"_id": 0})
     if not pi:
         raise HTTPException(status_code=404, detail="PI not found")
+    # Enrich with full customer data
+    if pi.get("customer_id"):
+        cust = await db.customers.find_one({"id": pi["customer_id"]}, {"_id": 0, "alias": 1, "name": 1, "phone_numbers": 1, "gst_no": 1, "email": 1})
+        if cust:
+            pi["customer_alias"] = cust.get("alias", "")
+            pi["customer_name"] = cust.get("name", pi.get("customer_name", ""))
+            pi["customer_phone"] = cust.get("phone_numbers", [])
+            pi["customer_gst_no"] = cust.get("gst_no", "")
+            pi["customer_email"] = cust.get("email", "")
     return pi
 
 @api_router.put("/proforma-invoices/{pi_id}")
@@ -2310,9 +2358,11 @@ async def duplicate_order(order_id: str, user=Depends(get_current_user)):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     # Return the order data needed for pre-filling a new form
+    # Fetch live customer name
+    cust = await db.customers.find_one({"id": order.get("customer_id", "")}, {"_id": 0, "name": 1})
     return {
         "customer_id": order.get("customer_id", ""),
-        "customer_name": order.get("customer_name", ""),
+        "customer_name": cust["name"] if cust else order.get("customer_name", ""),
         "purpose": order.get("purpose", ""),
         "items": order.get("items", []),
         "gst_applicable": order.get("gst_applicable", False),
@@ -2339,9 +2389,11 @@ async def duplicate_pi(pi_id: str, user=Depends(get_current_user)):
     pi = await db.proforma_invoices.find_one({"id": pi_id}, {"_id": 0})
     if not pi:
         raise HTTPException(status_code=404, detail="PI not found")
+    # Fetch live customer name
+    cust = await db.customers.find_one({"id": pi.get("customer_id", "")}, {"_id": 0, "name": 1})
     return {
         "customer_id": pi.get("customer_id", ""),
-        "customer_name": pi.get("customer_name", ""),
+        "customer_name": cust["name"] if cust else pi.get("customer_name", ""),
         "items": pi.get("items", []),
         "gst_applicable": pi.get("gst_applicable", False),
         "show_rate": pi.get("show_rate", True),
@@ -2371,12 +2423,12 @@ async def convert_pi_to_order(pi_id: str, body: dict, user=Depends(get_current_u
         {"_id": "order_number"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True
     )
     order_number = f"CS-{counter['seq']:04d}"
-    await db.customers.find_one({"id": pi["customer_id"]}, {"_id": 0})
+    customer = await db.customers.find_one({"id": pi["customer_id"]}, {"_id": 0})
     order_doc = {
         "id": str(uuid.uuid4()),
         "order_number": order_number,
         "customer_id": pi["customer_id"],
-        "customer_name": pi["customer_name"],
+        "customer_name": customer["name"] if customer else pi["customer_name"],
         "purpose": body.get("purpose", ""),
         "items": pi["items"],
         "gst_applicable": pi["gst_applicable"],
