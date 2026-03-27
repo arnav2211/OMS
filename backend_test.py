@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 
 class CitSprayAPITester:
-    def __init__(self, base_url="https://packaging-workflow-2.preview.emergentagent.com/api"):
+    def __init__(self, base_url="https://order-search-1.preview.emergentagent.com/api"):
         self.base_url = base_url
         self.token = None
         self.user_data = None

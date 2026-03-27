@@ -5,13 +5,14 @@ import { compressImage } from "@/lib/compressImage";
 import { mobilePrintPdf } from "@/lib/mobilePrint";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { Package, Upload, Camera, Check, Eye, X, Printer, History } from "lucide-react";
+import { Package, Upload, Camera, Check, Eye, X, Printer, History, Search } from "lucide-react";
 
 function MultiSelect({ label, options, value, onChange, testId }) {
   return (
@@ -47,6 +48,7 @@ function MultiSelect({ label, options, value, onChange, testId }) {
 export default function PackagingDashboard() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [pkgSearch, setPkgSearch] = useState("");
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [showDetail, setShowDetail] = useState(false);
   const [itemPackedBy, setItemPackedBy] = useState([]);
@@ -207,7 +209,22 @@ export default function PackagingDashboard() {
               <Package className="w-12 h-12 mx-auto mb-3 opacity-30" />
               <p>No orders pending packaging</p>
             </div>
-          ) : (
+          ) : (() => {
+            const q = pkgSearch.toLowerCase();
+            const filtered = q ? orders.filter(o =>
+              o.order_number?.toLowerCase().includes(q) ||
+              o.customer_name?.toLowerCase().includes(q) ||
+              o.customer_phone?.some?.(p => p.includes(q)) ||
+              o.customer_gst_no?.toLowerCase().includes(q) ||
+              o.customer_alias?.toLowerCase().includes(q)
+            ) : orders;
+            return (
+            <>
+            <div className="mb-4 relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input placeholder="Search by order #, customer, phone, GST, alias..." className="pl-9 max-w-sm" value={pkgSearch} onChange={e => setPkgSearch(e.target.value)} data-testid="packaging-search" />
+            </div>
+            {filtered.length === 0 ? <p className="text-center py-8 text-muted-foreground">No results for "{pkgSearch}"</p> : (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -221,7 +238,7 @@ export default function PackagingDashboard() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {orders.map((order) => (
+                {filtered.map((order) => (
                   <TableRow key={order.id} data-testid={`pkg-order-${order.order_number}`}>
                     <TableCell className="font-mono font-medium text-sm">
                       <Link to={`/orders/${order.id}`} className="text-primary hover:underline" data-testid={`pkg-order-link-${order.order_number}`}>{order.order_number}</Link>
@@ -251,7 +268,9 @@ export default function PackagingDashboard() {
                 ))}
               </TableBody>
             </Table>
-          )}
+            )}
+            </>
+            ); })()}
         </CardContent>
       </Card>
 

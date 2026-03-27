@@ -796,11 +796,24 @@ async def list_orders(
 
     orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
+    # Enrich with customer phone/gst/alias for search
+    cust_ids = list(set(o.get("customer_id", "") for o in orders if o.get("customer_id")))
+    custs = {}
+    if cust_ids:
+        async for c in db.customers.find({"id": {"$in": cust_ids}}, {"_id": 0, "id": 1, "phone_numbers": 1, "gst_no": 1, "alias": 1}):
+            custs[c["id"]] = c
+
     # Get settings for formulation visibility
     settings = await db.settings.find_one({"_id": "global"})
     show_formulation_global = settings.get("show_formulation", False) if settings else False
 
     for o in orders:
+        # Enrich with customer details
+        c = custs.get(o.get("customer_id"), {})
+        o["customer_phone"] = c.get("phone_numbers", [])
+        o["customer_gst_no"] = c.get("gst_no", "")
+        o["customer_alias"] = c.get("alias", "")
+
         # Hide telecaller info for non-admin
         if user["role"] != "admin":
             if view_all:
@@ -2206,6 +2219,17 @@ async def list_pis(user=Depends(get_current_user)):
     if user["role"] == "telecaller":
         query["created_by"] = user["id"]
     pis = await db.proforma_invoices.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    # Enrich with customer details for search
+    cust_ids = list(set(p.get("customer_id", "") for p in pis if p.get("customer_id")))
+    custs = {}
+    if cust_ids:
+        async for c in db.customers.find({"id": {"$in": cust_ids}}, {"_id": 0, "id": 1, "phone_numbers": 1, "gst_no": 1, "alias": 1}):
+            custs[c["id"]] = c
+    for pi in pis:
+        c = custs.get(pi.get("customer_id"), {})
+        pi["customer_phone"] = c.get("phone_numbers", [])
+        pi["customer_gst"] = c.get("gst_no", "")
+        pi["customer_alias"] = c.get("alias", "")
     return pis
 
 @api_router.get("/proforma-invoices/{pi_id}")

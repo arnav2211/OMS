@@ -94,7 +94,7 @@ export default function OrderDetail() {
 
   const openFormulation = () => {
     setFormulationItems(order.items.map(i => ({
-      product_name: i.product_name, formulation: i.formulation || "",
+      product_name: i.product_name, description: i.description || "", formulation: i.formulation || "",
       qty: i.qty, unit: i.unit, amount: i.amount || 0, gst_applicable: order.gst_applicable,
     })));
     setFormulationFreeSamples((order.free_samples || []).map(s => ({
@@ -778,6 +778,7 @@ export default function OrderDetail() {
               <div key={i} className="space-y-1">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
                   <Label className="text-sm font-medium">{item.product_name}</Label>
+                  {item.description && <span className="text-xs text-muted-foreground">— {item.description}</span>}
                   <span className="text-xs text-muted-foreground">Qty: {item.qty} {item.unit}</span>
                   {item.amount > 0 && <span className="text-xs text-muted-foreground">Amt: {"\u20B9"}{item.amount}{item.gst_applicable ? " (excl. GST)" : ""}</span>}
                 </div>

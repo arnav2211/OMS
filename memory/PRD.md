@@ -82,6 +82,11 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - Telecaller: test_tc_payment / test123
 - Accounts: test_accounts / test123
 
+## Edit Formulation Enhancement (March 2026)
+- Item description now displayed alongside product name in Edit Formulation dialog
+- Format: "Product Name — Description  Qty: X unit  Amt: ₹Y"
+- Description shown only when available, hidden gracefully when empty
+
 ## Upcoming Tasks
 - **P1:** Pagination on all major data tables
 - **P2:** Refactor server.py into modular FastAPI routers
