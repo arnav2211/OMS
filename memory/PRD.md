@@ -122,6 +122,19 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - Item formulations, free sample formulations, item descriptions preserved during all updates
 - Packaging/dispatch/mark-packed endpoints don't touch items array
 
+## Packing Sheet, Print Address & Address Name Enhancements (March 2026)
+### Packing Sheet PDF
+- Now includes Purpose/Requirement, Free Samples with formulation text, and Extra Shipping Details
+- Ship To line shows address_name (recipient) instead of always using customer name
+### Print Address Labels
+- New dialog "Print Addresses — Set Copies" with quantity counter per selected order
+- Setting copies=2 duplicates that address label in the output PDF
+### Address Name (Recipient)
+- New `address_name` field on all addresses (Customers, Create Order, Edit Order, Create PI)
+- Defaults to customer name if left blank
+- Used as recipient name in printed address labels and packing slip Ship To line
+- Editable per address — supports cases like "Stores Department" instead of company name
+
 ## Upcoming Tasks
 - **P1:** Pagination on all major data tables
 - **P2:** Refactor server.py into modular FastAPI routers
