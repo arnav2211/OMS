@@ -135,6 +135,12 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - Used as recipient name in printed address labels and packing slip Ship To line
 - Editable per address — supports cases like "Stores Department" instead of company name
 
+### Address Editing in All Forms (March 2026)
+- Edit button (pencil icon) added to selected address and address picker list in Create Order, Edit Order, Create PI, and Edit PI
+- Clicking edit opens the address form pre-filled with current data
+- Supports editing all fields including Address Name (recipient)
+- After edit, the selected address is automatically updated in the form
+
 ## Upcoming Tasks
 - **P1:** Pagination on all major data tables
 - **P2:** Refactor server.py into modular FastAPI routers

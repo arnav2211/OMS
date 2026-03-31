@@ -45,7 +45,7 @@ function normalizePhone(phone) {
   return cleaned;
 }
 
-function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNew }) {
+function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNew, onEdit }) {
   const [addresses, setAddresses] = useState([]);
   const [showPicker, setShowPicker] = useState(false);
 
@@ -65,7 +65,10 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
             {selectedAddress.address_name && <span className="text-xs font-medium mr-2">{selectedAddress.address_name} –</span>}
             <span>{selectedAddress.address_line}, {selectedAddress.city}, {selectedAddress.state} - {selectedAddress.pincode}</span>
           </div>
-          <Button variant="outline" size="sm" onClick={() => setShowPicker(true)} data-testid={`change-${label.toLowerCase().replace(/\s/g, '-')}`}>Change</Button>
+          <div className="flex gap-1 shrink-0">
+            {onEdit && <Button variant="ghost" size="sm" onClick={() => onEdit(selectedAddress)} data-testid={`edit-${label.toLowerCase().replace(/\s/g, '-')}`}><Edit className="w-3.5 h-3.5" /></Button>}
+            <Button variant="outline" size="sm" onClick={() => setShowPicker(true)} data-testid={`change-${label.toLowerCase().replace(/\s/g, '-')}`}>Change</Button>
+          </div>
         </div>
       ) : (
         <Button variant="outline" className="w-full justify-start text-muted-foreground" onClick={() => setShowPicker(true)} data-testid={`select-${label.toLowerCase().replace(/\s/g, '-')}`}>
@@ -80,12 +83,16 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
               <p className="text-sm text-muted-foreground py-4 text-center">No saved addresses. Add one below.</p>
             ) : (
               addresses.map(a => (
-                <button key={a.id} className="w-full text-left p-3 rounded-lg border hover:bg-accent transition-colors" onClick={() => { onSelect(a); setShowPicker(false); }}
-                  data-testid={`addr-pick-${a.id}`}>
-                  {a.label && <span className="text-xs font-medium text-primary mr-2">[{a.label}]</span>}
-                  {a.address_name && <span className="text-xs font-medium mr-1">{a.address_name} –</span>}
-                  <span className="text-sm">{a.address_line}, {a.city}, {a.state} - {a.pincode}</span>
-                </button>
+                <div key={a.id} className="flex items-center justify-between p-3 rounded-lg border hover:bg-accent transition-colors">
+                  <button className="flex-1 text-left" onClick={() => { onSelect(a); setShowPicker(false); }}
+                    data-testid={`addr-pick-${a.id}`}>
+                    {a.label && <span className="text-xs font-medium text-primary mr-2">[{a.label}]</span>}
+                    {a.address_name && <span className="text-xs font-medium mr-1">{a.address_name} –</span>}
+                    <span className="text-sm">{a.address_line}, {a.city}, {a.state} - {a.pincode}</span>
+                  </button>
+                  {onEdit && <Button variant="ghost" size="sm" className="shrink-0 ml-2" onClick={(e) => { e.stopPropagation(); setShowPicker(false); onEdit(a); }}
+                    data-testid={`addr-edit-${a.id}`}><Edit className="w-3.5 h-3.5" /></Button>}
+                </div>
               ))
             )}
           </div>
@@ -136,6 +143,7 @@ export default function CreateOrder() {
   const [showAddAddress, setShowAddAddress] = useState(false);
   const [addressTarget, setAddressTarget] = useState("billing"); // "billing" or "shipping"
   const [newAddr, setNewAddr] = useState(emptyAddress());
+  const [editingAddrId, setEditingAddrId] = useState(null);
   const [pincodeLoading, setPincodeLoading] = useState(false);
   const [extraShippingDetails, setExtraShippingDetails] = useState("");
   const [showEditCustomer, setShowEditCustomer] = useState(false);
@@ -301,17 +309,36 @@ export default function CreateOrder() {
     if (!INDIAN_STATES.includes(newAddr.state)) return toast.error("Please select a valid State/UT from the dropdown");
 
     try {
-      const res = await api.post(`/customers/${selectedCustomer.id}/addresses`, newAddr);
-      if (addressTarget === "billing") {
-        setBillingAddress(res.data);
-        if (sameAsBilling) setShippingAddress(res.data);
+      let res;
+      if (editingAddrId) {
+        res = await api.put(`/customers/${selectedCustomer.id}/addresses/${editingAddrId}`, newAddr);
+        // Update selected addresses if this was the one being edited
+        if (billingAddress?.id === editingAddrId) {
+          setBillingAddress(res.data);
+          if (sameAsBilling) setShippingAddress(res.data);
+        }
+        if (shippingAddress?.id === editingAddrId) setShippingAddress(res.data);
+        toast.success("Address updated");
       } else {
-        setShippingAddress(res.data);
+        res = await api.post(`/customers/${selectedCustomer.id}/addresses`, newAddr);
+        if (addressTarget === "billing") {
+          setBillingAddress(res.data);
+          if (sameAsBilling) setShippingAddress(res.data);
+        } else {
+          setShippingAddress(res.data);
+        }
+        toast.success("Address saved");
       }
       setShowAddAddress(false);
       setNewAddr(emptyAddress());
-      toast.success("Address saved");
+      setEditingAddrId(null);
     } catch (err) { toast.error(err.response?.data?.detail || "Failed to save address"); }
+  };
+
+  const openEditAddress = (addr) => {
+    setEditingAddrId(addr.id);
+    setNewAddr({ address_line: addr.address_line, city: addr.city, state: addr.state, pincode: addr.pincode, label: addr.label || "", address_name: addr.address_name || "" });
+    setShowAddAddress(true);
   };
 
   const createCustomer = async () => {
@@ -466,7 +493,8 @@ export default function CreateOrder() {
           <CardContent className="space-y-4">
             <AddressSelector customerId={selectedCustomer.id} label="Billing Address" selectedAddress={billingAddress}
               onSelect={(a) => { setBillingAddress(a); if (sameAsBilling) setShippingAddress(a); }}
-              onAddNew={() => { setAddressTarget("billing"); setNewAddr(emptyAddress()); setShowAddAddress(true); }} />
+              onAddNew={() => { setAddressTarget("billing"); setEditingAddrId(null); setNewAddr(emptyAddress()); setShowAddAddress(true); }}
+              onEdit={openEditAddress} />
             <div className="flex items-center gap-2">
               <Checkbox id="sameAddr" checked={sameAsBilling} onCheckedChange={(v) => { setSameAsBilling(v); if (v) setShippingAddress(billingAddress); }}
                 data-testid="same-as-billing-checkbox" />
@@ -475,7 +503,8 @@ export default function CreateOrder() {
             {!sameAsBilling && (
               <AddressSelector customerId={selectedCustomer.id} label="Shipping Address" selectedAddress={shippingAddress}
                 onSelect={(a) => setShippingAddress(a)}
-                onAddNew={() => { setAddressTarget("shipping"); setNewAddr(emptyAddress()); setShowAddAddress(true); }} />
+                onAddNew={() => { setAddressTarget("shipping"); setEditingAddrId(null); setNewAddr(emptyAddress()); setShowAddAddress(true); }}
+                onEdit={openEditAddress} />
             )}
           </CardContent>
         </Card>
@@ -798,7 +827,7 @@ export default function CreateOrder() {
       {/* Add Address Dialog */}
       <Dialog open={showAddAddress} onOpenChange={setShowAddAddress}>
         <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Add New Address</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingAddrId ? "Edit Address" : "Add New Address"}</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Label (e.g. Office, Warehouse)</Label><Input value={newAddr.label} onChange={e => setNewAddr({ ...newAddr, label: e.target.value })} data-testid="addr-label" /></div>
             <div><Label>Address Name (Recipient)</Label><Input value={newAddr.address_name} onChange={e => setNewAddr({ ...newAddr, address_name: e.target.value })} placeholder={selectedCustomer?.name || "Defaults to customer name"} data-testid="addr-name" /></div>
