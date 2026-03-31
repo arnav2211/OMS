@@ -32,7 +32,7 @@ const emptyAddress = () => ({ address_line: "", city: "", state: "", pincode: ""
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 
-function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNew }) {
+function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNew, onEdit }) {
   const [addresses, setAddresses] = useState([]);
   const [showPicker, setShowPicker] = useState(false);
   useEffect(() => {
@@ -44,7 +44,10 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
       {selectedAddress ? (
         <div className="flex items-start justify-between p-3 rounded-lg bg-secondary text-sm">
           <span>{selectedAddress.label ? `[${selectedAddress.label}] ` : ""}{selectedAddress.address_name ? `${selectedAddress.address_name} – ` : ""}{selectedAddress.address_line}, {selectedAddress.city}, {selectedAddress.state} - {selectedAddress.pincode}</span>
-          <Button variant="outline" size="sm" onClick={() => setShowPicker(true)}>Change</Button>
+          <div className="flex gap-1 shrink-0">
+            {onEdit && <Button variant="ghost" size="sm" onClick={() => onEdit(selectedAddress)}><Edit className="w-3.5 h-3.5" /></Button>}
+            <Button variant="outline" size="sm" onClick={() => setShowPicker(true)}>Change</Button>
+          </div>
         </div>
       ) : (
         <Button variant="outline" className="w-full justify-start text-muted-foreground" onClick={() => setShowPicker(true)}>
@@ -57,10 +60,13 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
           <div className="space-y-2 max-h-60 overflow-y-auto">
             {addresses.length === 0 ? <p className="text-sm text-muted-foreground py-4 text-center">No saved addresses.</p> :
               addresses.map(a => (
-                <button key={a.id} className="w-full text-left p-3 rounded-lg border hover:bg-accent transition-colors" onClick={() => { onSelect(a); setShowPicker(false); }}>
-                  {a.label && <span className="text-xs font-medium text-primary mr-2">[{a.label}]</span>}
-                  <span className="text-sm">{a.address_name ? `${a.address_name} – ` : ""}{a.address_line}, {a.city}, {a.state} - {a.pincode}</span>
-                </button>
+                <div key={a.id} className="flex items-center justify-between p-3 rounded-lg border hover:bg-accent transition-colors">
+                  <button className="flex-1 text-left" onClick={() => { onSelect(a); setShowPicker(false); }}>
+                    {a.label && <span className="text-xs font-medium text-primary mr-2">[{a.label}]</span>}
+                    <span className="text-sm">{a.address_name ? `${a.address_name} – ` : ""}{a.address_line}, {a.city}, {a.state} - {a.pincode}</span>
+                  </button>
+                  {onEdit && <Button variant="ghost" size="sm" className="shrink-0 ml-2" onClick={(e) => { e.stopPropagation(); setShowPicker(false); onEdit(a); }}><Edit className="w-3.5 h-3.5" /></Button>}
+                </div>
               ))}
           </div>
           <DialogFooter>
@@ -414,6 +420,7 @@ export default function EditOrder() {
   const [sameAsBilling, setSameAsBilling] = useState(true);
   const [showAddAddress, setShowAddAddress] = useState(false);
   const [addressTarget, setAddressTarget] = useState("billing");
+  const [editingAddrId, setEditingAddrId] = useState(null);
   const [newAddr, setNewAddr] = useState(emptyAddress());
   const [pincodeLoading, setPincodeLoading] = useState(false);
   const [stateSearch, setStateSearch] = useState("");
@@ -501,11 +508,26 @@ export default function EditOrder() {
     if (!/^\d{6}$/.test(newAddr.pincode)) return toast.error("Pincode must be 6 digits");
     if (!INDIAN_STATES.includes(newAddr.state)) return toast.error("Please select a valid State/UT from the dropdown");
     try {
-      const res = await api.post(`/customers/${order.customer_id}/addresses`, newAddr);
-      if (addressTarget === "billing") { setBillingAddress(res.data); if (sameAsBilling) setShippingAddress(res.data); }
-      else setShippingAddress(res.data);
-      setShowAddAddress(false); setNewAddr(emptyAddress()); toast.success("Address saved");
+      let res;
+      if (editingAddrId) {
+        res = await api.put(`/customers/${order.customer_id}/addresses/${editingAddrId}`, newAddr);
+        if (billingAddress?.id === editingAddrId) { setBillingAddress(res.data); if (sameAsBilling) setShippingAddress(res.data); }
+        if (shippingAddress?.id === editingAddrId) setShippingAddress(res.data);
+        toast.success("Address updated");
+      } else {
+        res = await api.post(`/customers/${order.customer_id}/addresses`, newAddr);
+        if (addressTarget === "billing") { setBillingAddress(res.data); if (sameAsBilling) setShippingAddress(res.data); }
+        else setShippingAddress(res.data);
+        toast.success("Address saved");
+      }
+      setShowAddAddress(false); setNewAddr(emptyAddress()); setEditingAddrId(null);
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+  };
+
+  const openEditAddress = (addr) => {
+    setEditingAddrId(addr.id);
+    setNewAddr({ address_line: addr.address_line, city: addr.city, state: addr.state, pincode: addr.pincode, label: addr.label || "", address_name: addr.address_name || "" });
+    setShowAddAddress(true);
   };
 
   const handleScreenshotUpload = async (e) => {
@@ -725,7 +747,8 @@ export default function EditOrder() {
             <CardContent className="space-y-4">
               <AddressSelector customerId={order.customer_id} label="Billing Address" selectedAddress={billingAddress}
                 onSelect={a => { setBillingAddress(a); if (sameAsBilling) setShippingAddress(a); }}
-                onAddNew={() => { setAddressTarget("billing"); setNewAddr(emptyAddress()); setShowAddAddress(true); }} />
+                onAddNew={() => { setAddressTarget("billing"); setEditingAddrId(null); setNewAddr(emptyAddress()); setShowAddAddress(true); }}
+                onEdit={openEditAddress} />
               <div className="flex items-center gap-2">
                 <Checkbox id="editSameAddr" checked={sameAsBilling} onCheckedChange={v => { setSameAsBilling(v); if (v) setShippingAddress(billingAddress); }} />
                 <Label htmlFor="editSameAddr" className="cursor-pointer text-sm">Shipping same as Billing</Label>
@@ -733,7 +756,8 @@ export default function EditOrder() {
               {!sameAsBilling && (
                 <AddressSelector customerId={order.customer_id} label="Shipping Address" selectedAddress={shippingAddress}
                   onSelect={a => setShippingAddress(a)}
-                  onAddNew={() => { setAddressTarget("shipping"); setNewAddr(emptyAddress()); setShowAddAddress(true); }} />
+                  onAddNew={() => { setAddressTarget("shipping"); setEditingAddrId(null); setNewAddr(emptyAddress()); setShowAddAddress(true); }}
+                  onEdit={openEditAddress} />
               )}
             </CardContent>
           </Card>
@@ -985,7 +1009,7 @@ export default function EditOrder() {
       {/* Add Address Dialog */}
       <Dialog open={showAddAddress} onOpenChange={setShowAddAddress}>
         <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Add New Address</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingAddrId ? "Edit Address" : "Add New Address"}</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Label</Label><Input value={newAddr.label} onChange={e => setNewAddr({ ...newAddr, label: e.target.value })} /></div>
             <div><Label>Address Name (Recipient)</Label><Input value={newAddr.address_name} onChange={e => setNewAddr({ ...newAddr, address_name: e.target.value })} placeholder={order?.customer_name || "Defaults to customer name"} /></div>

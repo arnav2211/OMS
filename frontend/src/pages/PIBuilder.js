@@ -26,7 +26,7 @@ const emptyItem = () => ({ product_name: "", qty: 0, unit: "", rate: 0, amount: 
 const emptyAddress = () => ({ address_line: "", city: "", state: "", pincode: "", label: "", address_name: "" });
 const emptySample = () => ({ item_name: "", description: "" });
 
-function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNew }) {
+function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNew, onEdit }) {
   const [addresses, setAddresses] = useState([]);
   const [showPicker, setShowPicker] = useState(false);
   useEffect(() => {
@@ -41,7 +41,10 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
             {selectedAddress.label && <span className="text-xs font-medium text-primary mr-2">[{selectedAddress.label}]</span>}
             <span>{selectedAddress.address_name ? `${selectedAddress.address_name} – ` : ""}{selectedAddress.address_line}, {selectedAddress.city}, {selectedAddress.state} - {selectedAddress.pincode}</span>
           </div>
-          <Button variant="outline" size="sm" onClick={() => setShowPicker(true)}>Change</Button>
+          <div className="flex gap-1 shrink-0">
+            {onEdit && <Button variant="ghost" size="sm" onClick={() => onEdit(selectedAddress)}><Edit className="w-3.5 h-3.5" /></Button>}
+            <Button variant="outline" size="sm" onClick={() => setShowPicker(true)}>Change</Button>
+          </div>
         </div>
       ) : (
         <Button variant="outline" className="w-full justify-start text-muted-foreground" onClick={() => setShowPicker(true)} data-testid={`pi-select-${label.toLowerCase().replace(/\s/g, '-')}`}>
@@ -54,10 +57,13 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
           <div className="space-y-2 max-h-60 overflow-y-auto">
             {addresses.length === 0 ? <p className="text-sm text-muted-foreground py-4 text-center">No saved addresses.</p> :
               addresses.map(a => (
-                <button key={a.id} className="w-full text-left p-3 rounded-lg border hover:bg-accent transition-colors" onClick={() => { onSelect(a); setShowPicker(false); }}>
-                  {a.label && <span className="text-xs font-medium text-primary mr-2">[{a.label}]</span>}
-                  <span className="text-sm">{a.address_name ? `${a.address_name} – ` : ""}{a.address_line}, {a.city}, {a.state} - {a.pincode}</span>
-                </button>
+                <div key={a.id} className="flex items-center justify-between p-3 rounded-lg border hover:bg-accent transition-colors">
+                  <button className="flex-1 text-left" onClick={() => { onSelect(a); setShowPicker(false); }}>
+                    {a.label && <span className="text-xs font-medium text-primary mr-2">[{a.label}]</span>}
+                    <span className="text-sm">{a.address_name ? `${a.address_name} – ` : ""}{a.address_line}, {a.city}, {a.state} - {a.pincode}</span>
+                  </button>
+                  {onEdit && <Button variant="ghost" size="sm" className="shrink-0 ml-2" onClick={(e) => { e.stopPropagation(); setShowPicker(false); onEdit(a); }}><Edit className="w-3.5 h-3.5" /></Button>}
+                </div>
               ))
             }
           </div>
@@ -93,6 +99,7 @@ export default function PIBuilder() {
   const [sameAsBilling, setSameAsBilling] = useState(true);
   const [showAddAddress, setShowAddAddress] = useState(false);
   const [addressTarget, setAddressTarget] = useState("billing");
+  const [editingAddrId, setEditingAddrId] = useState(null);
   const [newAddr, setNewAddr] = useState(emptyAddress());
   const [pincodeLoading, setPincodeLoading] = useState(false);
   const [stateSearch, setStateSearch] = useState("");
@@ -195,11 +202,26 @@ export default function PIBuilder() {
     if (!/^\d{6}$/.test(newAddr.pincode)) return toast.error("Pincode must be 6 digits");
     if (!INDIAN_STATES.includes(newAddr.state)) return toast.error("Please select a valid State/UT from the dropdown");
     try {
-      const res = await api.post(`/customers/${selectedCustomer.id}/addresses`, newAddr);
-      if (addressTarget === "billing") { setBillingAddress(res.data); if (sameAsBilling) setShippingAddress(res.data); }
-      else setShippingAddress(res.data);
-      setShowAddAddress(false); setNewAddr(emptyAddress()); toast.success("Address saved");
+      let res;
+      if (editingAddrId) {
+        res = await api.put(`/customers/${selectedCustomer.id}/addresses/${editingAddrId}`, newAddr);
+        if (billingAddress?.id === editingAddrId) { setBillingAddress(res.data); if (sameAsBilling) setShippingAddress(res.data); }
+        if (shippingAddress?.id === editingAddrId) setShippingAddress(res.data);
+        toast.success("Address updated");
+      } else {
+        res = await api.post(`/customers/${selectedCustomer.id}/addresses`, newAddr);
+        if (addressTarget === "billing") { setBillingAddress(res.data); if (sameAsBilling) setShippingAddress(res.data); }
+        else setShippingAddress(res.data);
+        toast.success("Address saved");
+      }
+      setShowAddAddress(false); setNewAddr(emptyAddress()); setEditingAddrId(null);
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+  };
+
+  const openEditAddress = (addr) => {
+    setEditingAddrId(addr.id);
+    setNewAddr({ address_line: addr.address_line, city: addr.city, state: addr.state, pincode: addr.pincode, label: addr.label || "", address_name: addr.address_name || "" });
+    setShowAddAddress(true);
   };
 
   const openNewPI = () => {
@@ -450,7 +472,8 @@ export default function PIBuilder() {
               <CardContent className="space-y-4">
                 <AddressSelector customerId={selectedCustomer.id} label="Billing Address" selectedAddress={billingAddress}
                   onSelect={(a) => { setBillingAddress(a); if (sameAsBilling) setShippingAddress(a); }}
-                  onAddNew={() => { setAddressTarget("billing"); setNewAddr(emptyAddress()); setShowAddAddress(true); }} />
+                  onAddNew={() => { setAddressTarget("billing"); setEditingAddrId(null); setNewAddr(emptyAddress()); setShowAddAddress(true); }}
+                  onEdit={openEditAddress} />
                 <div className="flex items-center gap-2">
                   <Checkbox id="piSameAddr" checked={sameAsBilling} onCheckedChange={(v) => { setSameAsBilling(v); if (v) setShippingAddress(billingAddress); }} />
                   <Label htmlFor="piSameAddr" className="cursor-pointer text-sm">Shipping same as Billing</Label>
@@ -458,7 +481,8 @@ export default function PIBuilder() {
                 {!sameAsBilling && (
                   <AddressSelector customerId={selectedCustomer.id} label="Shipping Address" selectedAddress={shippingAddress}
                     onSelect={(a) => setShippingAddress(a)}
-                    onAddNew={() => { setAddressTarget("shipping"); setNewAddr(emptyAddress()); setShowAddAddress(true); }} />
+                    onAddNew={() => { setAddressTarget("shipping"); setEditingAddrId(null); setNewAddr(emptyAddress()); setShowAddAddress(true); }}
+                    onEdit={openEditAddress} />
                 )}
               </CardContent>
             </Card>
@@ -652,7 +676,7 @@ export default function PIBuilder() {
       {/* Add Address Dialog */}
       <Dialog open={showAddAddress} onOpenChange={setShowAddAddress}>
         <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Add New Address</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingAddrId ? "Edit Address" : "Add New Address"}</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Label</Label><Input value={newAddr.label} onChange={e => setNewAddr({ ...newAddr, label: e.target.value })} placeholder="e.g. Office" /></div>
             <div><Label>Address Name (Recipient)</Label><Input value={newAddr.address_name} onChange={e => setNewAddr({ ...newAddr, address_name: e.target.value })} placeholder={selectedCustomer?.name || "Defaults to customer name"} /></div>
