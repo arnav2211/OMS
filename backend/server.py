@@ -1612,7 +1612,7 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
                 customer = customers.get(order.get("customer_id", ""))
                 row.append(make_address_cell(order, customer))
             else:
-                row.append(Paragraph("", addr_normal))  # or addr_style if that's your actual style
+                row.append(Paragraph("", addr_style))  # or addr_style if that's your actual style
 
         row_data.append(row)
 
