@@ -119,6 +119,7 @@ class AddressCreate(BaseModel):
     state: str
     pincode: str
     label: str = ""
+    address_name: str = ""
 
 class CustomerCreate(BaseModel):
     name: str
@@ -553,6 +554,7 @@ async def create_address(customer_id: str, req: AddressCreate, user=Depends(get_
         "state": req.state.strip(),
         "pincode": req.pincode.strip(),
         "label": req.label.strip(),
+        "address_name": req.address_name.strip() if req.address_name else customer.get("name", ""),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.addresses.insert_one(doc)
@@ -569,6 +571,7 @@ async def update_address(customer_id: str, address_id: str, req: AddressCreate, 
         "state": req.state.strip(),
         "pincode": req.pincode.strip(),
         "label": req.label.strip(),
+        "address_name": req.address_name.strip() if req.address_name else "",
     }
     result = await db.addresses.update_one({"id": address_id, "customer_id": customer_id}, {"$set": update_data})
     if result.matched_count == 0:
@@ -1495,6 +1498,7 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
     if user["role"] not in ["admin", "packaging"]:
         raise HTTPException(status_code=403, detail="Admin or packaging only")
     order_ids = body.get("order_ids", [])
+    quantities = body.get("quantities", {})  # {order_id: count}
     if not order_ids:
         raise HTTPException(status_code=400, detail="No orders selected")
 
@@ -1515,13 +1519,11 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
     styles = getSampleStyleSheet()
 
     addr_normal = ParagraphStyle('AddrN', parent=styles['Normal'], fontSize=10, leading=15, fontName='Helvetica')
-    addr_bold = ParagraphStyle('AddrB', parent=styles['Normal'], fontSize=11, leading=16, fontName='Helvetica-Bold')
-    addr_to = ParagraphStyle('AddrTo', parent=styles['Normal'], fontSize=10, leading=14, fontName='Helvetica', textColor=colors.HexColor('#666666'))
-    addr_mob = ParagraphStyle('AddrMob', parent=styles['Normal'], fontSize=10, leading=14, fontName='Helvetica-Bold')
 
     def make_address_cell(order, customer):
-        name = order.get("customer_name", "Unknown")
         sa = order.get("shipping_address") or {}
+        # Use address_name if set, otherwise customer name
+        name = sa.get("address_name") or order.get("customer_name", "Unknown")
         phones = customer.get("phone_numbers", []) if customer else []
 
         lines = [f"<b>To</b>", f"<b>{name}</b>", ""]
@@ -1547,10 +1549,17 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
     pw = A4[0] - 24*mm
     col_w = (pw - 8*mm) / 2
 
+    # Build expanded list with quantities
+    expanded_orders = []
+    for o in orders:
+        qty = max(1, int(quantities.get(o["id"], 1)))
+        for _ in range(qty):
+            expanded_orders.append(o)
+
     row_data = []
-    for i in range(0, len(orders), 2):
-        left = make_address_cell(orders[i], customers.get(orders[i].get("customer_id", "")))
-        right = make_address_cell(orders[i + 1], customers.get(orders[i + 1].get("customer_id", ""))) if i + 1 < len(orders) else Paragraph("", addr_normal)
+    for i in range(0, len(expanded_orders), 2):
+        left = make_address_cell(expanded_orders[i], customers.get(expanded_orders[i].get("customer_id", "")))
+        right = make_address_cell(expanded_orders[i + 1], customers.get(expanded_orders[i + 1].get("customer_id", ""))) if i + 1 < len(expanded_orders) else Paragraph("", addr_normal)
         row_data.append([left, right])
 
     table = Table(row_data, colWidths=[col_w, col_w], spaceBefore=2*mm, spaceAfter=2*mm)
@@ -2185,7 +2194,8 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
             cust_lines.append(f"<font color='#6B7280'>Ph:</font> {', '.join(customer['phone_numbers'])}")
         sa = order.get("shipping_address")
         if sa and sa.get("address_line"):
-            cust_lines.append(f"<font color='#6B7280'>Ship To:</font> {sa['address_line']}, {sa.get('city','')}, {sa.get('state','')} – {sa.get('pincode','')}")
+            ship_name = sa.get("address_name") or customer.get("name", "")
+            cust_lines.append(f"<font color='#6B7280'>Ship To:</font> <b>{ship_name}</b> – {sa['address_line']}, {sa.get('city','')}, {sa.get('state','')} – {sa.get('pincode','')}")
         if customer.get("gst_no"):
             cust_lines.append(f"<font color='#6B7280'>GSTIN:</font> {customer['gst_no']}")
         cust_p = Paragraph("<br/>".join(cust_lines), ParagraphStyle('Cust', parent=styles['Normal'], fontSize=8.5, leading=12))
@@ -2269,6 +2279,9 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
 
     # ── 7. PAYMENT / SAMPLES / DISPATCH / REMARKS ──
     extras = []
+    # Purpose / Requirement
+    if order.get("purpose"):
+        extras.append(f"<b>Purpose / Requirement:</b> {order['purpose']}")
     if order.get("mode_of_payment"):
         mop = f"<b>Mode of Payment:</b> {order['mode_of_payment']}"
         if order.get("payment_mode_details"):
@@ -2279,7 +2292,10 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
         for s in order["free_samples"]:
             t = s.get("item_name", "")
             if s.get("description"): t += f" – {s['description']}"
+            if s.get("formulation"): t += f"  |  <i>Formulation: {s['formulation']}</i>"
             extras.append(f"  · {t}")
+    if order.get("extra_shipping_details"):
+        extras.append(f"<b>Extra Shipping Details:</b> {order['extra_shipping_details']}")
     if order.get("shipping_method"):
         dispatch_parts = [f"<b>Dispatch:</b> {order['shipping_method'].replace('_',' ').title()}"]
         if order.get("courier_name"):    dispatch_parts.append(f"Courier: {order['courier_name']}")

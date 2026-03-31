@@ -28,7 +28,7 @@ const GST_RATES = [0, 5, 18];
 const PAYMENT_MODES = ["Cash", "Online", "Other"];
 const emptyItem = () => ({ product_name: "", qty: 0, unit: "", rate: 0, amount: 0, gst_rate: 0, gst_amount: 0, total: 0, description: "" });
 const emptySample = () => ({ item_name: "", description: "" });
-const emptyAddress = () => ({ address_line: "", city: "", state: "", pincode: "", label: "" });
+const emptyAddress = () => ({ address_line: "", city: "", state: "", pincode: "", label: "", address_name: "" });
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 
@@ -43,7 +43,7 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
       <Label className="text-sm font-medium">{label}</Label>
       {selectedAddress ? (
         <div className="flex items-start justify-between p-3 rounded-lg bg-secondary text-sm">
-          <span>{selectedAddress.label ? `[${selectedAddress.label}] ` : ""}{selectedAddress.address_line}, {selectedAddress.city}, {selectedAddress.state} - {selectedAddress.pincode}</span>
+          <span>{selectedAddress.label ? `[${selectedAddress.label}] ` : ""}{selectedAddress.address_name ? `${selectedAddress.address_name} – ` : ""}{selectedAddress.address_line}, {selectedAddress.city}, {selectedAddress.state} - {selectedAddress.pincode}</span>
           <Button variant="outline" size="sm" onClick={() => setShowPicker(true)}>Change</Button>
         </div>
       ) : (
@@ -59,7 +59,7 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
               addresses.map(a => (
                 <button key={a.id} className="w-full text-left p-3 rounded-lg border hover:bg-accent transition-colors" onClick={() => { onSelect(a); setShowPicker(false); }}>
                   {a.label && <span className="text-xs font-medium text-primary mr-2">[{a.label}]</span>}
-                  <span className="text-sm">{a.address_line}, {a.city}, {a.state} - {a.pincode}</span>
+                  <span className="text-sm">{a.address_name ? `${a.address_name} – ` : ""}{a.address_line}, {a.city}, {a.state} - {a.pincode}</span>
                 </button>
               ))}
           </div>
@@ -988,6 +988,7 @@ export default function EditOrder() {
           <DialogHeader><DialogTitle>Add New Address</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Label</Label><Input value={newAddr.label} onChange={e => setNewAddr({ ...newAddr, label: e.target.value })} /></div>
+            <div><Label>Address Name (Recipient)</Label><Input value={newAddr.address_name} onChange={e => setNewAddr({ ...newAddr, address_name: e.target.value })} placeholder={order?.customer_name || "Defaults to customer name"} /></div>
             <div><Label>Address Line *</Label><Input value={newAddr.address_line} onChange={e => setNewAddr({ ...newAddr, address_line: e.target.value })} /></div>
             <div><Label>Pincode *</Label>
               <Input value={newAddr.pincode} onChange={e => {
