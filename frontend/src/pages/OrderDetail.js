@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2, Copy, ClipboardCopy, History, Upload } from "lucide-react";
+import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2, Copy, ClipboardCopy, History, Upload, Lock } from "lucide-react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import api from "@/lib/api";
 import { compressImage } from "@/lib/compressImage";
@@ -340,6 +340,7 @@ export default function OrderDetail() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={handlePrint} data-testid="print-order-btn"><Printer className="w-4 h-4 mr-1" /> Print</Button>
+          {order.formulation_locked && <Badge variant="outline" className="text-amber-600 border-amber-300 text-xs"><Lock className="w-3 h-3 mr-1" />Formulation Locked</Badge>}
           {(user?.role === "admin" || user?.role === "telecaller") && (
             <Button variant="outline" size="sm" onClick={() => navigate(`/create-order?duplicate=${id}`)} data-testid="duplicate-order-btn"><Copy className="w-4 h-4 mr-1" /> Duplicate</Button>
           )}

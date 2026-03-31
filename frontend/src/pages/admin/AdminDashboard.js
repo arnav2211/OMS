@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import {
   BarChart3, Users, Settings, ShoppingCart, IndianRupee, Package, TrendingUp,
-  Eye, EyeOff, UserPlus, UserX, Trash2, RefreshCw, ChevronDown, CheckCircle,
+  Eye, EyeOff, UserPlus, UserX, Trash2, RefreshCw, ChevronDown, CheckCircle, ShieldCheck,
 } from "lucide-react";
 
 const PERIOD_OPTIONS = [
@@ -85,10 +85,12 @@ export default function AdminDashboard() {
   const [paymentSalesDateFrom, setPaymentSalesDateFrom] = useState("");
   const [paymentSalesDateTo, setPaymentSalesDateTo] = useState("");
   const [paymentSalesExecId, setPaymentSalesExecId] = useState("");
+  const [editPermissions, setEditPermissions] = useState([]);
 
-  useEffect(() => { loadAnalytics(); loadRecentOrders(); loadUsers(); loadSettings(); loadPackagingStaff(); loadExecPerf(); }, []);
+  useEffect(() => { loadAnalytics(); loadRecentOrders(); loadUsers(); loadSettings(); loadPackagingStaff(); loadExecPerf(); loadEditPermissions(); }, []);
   useEffect(() => { loadAnalytics(); }, [period, dateFrom, dateTo, excludeGst, excludeShipping]);
   useEffect(() => { loadExecPerf(); }, [execPerfPeriod, execPerfDateFrom, execPerfDateTo]);
+  useEffect(() => { if (activeTab === "edit-requests") loadEditPermissions(); }, [activeTab]);
 
   const loadAnalytics = async () => {
     setAnalyticsLoading(true);
@@ -240,6 +242,21 @@ export default function AdminDashboard() {
 
   const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 
+  const loadEditPermissions = async () => {
+    try {
+      const res = await api.get("/edit-permissions");
+      setEditPermissions(res.data || []);
+    } catch { /* ignore */ }
+  };
+
+  const handleEditPermission = async (permId, action) => {
+    try {
+      await api.put(`/edit-permissions/${permId}`, { action });
+      toast.success(action === "approve" ? "Edit permission approved" : "Edit request rejected");
+      loadEditPermissions();
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+  };
+
   return (
     <div className="space-y-6" data-testid="admin-dashboard">
       <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Admin Dashboard</h1>
@@ -252,6 +269,7 @@ export default function AdminDashboard() {
             <TabsTrigger value="exec-reports" data-testid="tab-exec-reports" className="text-xs sm:text-sm whitespace-nowrap"><Users className="w-4 h-4 mr-1 hidden sm:inline" /> Exec Reports</TabsTrigger>
             <TabsTrigger value="payment-sales" data-testid="tab-payment-sales" className="text-xs sm:text-sm whitespace-nowrap"><CheckCircle className="w-4 h-4 mr-1 hidden sm:inline" /> Payments</TabsTrigger>
             <TabsTrigger value="users" data-testid="tab-users" className="text-xs sm:text-sm whitespace-nowrap"><Users className="w-4 h-4 mr-1 hidden sm:inline" /> Users</TabsTrigger>
+            <TabsTrigger value="edit-requests" data-testid="tab-edit-requests" className="text-xs sm:text-sm whitespace-nowrap"><ShieldCheck className="w-4 h-4 mr-1 hidden sm:inline" /> Edit Requests{editPermissions.filter(p => p.status === "pending").length > 0 && <span className="ml-1 bg-red-500 text-white text-xs rounded-full px-1.5">{editPermissions.filter(p => p.status === "pending").length}</span>}</TabsTrigger>
             <TabsTrigger value="settings" data-testid="tab-settings" className="text-xs sm:text-sm whitespace-nowrap"><Settings className="w-4 h-4 mr-1 hidden sm:inline" /> Settings</TabsTrigger>
           </TabsList>
         </div>
@@ -614,6 +632,65 @@ export default function AdminDashboard() {
                   ))}
                 </TableBody>
               </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+
+        {/* Edit Requests Tab */}
+        <TabsContent value="edit-requests" className="space-y-4" data-testid="edit-requests-tab">
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Formulation Lock — Edit Requests</CardTitle>
+                <Button variant="outline" size="sm" onClick={loadEditPermissions}><RefreshCw className="w-3 h-3 mr-1" /> Refresh</Button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Orders with formulations are locked. Non-admin users must request permission to edit them.</p>
+            </CardHeader>
+            <CardContent>
+              {editPermissions.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">No edit requests</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="text-xs">Order</TableHead>
+                      <TableHead className="text-xs">Customer</TableHead>
+                      <TableHead className="text-xs">Requested By</TableHead>
+                      <TableHead className="text-xs">Reason</TableHead>
+                      <TableHead className="text-xs">Date</TableHead>
+                      <TableHead className="text-xs">Status</TableHead>
+                      <TableHead className="text-xs">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {editPermissions.map(p => (
+                      <TableRow key={p.id}>
+                        <TableCell className="text-sm font-medium"><Link to={`/orders/${p.order_id}`} className="text-primary underline">{p.order_number}</Link></TableCell>
+                        <TableCell className="text-sm">{p.customer_name}</TableCell>
+                        <TableCell className="text-sm">{p.requested_by} <Badge variant="outline" className="text-xs ml-1">{p.requested_by_role}</Badge></TableCell>
+                        <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">{p.reason || "—"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{new Date(p.created_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</TableCell>
+                        <TableCell>
+                          <Badge variant={p.status === "pending" ? "default" : p.status === "approved" ? "secondary" : "destructive"} className="text-xs">
+                            {p.status === "used" ? "Used" : p.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {p.status === "pending" ? (
+                            <div className="flex gap-1">
+                              <Button size="sm" variant="default" className="h-7 text-xs" onClick={() => handleEditPermission(p.id, "approve")} data-testid={`approve-perm-${p.id}`}>Approve</Button>
+                              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleEditPermission(p.id, "reject")} data-testid={`reject-perm-${p.id}`}>Reject</Button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">{p.handled_by ? `by ${p.handled_by}` : "—"}</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

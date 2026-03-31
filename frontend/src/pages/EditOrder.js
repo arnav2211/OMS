@@ -13,7 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Plus, Trash2, MapPin, ArrowLeft, Upload, X, Edit } from "lucide-react";
+import { Plus, Trash2, MapPin, ArrowLeft, Upload, X, Edit, Lock, ShieldAlert } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { INDIAN_STATES } from "@/lib/indianStates";
 
@@ -421,6 +421,10 @@ export default function EditOrder() {
   const [extraShippingDetails, setExtraShippingDetails] = useState("");
   const [showEditCustomer, setShowEditCustomer] = useState(false);
   const [editCustData, setEditCustData] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
+  const [formulationLocked, setFormulationLocked] = useState(false);
+  const [hasEditPermission, setHasEditPermission] = useState(false);
+  const [editRequestSent, setEditRequestSent] = useState(false);
+  const [editRequestReason, setEditRequestReason] = useState("");
 
   useEffect(() => { loadOrder(); }, [orderId]);
 
@@ -449,6 +453,9 @@ export default function EditOrder() {
       setSameAsBilling(!o.shipping_address_id || o.billing_address_id === o.shipping_address_id);
       setPaymentScreenshots(o.payment_screenshots || []);
       setExtraShippingDetails(o.extra_shipping_details || "");
+      // Check formulation lock status
+      setFormulationLocked(o.formulation_locked || false);
+      setHasEditPermission(o.has_edit_permission || false);
     } catch {
       toast.error("Order not found");
       navigate(-1);
@@ -540,6 +547,14 @@ export default function EditOrder() {
     } catch (err) { toast.error(err.response?.data?.detail || "Failed to update"); }
   };
 
+  const requestEditPermission = async () => {
+    try {
+      await api.post(`/orders/${orderId}/request-edit`, { reason: editRequestReason });
+      setEditRequestSent(true);
+      toast.success("Edit permission request sent to Admin");
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed to send request"); }
+  };
+
   const handleSave = async () => {
     if (items.some(i => !i.product_name)) return toast.error("All items need a product name");
     if (modeOfPayment === "Other" && !paymentModeDetails) return toast.error("Specify payment details for 'Other'");
@@ -592,6 +607,35 @@ export default function EditOrder() {
   const isDispatched = order.status === "dispatched";
   const isMyOrder = user?.role === "telecaller" && order.telecaller_id !== user?.id;
   const isAdmin = user?.role === "admin";
+  const isEditBlocked = formulationLocked && !isAdmin && !hasEditPermission;
+
+  // ── FORMULATION LOCK SCREEN ──
+  if (isEditBlocked) {
+    return (
+      <div className="max-w-lg mx-auto mt-16 space-y-4 px-4" data-testid="formulation-locked-view">
+        <Card className="border-amber-200 bg-amber-50/50">
+          <CardContent className="pt-6 space-y-4 text-center">
+            <Lock className="w-12 h-12 text-amber-600 mx-auto" />
+            <h2 className="text-lg font-semibold">Order Locked</h2>
+            <p className="text-sm text-muted-foreground">
+              This order (<b>{order.order_number}</b>) has formulations and is locked to protect production data. Only Admin can edit directly.
+            </p>
+            {editRequestSent ? (
+              <Badge variant="secondary" className="text-sm py-1">Request Sent — Waiting for Admin Approval</Badge>
+            ) : (
+              <div className="space-y-3 pt-2">
+                <Textarea placeholder="Reason for edit request (recommended)" value={editRequestReason} onChange={e => setEditRequestReason(e.target.value)} className="text-sm" data-testid="edit-request-reason" />
+                <Button onClick={requestEditPermission} className="w-full" data-testid="request-edit-btn">
+                  <ShieldAlert className="w-4 h-4 mr-2" /> Request Edit Permission
+                </Button>
+              </div>
+            )}
+            <Button variant="outline" onClick={() => navigate(-1)} className="w-full">Go Back</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   // ── DISPATCH ROLE VIEW ──
   if (user?.role === "dispatch") {
