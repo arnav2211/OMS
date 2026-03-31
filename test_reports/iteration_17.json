@@ -1,0 +1,74 @@
+{
+  "summary": "Formulation Lock feature testing completed. Found and fixed a bug where formulation_locked was incorrectly returning false for telecallers. All 18 backend tests passed. Frontend UI verified working correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_formulation_lock.py",
+    "/app/test_reports/pytest/pytest_formulation_lock.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "BUG FIXED: formulation_locked was being calculated AFTER formulations were stripped from the response for telecallers, causing it to always return false. Fixed by moving the check BEFORE stripping formulations.",
+    "All formulation lock features working correctly after fix"
+  ],
+  "updated_files": [
+    "/app/backend/server.py (line ~939-960 - moved formulation lock check before stripping formulations)",
+    "/app/backend/tests/test_formulation_lock.py"
+  ],
+  "success_rate": {
+    "backend": "100% (18/18 tests passed)",
+    "frontend": "100% (all features verified via Playwright)"
+  },
+  "features_verified": {
+    "formulation_locked_field": "PASS - Orders with formulations have formulation_locked=true in GET response",
+    "admin_bypass": "PASS - Admin can always edit locked orders",
+    "telecaller_blocked": "PASS - Telecaller gets 403 when editing locked order without permission",
+    "formulation_preservation": "PASS - Formulations preserved when items updated with empty formulation field",
+    "free_sample_formulation_preservation": "PASS - Free sample formulations also preserved",
+    "formulation_lock_endpoint": "PASS - GET /api/orders/{id}/formulation-lock returns correct lock status",
+    "request_edit_permission": "PASS - POST /api/orders/{id}/request-edit creates pending permission",
+    "duplicate_request_blocked": "PASS - Duplicate pending requests rejected with 400",
+    "admin_list_permissions": "PASS - GET /api/edit-permissions returns all permissions for admin",
+    "admin_approve_permission": "PASS - PUT /api/edit-permissions/{id} with action=approve works",
+    "telecaller_edit_after_approval": "PASS - Telecaller can edit once after approval",
+    "permission_marked_used": "PASS - Permission marked as 'used' after telecaller edits",
+    "telecaller_blocked_after_use": "PASS - Telecaller blocked again after permission used",
+    "packaging_preserves_formulation": "PASS - PUT /api/orders/{id}/packaging does not clear formulations",
+    "mark_packed_preserves_formulation": "PASS - PUT /api/orders/{id}/mark-packed does not clear formulations",
+    "dispatch_preserves_formulation": "PASS - PUT /api/orders/{id}/dispatch does not clear formulations",
+    "admin_reject_permission": "PASS - PUT /api/edit-permissions/{id} with action=reject works",
+    "telecaller_blocked_after_rejection": "PASS - Telecaller still blocked after permission rejected",
+    "frontend_lock_badge": "PASS - Order Detail shows 'Formulation Locked' badge",
+    "frontend_lock_screen": "PASS - EditOrder shows lock screen with 'Request Edit Permission' button for telecaller's own locked orders",
+    "frontend_edit_requests_tab": "PASS - Admin Dashboard has Edit Requests tab with approve/reject buttons"
+  },
+  "test_credentials": {
+    "admin": "username=admin, password=admin123",
+    "telecaller": "username=test_tc_payment, password=test123",
+    "packaging": "username=test_packaging_user, password=test123"
+  },
+  "seed_data_creation": "Created test orders CS-0038 (telecaller's locked order) and multiple test customers/orders for automated tests",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Formulation Lock feature fully tested and working. Bug was found and fixed in server.py - formulation_locked calculation was happening after formulations were stripped for telecallers. The fix moves the check before stripping. Test order CS-0038 is owned by test_tc_payment and has formulation locked.",
+  "rca_of_the_issue": {
+    "bug_description": "formulation_locked field was always returning false for telecaller users even when the order had formulations",
+    "root_cause": "In get_order() endpoint (server.py line ~939-960), the formulation_locked calculation was happening AFTER formulations were stripped from the response for telecallers. Since telecallers don't see formulation data, by the time the check ran, all formulations were already removed, making has_formulation always false.",
+    "fix_applied": "Moved the formulation_locked calculation to happen BEFORE stripping formulations from the response. This ensures the lock status is calculated based on actual database data, not the stripped response.",
+    "reproduction_steps": [
+      "1. Login as admin and create an order",
+      "2. Add formulation to the order",
+      "3. Login as telecaller and GET /api/orders/{id}",
+      "4. Before fix: formulation_locked was false",
+      "5. After fix: formulation_locked is true"
+    ],
+    "mitigation": "The fix ensures formulation_locked is calculated before any data stripping occurs, so all users see the correct lock status regardless of their role's formulation visibility permissions."
+  }
+}

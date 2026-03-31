@@ -287,6 +287,8 @@ async def startup():
     await db.orders.create_index("created_at")
     await db.orders.create_index("telecaller_id")
     await db.addresses.create_index("customer_id")
+    await db.edit_permissions.create_index("order_id")
+    await db.edit_permissions.create_index("user_id")
 
     existing = await db.users.find_one({"username": "admin"})
     if not existing:
@@ -934,18 +936,38 @@ async def get_order(order_id: str, user=Depends(get_current_user)):
     elif user["role"] != "admin":
         order.pop("telecaller_name", None)
         order.pop("telecaller_id", None)
-    # Strict formulation visibility
+    # Formulation lock status - check BEFORE stripping formulations
+    has_formulation = any(item.get("formulation") for item in order.get("items", []))
+    if not has_formulation:
+        has_formulation = any(s.get("formulation") for s in order.get("free_samples", []))
+    
+    # Strict formulation visibility - strip formulations for non-admin/non-packaging users
     settings = await db.settings.find_one({"_id": "global"})
     show_formulation_global = settings.get("show_formulation", False) if settings else False
     if user["role"] == "telecaller":
         for item in order.get("items", []):
             item.pop("formulation", None)
+        for sample in order.get("free_samples", []):
+            sample.pop("formulation", None)
     elif user["role"] == "packaging" and not show_formulation_global:
         for item in order.get("items", []):
             item.pop("formulation", None)
+        for sample in order.get("free_samples", []):
+            sample.pop("formulation", None)
     elif user["role"] in ["dispatch", "accounts"]:
         for item in order.get("items", []):
             item.pop("formulation", None)
+        for sample in order.get("free_samples", []):
+            sample.pop("formulation", None)
+    order["formulation_locked"] = has_formulation
+    # Check edit permission for non-admin
+    if user["role"] != "admin" and has_formulation:
+        perm = await db.edit_permissions.find_one(
+            {"order_id": order_id, "user_id": user["id"], "status": "approved"}, {"_id": 0}
+        )
+        order["has_edit_permission"] = bool(perm)
+    else:
+        order["has_edit_permission"] = user["role"] == "admin"
     return order
 
 @api_router.put("/orders/{order_id}")
@@ -955,17 +977,78 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    # Formulation lock: if order has any formulation, only admin can edit (unless approved)
+    has_approved_permission = False
+    if user["role"] != "admin":
+        has_formulation = any(item.get("formulation") for item in order.get("items", []))
+        if not has_formulation:
+            has_formulation = any(s.get("formulation") for s in order.get("free_samples", []))
+        if has_formulation:
+            # Check if user has approved edit permission
+            permission = await db.edit_permissions.find_one(
+                {"order_id": order_id, "user_id": user["id"], "status": "approved"},
+                {"_id": 0}
+            )
+            if not permission:
+                raise HTTPException(status_code=403, detail="This order has formulations and is locked. Request edit permission from Admin.")
+            # Permission used — revoke it after this edit
+            await db.edit_permissions.update_one(
+                {"id": permission["id"]},
+                {"$set": {"status": "used", "used_at": datetime.now(timezone.utc).isoformat()}}
+            )
+            has_approved_permission = True
+
     # Dispatch lock: admins can edit everything; telecallers can edit payment fields on own orders
     if order.get("status") == "dispatched" and user["role"] != "admin":
         allowed_dispatched = {"payment_status", "amount_paid", "balance_amount", "mode_of_payment", "payment_mode_details", "payment_screenshots"}
         non_allowed = set(updates.keys()) - allowed_dispatched - {"id", "order_number", "updated_at"}
         if non_allowed:
             raise HTTPException(status_code=400, detail="Order is dispatched. Only payment details can be updated.")
-    # Telecaller can only edit their own orders
-    if user["role"] == "telecaller" and order.get("telecaller_id") != user["id"]:
+    # Telecaller can only edit their own orders (unless admin-approved permission)
+    if user["role"] == "telecaller" and order.get("telecaller_id") != user["id"] and not has_approved_permission:
         raise HTTPException(status_code=403, detail="You can only edit your own orders")
     updates.pop("id", None)
     updates.pop("order_number", None)
+
+    # CRITICAL: Preserve formulations when items are updated
+    if "items" in updates:
+        existing_items = order.get("items", [])
+        new_items = updates["items"]
+        # Build lookup of existing formulations by product_name for fuzzy matching
+        existing_formulations = {}
+        for ei in existing_items:
+            if ei.get("formulation"):
+                existing_formulations[ei["product_name"]] = ei["formulation"]
+        # Preserve formulations: merge from existing items
+        for i, new_item in enumerate(new_items):
+            if not new_item.get("formulation"):
+                # Try exact index match first
+                if i < len(existing_items) and existing_items[i].get("formulation"):
+                    if existing_items[i]["product_name"] == new_item.get("product_name"):
+                        new_item["formulation"] = existing_items[i]["formulation"]
+                # Fallback: match by product_name
+                if not new_item.get("formulation") and new_item.get("product_name") in existing_formulations:
+                    new_item["formulation"] = existing_formulations[new_item["product_name"]]
+        updates["items"] = new_items
+
+    # CRITICAL: Preserve free_sample formulations
+    if "free_samples" in updates:
+        existing_fs = order.get("free_samples", [])
+        new_fs = updates["free_samples"]
+        existing_fs_formulations = {}
+        for es in existing_fs:
+            if es.get("formulation"):
+                existing_fs_formulations[es.get("item_name", "")] = es["formulation"]
+        for i, ns in enumerate(new_fs):
+            if not ns.get("formulation"):
+                if i < len(existing_fs) and existing_fs[i].get("formulation"):
+                    if existing_fs[i].get("item_name") == ns.get("item_name"):
+                        ns["formulation"] = existing_fs[i]["formulation"]
+                if not ns.get("formulation") and ns.get("item_name") in existing_fs_formulations:
+                    ns["formulation"] = existing_fs_formulations[ns["item_name"]]
+        updates["free_samples"] = new_fs
+
     # Auto-recheck: if payment details change on an already-checked order
     if order.get("payment_check_status") == "received":
         payment_changed = (
@@ -980,6 +1063,86 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
         raise HTTPException(status_code=404, detail="Order not found")
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated
+
+# ── Edit Permission Request System ──
+@api_router.post("/orders/{order_id}/request-edit")
+async def request_edit_permission(order_id: str, body: dict = {}, user=Depends(get_current_user)):
+    if user["role"] == "admin":
+        raise HTTPException(status_code=400, detail="Admin does not need edit permission")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    # Check if there's already a pending request
+    existing = await db.edit_permissions.find_one(
+        {"order_id": order_id, "user_id": user["id"], "status": "pending"}, {"_id": 0}
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail="You already have a pending edit request for this order")
+    request_doc = {
+        "id": str(uuid.uuid4()),
+        "order_id": order_id,
+        "order_number": order.get("order_number", ""),
+        "customer_name": order.get("customer_name", ""),
+        "user_id": user["id"],
+        "requested_by": user["name"],
+        "requested_by_role": user["role"],
+        "reason": body.get("reason", ""),
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.edit_permissions.insert_one(request_doc)
+    request_doc.pop("_id", None)
+    return request_doc
+
+@api_router.get("/edit-permissions")
+async def list_edit_permissions(user=Depends(get_current_user)):
+    if user["role"] == "admin":
+        # Admin sees all pending + recent
+        perms = await db.edit_permissions.find({"status": {"$in": ["pending", "approved", "rejected"]}}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    else:
+        perms = await db.edit_permissions.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return perms
+
+@api_router.put("/edit-permissions/{perm_id}")
+async def handle_edit_permission(perm_id: str, body: dict, user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    action = body.get("action")
+    if action not in ["approve", "reject"]:
+        raise HTTPException(status_code=400, detail="Action must be 'approve' or 'reject'")
+    perm = await db.edit_permissions.find_one({"id": perm_id}, {"_id": 0})
+    if not perm:
+        raise HTTPException(status_code=404, detail="Permission request not found")
+    new_status = "approved" if action == "approve" else "rejected"
+    await db.edit_permissions.update_one(
+        {"id": perm_id},
+        {"$set": {"status": new_status, "handled_by": user["name"], "handled_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    updated = await db.edit_permissions.find_one({"id": perm_id}, {"_id": 0})
+    return updated
+
+# Check if order has formulation lock
+@api_router.get("/orders/{order_id}/formulation-lock")
+async def check_formulation_lock(order_id: str, user=Depends(get_current_user)):
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0, "items": 1, "free_samples": 1})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    has_formulation = any(item.get("formulation") for item in order.get("items", []))
+    if not has_formulation:
+        has_formulation = any(s.get("formulation") for s in order.get("free_samples", []))
+    # Check if user has an approved permission
+    has_permission = False
+    if user["role"] != "admin" and has_formulation:
+        perm = await db.edit_permissions.find_one(
+            {"order_id": order_id, "user_id": user["id"], "status": "approved"}, {"_id": 0}
+        )
+        has_permission = bool(perm)
+    return {
+        "locked": has_formulation,
+        "can_edit": user["role"] == "admin" or not has_formulation or has_permission,
+        "has_permission": has_permission,
+    }
+
 
 # Forward to Packaging (Admin reference flag)
 @api_router.post("/orders/{order_id}/forward-to-packaging")
