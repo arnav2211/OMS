@@ -107,6 +107,21 @@ Full-stack Order Management System for CitSpray with multi-role access (Admin, T
 - Packing slip PDF now shows customer alias below customer name (only when alias exists)
 - PI listing table shows "Created By" column (admin only) showing who created each PI
 
+## Formulation Lock System (March 2026) — CRITICAL BUG FIX
+### Root Cause
+- `PUT /api/orders/{id}` was replacing the entire items array from frontend payload
+- Telecallers never receive formulation data (stripped from API response), so their edits wiped formulations
+- Fix: Backend now merges existing formulations into incoming items by matching on `product_name`
+### Formulation Lock
+- Once any formulation is saved, the order becomes `formulation_locked=true`
+- Admin: Can edit freely. All other roles: Blocked from editing locked orders
+- Non-admin users see "Request Edit Permission" button on the EditOrder lock screen
+- Admin Dashboard → "Edit Requests" tab to approve/reject requests
+- Approved permissions are one-time use (auto-revoked after edit)
+### Protected Fields
+- Item formulations, free sample formulations, item descriptions preserved during all updates
+- Packaging/dispatch/mark-packed endpoints don't touch items array
+
 ## Upcoming Tasks
 - **P1:** Pagination on all major data tables
 - **P2:** Refactor server.py into modular FastAPI routers
