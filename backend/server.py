@@ -119,6 +119,7 @@ class AddressCreate(BaseModel):
     state: str
     pincode: str
     label: str = ""
+    address_name: str = ""
 
 class CustomerCreate(BaseModel):
     name: str
@@ -553,6 +554,7 @@ async def create_address(customer_id: str, req: AddressCreate, user=Depends(get_
         "state": req.state.strip(),
         "pincode": req.pincode.strip(),
         "label": req.label.strip(),
+        "address_name": req.address_name.strip() if req.address_name else customer.get("name", ""),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.addresses.insert_one(doc)
@@ -569,6 +571,7 @@ async def update_address(customer_id: str, address_id: str, req: AddressCreate, 
         "state": req.state.strip(),
         "pincode": req.pincode.strip(),
         "label": req.label.strip(),
+        "address_name": req.address_name.strip() if req.address_name else "",
     }
     result = await db.addresses.update_one({"id": address_id, "customer_id": customer_id}, {"$set": update_data})
     if result.matched_count == 0:
@@ -1496,6 +1499,7 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Admin or packaging only")
 
     order_ids = body.get("order_ids", [])
+    quantities = body.get("quantities", {})  # {order_id: count}
     if not order_ids:
         raise HTTPException(status_code=400, detail="No orders selected")
 
@@ -1542,6 +1546,8 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
     def make_address_cell(order, customer):
         name = (order.get("customer_name") or "Unknown").strip()
         sa = order.get("shipping_address") or {}
+        # Use address_name if set, otherwise customer name
+        name = sa.get("address_name") or order.get("customer_name", "Unknown")
         phones = customer.get("phone_numbers", []) if customer else []
 
         address_parts = []
@@ -1589,17 +1595,24 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
     gap = 3 * mm                    # slightly reduced gap between columns
     col_w = (page_width - 2 * gap) / 3
 
+    # Build expanded list with quantities
+    expanded_orders = []
+    for o in orders:
+        qty = max(1, int(quantities.get(o["id"], 1)))
+        for _ in range(qty):
+            expanded_orders.append(o)
+
     row_data = []
-    for i in range(0, len(orders), 3):
+    for i in range(0, len(expanded_orders), 3):
         row = []
 
         for j in range(3):
-            if i + j < len(orders):
-                order = orders[i + j]
+            if i + j < len(expanded_orders):
+                order = expanded_orders[i + j]
                 customer = customers.get(order.get("customer_id", ""))
                 row.append(make_address_cell(order, customer))
             else:
-                row.append(Paragraph("", addr_style))
+                row.append(Paragraph("", addr_normal))  # or addr_style if that's your actual style
 
         row_data.append(row)
 
@@ -2242,7 +2255,8 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
             cust_lines.append(f"<font color='#6B7280'>Ph:</font> {', '.join(customer['phone_numbers'])}")
         sa = order.get("shipping_address")
         if sa and sa.get("address_line"):
-            cust_lines.append(f"<font color='#6B7280'>Ship To:</font> {sa['address_line']}, {sa.get('city','')}, {sa.get('state','')} – {sa.get('pincode','')}")
+            ship_name = sa.get("address_name") or customer.get("name", "")
+            cust_lines.append(f"<font color='#6B7280'>Ship To:</font> <b>{ship_name}</b> – {sa['address_line']}, {sa.get('city','')}, {sa.get('state','')} – {sa.get('pincode','')}")
         if customer.get("gst_no"):
             cust_lines.append(f"<font color='#6B7280'>GSTIN:</font> {customer['gst_no']}")
         cust_p = Paragraph("<br/>".join(cust_lines), ParagraphStyle('Cust', parent=styles['Normal'], fontSize=8.5, leading=12))
@@ -2326,6 +2340,9 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
 
     # ── 7. PAYMENT / SAMPLES / DISPATCH / REMARKS ──
     extras = []
+    # Purpose / Requirement
+    if order.get("purpose"):
+        extras.append(f"<b>Purpose / Requirement:</b> {order['purpose']}")
     if order.get("mode_of_payment"):
         mop = f"<b>Mode of Payment:</b> {order['mode_of_payment']}"
         if order.get("payment_mode_details"):
@@ -2336,7 +2353,10 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
         for s in order["free_samples"]:
             t = s.get("item_name", "")
             if s.get("description"): t += f" – {s['description']}"
+            if s.get("formulation"): t += f"  |  <i>Formulation: {s['formulation']}</i>"
             extras.append(f"  · {t}")
+    if order.get("extra_shipping_details"):
+        extras.append(f"<b>Extra Shipping Details:</b> {order['extra_shipping_details']}")
     if order.get("shipping_method"):
         dispatch_parts = [f"<b>Dispatch:</b> {order['shipping_method'].replace('_',' ').title()}"]
         if order.get("courier_name"):    dispatch_parts.append(f"Courier: {order['courier_name']}")

@@ -34,7 +34,7 @@ const emptyItem = () => ({
   product_name: "", qty: 0, unit: "", rate: 0, amount: 0, gst_rate: 0, gst_amount: 0, total: 0, description: "",
 });
 
-const emptyAddress = () => ({ address_line: "", city: "", state: "", pincode: "", label: "" });
+const emptyAddress = () => ({ address_line: "", city: "", state: "", pincode: "", label: "", address_name: "" });
 const emptySample = () => ({ item_name: "", description: "" });
 
 function normalizePhone(phone) {
@@ -62,6 +62,7 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
         <div className="flex items-start justify-between p-3 rounded-lg bg-secondary text-sm" data-testid={`selected-${label.toLowerCase().replace(/\s/g, '-')}`}>
           <div>
             {selectedAddress.label && <span className="text-xs font-medium text-primary mr-2">[{selectedAddress.label}]</span>}
+            {selectedAddress.address_name && <span className="text-xs font-medium mr-2">{selectedAddress.address_name} –</span>}
             <span>{selectedAddress.address_line}, {selectedAddress.city}, {selectedAddress.state} - {selectedAddress.pincode}</span>
           </div>
           <Button variant="outline" size="sm" onClick={() => setShowPicker(true)} data-testid={`change-${label.toLowerCase().replace(/\s/g, '-')}`}>Change</Button>
@@ -82,6 +83,7 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
                 <button key={a.id} className="w-full text-left p-3 rounded-lg border hover:bg-accent transition-colors" onClick={() => { onSelect(a); setShowPicker(false); }}
                   data-testid={`addr-pick-${a.id}`}>
                   {a.label && <span className="text-xs font-medium text-primary mr-2">[{a.label}]</span>}
+                  {a.address_name && <span className="text-xs font-medium mr-1">{a.address_name} –</span>}
                   <span className="text-sm">{a.address_line}, {a.city}, {a.state} - {a.pincode}</span>
                 </button>
               ))
@@ -799,6 +801,7 @@ export default function CreateOrder() {
           <DialogHeader><DialogTitle>Add New Address</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Label (e.g. Office, Warehouse)</Label><Input value={newAddr.label} onChange={e => setNewAddr({ ...newAddr, label: e.target.value })} data-testid="addr-label" /></div>
+            <div><Label>Address Name (Recipient)</Label><Input value={newAddr.address_name} onChange={e => setNewAddr({ ...newAddr, address_name: e.target.value })} placeholder={selectedCustomer?.name || "Defaults to customer name"} data-testid="addr-name" /></div>
             <div><Label>Address Line *</Label><Input value={newAddr.address_line} onChange={e => setNewAddr({ ...newAddr, address_line: e.target.value })} data-testid="addr-line" /></div>
             <div>
               <Label>Pincode *</Label>

@@ -30,7 +30,7 @@ export default function Customers() {
   const [showAddresses, setShowAddresses] = useState(null);
   const [addresses, setAddresses] = useState([]);
   const [showAddrDialog, setShowAddrDialog] = useState(false);
-  const [addrForm, setAddrForm] = useState({ address_line: "", city: "", state: "", pincode: "", label: "" });
+  const [addrForm, setAddrForm] = useState({ address_line: "", city: "", state: "", pincode: "", label: "", address_name: "" });
   const [editingAddrId, setEditingAddrId] = useState(null);
   const [pincodeLoading, setPincodeLoading] = useState(false);
   const [stateSearch, setStateSearch] = useState("");
@@ -108,13 +108,13 @@ export default function Customers() {
 
   const openNewAddr = (customerId) => {
     setEditingAddrId(null);
-    setAddrForm({ address_line: "", city: "", state: "", pincode: "", label: "" });
+    setAddrForm({ address_line: "", city: "", state: "", pincode: "", label: "", address_name: "" });
     setShowAddrDialog(true);
   };
 
   const openEditAddr = (addr) => {
     setEditingAddrId(addr.id);
-    setAddrForm({ address_line: addr.address_line, city: addr.city, state: addr.state, pincode: addr.pincode, label: addr.label || "" });
+    setAddrForm({ address_line: addr.address_line, city: addr.city, state: addr.state, pincode: addr.pincode, label: addr.label || "", address_name: addr.address_name || "" });
     setShowAddrDialog(true);
   };
 
@@ -200,6 +200,7 @@ export default function Customers() {
                                 <div key={a.id} className="flex items-center justify-between p-2 rounded border bg-background">
                                   <div className="text-sm">
                                     {a.label && <Badge variant="secondary" className="mr-2 text-xs">{a.label}</Badge>}
+                                    {a.address_name && <span className="font-medium mr-1">{a.address_name} –</span>}
                                     {a.address_line}, {a.city}, {a.state} - {a.pincode}
                                   </div>
                                   <div className="flex gap-1">
@@ -279,6 +280,7 @@ export default function Customers() {
           <DialogHeader><DialogTitle>{editingAddrId ? "Edit Address" : "Add Address"}</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Label</Label><Input value={addrForm.label} onChange={e => setAddrForm({ ...addrForm, label: e.target.value })} placeholder="e.g. Office, Warehouse" data-testid="addr-dialog-label" /></div>
+            <div><Label>Address Name (Recipient)</Label><Input value={addrForm.address_name} onChange={e => setAddrForm({ ...addrForm, address_name: e.target.value })} placeholder="Defaults to customer name" data-testid="addr-dialog-name" /></div>
             <div><Label>Address Line *</Label><Input value={addrForm.address_line} onChange={e => setAddrForm({ ...addrForm, address_line: e.target.value })} data-testid="addr-dialog-line" /></div>
             <div>
               <Label>Pincode *</Label>

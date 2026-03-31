@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Search, RefreshCw, Printer, PackageCheck } from "lucide-react";
 
@@ -46,6 +47,8 @@ export default function AllOrders() {
   const [selectedTelecaller, setSelectedTelecaller] = useState("all");
   const [selectedOrders, setSelectedOrders] = useState(new Set());
   const [printLoading, setPrintLoading] = useState(false);
+  const [printQuantities, setPrintQuantities] = useState({});
+  const [showPrintDialog, setShowPrintDialog] = useState(false);
 
   const canPrintAddresses = user?.role === "admin" || user?.role === "packaging";
   const showPaymentCheck = ["admin", "telecaller", "accounts"].includes(user?.role);
@@ -139,10 +142,9 @@ export default function AllOrders() {
   };
 
   const handlePrintAddresses = async () => {
-    if (selectedOrders.size === 0) return toast.error("Select at least one order");
     setPrintLoading(true);
     try {
-      const res = await api.post("/orders/print-addresses", { order_ids: [...selectedOrders] }, { responseType: "blob" });
+      const res = await api.post("/orders/print-addresses", { order_ids: [...selectedOrders], quantities: printQuantities }, { responseType: "blob" });
       const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
       if (isMobile) {
         mobilePrintPdf(new Blob([res.data], { type: "application/pdf" }), "addresses.pdf");
@@ -158,8 +160,18 @@ export default function AllOrders() {
         document.body.appendChild(iframe);
         iframe.onload = () => { setTimeout(() => { iframe.contentWindow.print(); }, 500); };
       }
+      setShowPrintDialog(false);
     } catch { toast.error("Failed to generate address PDF"); }
     finally { setPrintLoading(false); }
+  };
+
+  const openPrintDialog = () => {
+    if (selectedOrders.size === 0) return toast.error("Select at least one order");
+    // Initialize quantities to 1 for all selected
+    const q = {};
+    selectedOrders.forEach(id => { q[id] = printQuantities[id] || 1; });
+    setPrintQuantities(q);
+    setShowPrintDialog(true);
   };
 
   return (
@@ -168,7 +180,7 @@ export default function AllOrders() {
         <h1 className="text-xl sm:text-2xl font-bold tracking-tight">All Orders</h1>
         <div className="flex items-center gap-2">
           {canPrintAddresses && selectedOrders.size > 0 && (
-            <Button variant="default" size="sm" onClick={handlePrintAddresses} disabled={printLoading} data-testid="print-addresses-btn">
+            <Button variant="default" size="sm" onClick={openPrintDialog} disabled={printLoading} data-testid="print-addresses-btn">
               <Printer className="w-4 h-4 mr-1" />
               {printLoading ? "Generating..." : `Print Addresses (${selectedOrders.size})`}
             </Button>
@@ -384,6 +396,40 @@ export default function AllOrders() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Print Address Quantities Dialog */}
+      <Dialog open={showPrintDialog} onOpenChange={setShowPrintDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Print Addresses — Set Copies</DialogTitle></DialogHeader>
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {[...selectedOrders].map(oid => {
+              const o = orders.find(x => x.id === oid);
+              return o ? (
+                <div key={oid} className="flex items-center justify-between gap-3 py-1.5 px-2 rounded border">
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm font-medium">{o.order_number}</span>
+                    <span className="text-xs text-muted-foreground ml-2">{o.customer_name}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Label className="text-xs">Copies:</Label>
+                    <Input type="number" min={1} max={10} className="w-16 h-7 text-sm text-center"
+                      value={printQuantities[oid] || 1}
+                      onChange={e => setPrintQuantities(prev => ({ ...prev, [oid]: Math.max(1, parseInt(e.target.value) || 1) }))}
+                      data-testid={`print-qty-${oid}`} />
+                  </div>
+                </div>
+              ) : null;
+            })}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowPrintDialog(false)}>Cancel</Button>
+            <Button onClick={handlePrintAddresses} disabled={printLoading} data-testid="confirm-print-btn">
+              <Printer className="w-4 h-4 mr-1" />
+              {printLoading ? "Generating..." : "Print"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
