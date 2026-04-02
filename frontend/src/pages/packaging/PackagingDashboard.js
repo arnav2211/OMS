@@ -321,12 +321,12 @@ export default function PackagingDashboard() {
                     </div>
                   )}
                   <div className="flex flex-wrap gap-2 mt-2">
-                    {(itemImages[idx] || []).map((url, i) => (
+                    {(itemImages[item.product_name] || []).map((url, i) => (
                       <div key={i} className="relative w-16 h-16 rounded border overflow-hidden group">
                         <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
                         <button
                           className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
-                          onClick={() => setItemImages((prev) => ({ ...prev, [idx]: prev[idx].filter((_, j) => j !== i) }))}
+                          onClick={() => setItemImages((prev) => ({ ...prev, [item.product_name]: prev[item.product_name].filter((_, j) => j !== i) }))}
                         >
                           <X className="w-4 h-4 text-white" />
                         </button>
@@ -334,7 +334,7 @@ export default function PackagingDashboard() {
                     ))}
                     <button
                       className="w-16 h-16 rounded border-2 border-dashed flex items-center justify-center hover:bg-accent transition-colors"
-                      onClick={() => triggerUpload("item", idx)}
+                      onClick={() => triggerUpload("item", item.product_name)}
                       disabled={uploading}
                       data-testid={`upload-item-img-${idx}`}
                       title="Gallery / Files"
@@ -343,7 +343,7 @@ export default function PackagingDashboard() {
                     </button>
                     <button
                       className="w-16 h-16 rounded border-2 border-dashed flex items-center justify-center hover:bg-accent transition-colors"
-                      onClick={() => triggerCameraUpload("item", idx)}
+                      onClick={() => triggerCameraUpload("item", item.product_name)}
                       disabled={uploading}
                       data-testid={`camera-item-img-${idx}`}
                       title="Camera"
