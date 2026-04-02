@@ -801,12 +801,19 @@ async def list_orders(
     if date_to:
         query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
 
-    # Server-side search: search across order_number AND customer_name in DB
+    # Server-side search: search across order_number, customer_name, and customer alias
     if search:
-        query["$or"] = [
+        # Find customer IDs matching alias
+        alias_cust_ids = []
+        async for c in db.customers.find({"alias": {"$regex": search, "$options": "i"}}, {"_id": 0, "id": 1}):
+            alias_cust_ids.append(c["id"])
+        or_conditions = [
             {"order_number": {"$regex": search, "$options": "i"}},
             {"customer_name": {"$regex": search, "$options": "i"}},
         ]
+        if alias_cust_ids:
+            or_conditions.append({"customer_id": {"$in": alias_cust_ids}})
+        query["$or"] = or_conditions
 
     # Lean projection — exclude heavy nested data for list view
     list_projection = {
