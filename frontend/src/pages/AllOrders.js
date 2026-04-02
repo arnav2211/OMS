@@ -33,6 +33,7 @@ export default function AllOrders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [searchDebounced, setSearchDebounced] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [payStatusFilter, setPayStatusFilter] = useState("all");
   const [checkStatusFilter, setCheckStatusFilter] = useState("all");
@@ -46,6 +47,10 @@ export default function AllOrders() {
   const [printLoading, setPrintLoading] = useState(false);
   const [printQuantities, setPrintQuantities] = useState({});
   const [showPrintDialog, setShowPrintDialog] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalOrders, setTotalOrders] = useState(0);
+  const PAGE_SIZE = 50;
 
   const canPrintAddresses = user?.role === "admin" || user?.role === "packaging";
   const showPaymentCheck = ["admin", "telecaller", "accounts"].includes(user?.role);
@@ -62,7 +67,12 @@ export default function AllOrders() {
   useEffect(() => {
     loadOrders();
     if (user?.role === "admin") loadUsers();
-  }, [viewAll, selectedTelecaller]);
+  }, [viewAll, selectedTelecaller, currentPage, searchDebounced]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => { setSearchDebounced(search); setCurrentPage(1); }, 350);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const loadUsers = async () => {
     try { const res = await api.get("/users"); setUsers(res.data.filter(u => u.role === "telecaller" || u.role === "admin")); }
@@ -80,8 +90,14 @@ export default function AllOrders() {
         params.set("view_all", "true");
         if (user?.role === "admin" && selectedTelecaller !== "all") params.set("telecaller_id", selectedTelecaller);
       }
+      params.set("page", currentPage.toString());
+      params.set("page_size", PAGE_SIZE.toString());
+      if (searchDebounced) params.set("search", searchDebounced);
       const res = await api.get(`/orders?${params.toString()}`);
-      setOrders(res.data);
+      const data = res.data;
+      setOrders(data.orders || []);
+      setTotalPages(data.total_pages || 1);
+      setTotalOrders(data.total || 0);
     } catch { } finally { setLoading(false); }
   };
 
@@ -89,10 +105,6 @@ export default function AllOrders() {
     if (statusFilter !== "all" && o.status !== statusFilter) return false;
     if (payStatusFilter !== "all" && o.payment_status !== payStatusFilter) return false;
     if (checkStatusFilter !== "all" && (o.payment_check_status || "pending") !== checkStatusFilter) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      if (!o.order_number?.toLowerCase().includes(q) && !o.customer_name?.toLowerCase().includes(q) && !o.customer_alias?.toLowerCase().includes(q) && !o.customer_phone?.some(p => p?.includes(q)) && !o.customer_gst_no?.toLowerCase().includes(q)) return false;
-    }
     if (periodFilter !== "all") {
       const now = new Date();
       const orderDate = new Date(o.created_at);
@@ -351,8 +363,12 @@ export default function AllOrders() {
               </Table>
           )}
           <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
-            <span>{selectedOrders.size > 0 ? `${selectedOrders.size} selected` : ""}</span>
-            <span>{filteredOrders.length} order(s)</span>
+            <span>{selectedOrders.size > 0 ? `${selectedOrders.size} selected · ` : ""}{totalOrders} total order(s)</span>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" className="h-7" disabled={currentPage <= 1} onClick={() => setCurrentPage(p => p - 1)} data-testid="prev-page-btn">Previous</Button>
+              <span className="text-xs">Page {currentPage} of {totalPages}</span>
+              <Button variant="outline" size="sm" className="h-7" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(p => p + 1)} data-testid="next-page-btn">Next</Button>
+            </div>
           </div>
         </CardContent>
       </Card>

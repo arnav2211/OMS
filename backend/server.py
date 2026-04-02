@@ -60,6 +60,7 @@ COMPANY = {
     "state_code": "27",
 }
 LOGO_PATH = ROOT_DIR / "logo.png"
+LOGO_PDF_PATH = ROOT_DIR / "logo_pdf.png"
 
 COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"]
 
@@ -769,6 +770,8 @@ async def list_orders(
     date_to: Optional[str] = None,
     search: Optional[str] = None,
     view_all: Optional[bool] = False,
+    page: int = 1,
+    page_size: int = 50,
     user=Depends(get_current_user)
 ):
     query = {}
@@ -797,13 +800,27 @@ async def list_orders(
         query.setdefault("created_at", {})["$gte"] = date_from
     if date_to:
         query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
+
+    # Server-side search: search across order_number AND customer_name in DB
     if search:
         query["$or"] = [
             {"order_number": {"$regex": search, "$options": "i"}},
             {"customer_name": {"$regex": search, "$options": "i"}},
         ]
 
-    orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    # Lean projection — exclude heavy nested data for list view
+    list_projection = {
+        "_id": 0, "items": 0, "free_samples": 0,
+        "billing_address": 0, "shipping_address": 0,
+        "packaging": 0, "dispatch_details": 0,
+        "payment_screenshots": 0, "payment_mode_details": 0,
+        "remark": 0, "purpose": 0, "extra_shipping_details": 0,
+    }
+
+    # Pagination
+    total = await db.orders.count_documents(query)
+    skip = (max(1, page) - 1) * page_size
+    orders = await db.orders.find(query, list_projection).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
 
     # Enrich with customer phone/gst/alias for search
     cust_ids = list(set(o.get("customer_id", "") for o in orders if o.get("customer_id")))
@@ -848,7 +865,7 @@ async def list_orders(
                 item.pop("formulation", None)
         # Admin: always sees formulations (no stripping)
 
-    return orders
+    return {"orders": orders, "total": total, "page": page, "page_size": page_size, "total_pages": (total + page_size - 1) // page_size}
 
 @api_router.get("/orders/my-notifications")
 async def get_my_notifications(since: str = "", user=Depends(get_current_user)):
@@ -2118,12 +2135,13 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
 
     # ── 1. HEADER ──
     logo_cell = ''
-    if LOGO_PATH.exists():
+    logo_src = str(LOGO_PDF_PATH) if LOGO_PDF_PATH.exists() else str(LOGO_PATH)
+    if Path(logo_src).exists():
         try:
-            tmp = Image(str(LOGO_PATH))
+            tmp = Image(logo_src)
             aspect = tmp.imageHeight / tmp.imageWidth
             logo_h = 28*mm * aspect
-            logo_cell = Image(str(LOGO_PATH), width=28*mm, height=logo_h)
+            logo_cell = Image(logo_src, width=28*mm, height=logo_h)
         except Exception:
             pass
 
@@ -2408,11 +2426,23 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
     return created
 
 @api_router.get("/proforma-invoices")
-async def list_pis(user=Depends(get_current_user)):
+async def list_pis(search: Optional[str] = None, page: int = 1, page_size: int = 50, user=Depends(get_current_user)):
     query = {}
     if user["role"] == "telecaller":
         query["created_by"] = user["id"]
-    pis = await db.proforma_invoices.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    if search:
+        query["$or"] = [
+            {"pi_number": {"$regex": search, "$options": "i"}},
+            {"customer_name": {"$regex": search, "$options": "i"}},
+        ]
+    # Lean projection
+    list_projection = {
+        "_id": 0, "items": 0, "free_samples": 0,
+        "billing_address": 0, "shipping_address": 0,
+    }
+    total = await db.proforma_invoices.count_documents(query)
+    skip = (max(1, page) - 1) * page_size
+    pis = await db.proforma_invoices.find(query, list_projection).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
     # Enrich with customer details for search
     cust_ids = list(set(p.get("customer_id", "") for p in pis if p.get("customer_id")))
     custs = {}
@@ -2424,7 +2454,7 @@ async def list_pis(user=Depends(get_current_user)):
         pi["customer_phone"] = c.get("phone_numbers", [])
         pi["customer_gst"] = c.get("gst_no", "")
         pi["customer_alias"] = c.get("alias", "")
-    return pis
+    return {"pis": pis, "total": total, "page": page, "page_size": page_size, "total_pages": (total + page_size - 1) // page_size}
 
 @api_router.get("/proforma-invoices/{pi_id}")
 async def get_pi(pi_id: str, user=Depends(get_current_user)):
@@ -2703,11 +2733,12 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     if is_gst:
         # 1. HEADER: logo (aspect-ratio corrected) + company info
         logo_cell = Paragraph('', body)
-        if LOGO_PATH.exists():
+        if LOGO_PDF_PATH.exists() or LOGO_PATH.exists():
+            logo_src = str(LOGO_PDF_PATH) if LOGO_PDF_PATH.exists() else str(LOGO_PATH)
             try:
-                tmp = Image(str(LOGO_PATH))
+                tmp = Image(logo_src)
                 aspect = tmp.imageHeight / tmp.imageWidth
-                logo_cell = Image(str(LOGO_PATH), width=30*mm, height=30*mm * aspect)
+                logo_cell = Image(logo_src, width=30*mm, height=30*mm * aspect)
             except Exception:
                 pass
 

@@ -115,7 +115,7 @@ export default function PIBuilder() {
   useEffect(() => { loadPIs(); loadCustomers(); }, []);
 
   const loadPIs = async () => {
-    try { const res = await api.get("/proforma-invoices"); setPiList(res.data); }
+    try { const res = await api.get("/proforma-invoices?page_size=200"); setPiList(res.data.pis || res.data); }
     catch { } finally { setLoading(false); }
   };
 

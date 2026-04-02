@@ -122,7 +122,7 @@ export default function AdminDashboard() {
   };
 
   const loadRecentOrders = async () => {
-    try { const res = await api.get("/orders?view_all=true"); setRecentOrders(res.data.slice(0, 10)); }
+    try { const res = await api.get("/orders?view_all=true&page_size=10"); setRecentOrders(res.data.orders || []); }
     catch { }
   };
 

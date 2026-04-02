@@ -32,8 +32,10 @@ export default function DispatchDashboard() {
 
   const loadOrders = async () => {
     try {
-      const res = await api.get("/orders");
-      setOrders(res.data.filter((o) => ["packed", "dispatched"].includes(o.status)));
+      const packedRes = await api.get("/orders?status=packed&page_size=200");
+      const dispRes = await api.get("/orders?status=dispatched&page_size=200");
+      const allOrders = [...(packedRes.data.orders || []), ...(dispRes.data.orders || [])];
+      setOrders(allOrders);
     } catch { } finally { setLoading(false); }
   };
 

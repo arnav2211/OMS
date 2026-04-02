@@ -83,8 +83,10 @@ export default function PackagingDashboard() {
 
   const loadOrders = async () => {
     try {
-      const res = await api.get("/orders");
-      setOrders(res.data.filter((o) => ["new", "packaging"].includes(o.status)));
+      const res = await api.get("/orders?status=new&page_size=200");
+      const packRes = await api.get("/orders?status=packaging&page_size=200");
+      const allOrders = [...(res.data.orders || []), ...(packRes.data.orders || [])];
+      setOrders(allOrders);
     } catch { } finally { setLoading(false); }
   };
 
