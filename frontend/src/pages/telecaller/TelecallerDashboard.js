@@ -66,10 +66,10 @@ export default function TelecallerDashboard() {
     try {
       // Dashboard shows only the user's recent orders (not all)
       const [ordersRes, statsRes] = await Promise.all([
-        api.get("/orders"),
+        api.get("/orders?page_size=50"),
         api.get("/reports/dashboard"),
       ]);
-      setOrders(ordersRes.data);
+      setOrders(ordersRes.data.orders || []);
       setStats(statsRes.data);
     } catch (err) { console.error(err); }
     finally { setLoading(false); }

@@ -93,16 +93,16 @@ export default function AccountsDashboard() {
   const loadGstOrders = async () => {
     setInvoiceLoading(true);
     try {
-      const res = await api.get("/orders?view_all=true");
-      setGstOrders(res.data.filter(o => o.gst_applicable));
+      const res = await api.get("/orders?view_all=true&page_size=200");
+      setGstOrders((res.data.orders || []).filter(o => o.gst_applicable));
     } catch { } finally { setInvoiceLoading(false); }
   };
 
   const loadAllOrders = async () => {
     setPaymentLoading(true);
     try {
-      const res = await api.get("/orders?view_all=true");
-      setAllOrders(res.data);
+      const res = await api.get("/orders?view_all=true&page_size=200");
+      setAllOrders(res.data.orders || []);
     } catch { } finally { setPaymentLoading(false); }
   };
 
