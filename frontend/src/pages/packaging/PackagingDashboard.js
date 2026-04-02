@@ -90,15 +90,21 @@ export default function PackagingDashboard() {
     } catch { } finally { setLoading(false); }
   };
 
-  const openOrder = (order) => {
-    setSelectedOrder(order);
-    setItemPackedBy(order.packaging?.item_packed_by || []);
-    setBoxPackedBy(order.packaging?.box_packed_by || []);
-    setCheckedBy(order.packaging?.checked_by || []);
-    setItemImages(order.packaging?.item_images || {});
-    setOrderImages(order.packaging?.order_images || []);
-    setPackedBoxImages(order.packaging?.packed_box_images || []);
-    setShowDetail(true);
+  const openOrder = async (order) => {
+    try {
+      const res = await api.get(`/orders/${order.id}`);
+      const fullOrder = res.data;
+      setSelectedOrder(fullOrder);
+      setItemPackedBy(fullOrder.packaging?.item_packed_by || []);
+      setBoxPackedBy(fullOrder.packaging?.box_packed_by || []);
+      setCheckedBy(fullOrder.packaging?.checked_by || []);
+      setItemImages(fullOrder.packaging?.item_images || {});
+      setOrderImages(fullOrder.packaging?.order_images || []);
+      setPackedBoxImages(fullOrder.packaging?.packed_box_images || []);
+      setShowDetail(true);
+    } catch {
+      toast.error("Failed to load order details");
+    }
   };
 
   const handleUpload = async (e) => {
