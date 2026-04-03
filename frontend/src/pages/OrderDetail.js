@@ -283,6 +283,40 @@ export default function OrderDetail() {
     }
   };
 
+  const shareDispatchSlip = async () => {
+    const slipUrls = order.dispatch?.dispatch_slip_images || [];
+    if (!slipUrls.length) return toast.error("No dispatch slip to share");
+    try {
+      const blobs = await Promise.all(
+        slipUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
+      );
+      const files = blobs.map((blob, i) => {
+        const ext = blob.type.includes("png") ? "png" : "jpg";
+        return new File([blob], `dispatch-slip-${order.order_number}-${i + 1}.${ext}`, { type: blob.type });
+      });
+      if (navigator.canShare && navigator.canShare({ files })) {
+        await navigator.share({ files, title: `Dispatch Slip - ${order.order_number}` });
+      } else {
+        files.forEach((file) => {
+          const url = URL.createObjectURL(file);
+          const a = document.createElement("a");
+          a.href = url; a.download = file.name;
+          document.body.appendChild(a); a.click();
+          document.body.removeChild(a); URL.revokeObjectURL(url);
+        });
+        toast.success("Dispatch slip downloaded.");
+        if (customerPhone) {
+          const clean = customerPhone.replace(/[^0-9]/g, "");
+          const waPhone = clean.startsWith("91") ? clean : `91${clean}`;
+          setTimeout(() => window.open(`https://wa.me/${waPhone}`, "_blank"), 500);
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") toast.error("Share failed");
+    }
+  };
+
+
   const shareInvoice = async () => {
     if (!order.tax_invoice_url) return toast.error("No invoice to share");
     try {
@@ -767,6 +801,11 @@ export default function OrderDetail() {
                         </button>
                       ))}
                     </div>
+                    {["admin", "telecaller", "packaging", "dispatch"].includes(user?.role) && (
+                      <Button variant="outline" size="sm" className="mt-2" onClick={shareDispatchSlip} data-testid="share-dispatch-slip-btn">
+                        <Share2 className="w-4 h-4 mr-1 text-blue-600" /> Share Slip
+                      </Button>
+                    )}
                   </div>
                 )}
               </>
