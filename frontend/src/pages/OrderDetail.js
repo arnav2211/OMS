@@ -739,7 +739,7 @@ export default function OrderDetail() {
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">Dispatch</CardTitle>
-              {["admin", "dispatch"].includes(user?.role) && order.status === "packed" && (
+              {["admin", "dispatch", "packaging"].includes(user?.role) && order.status === "packed" && (
                 <Button variant="outline" size="sm" onClick={openDispatch} data-testid="dispatch-order-btn"><Truck className="w-4 h-4 mr-1" /> Dispatch</Button>
               )}
             </div>
