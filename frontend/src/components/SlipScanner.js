@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import api from "@/lib/api";
 import { compressImage } from "@/lib/compressImage";
 import { Button } from "@/components/ui/button";
@@ -6,33 +6,55 @@ import { toast } from "sonner";
 import { Upload, Camera, X, ScanBarcode, Loader2 } from "lucide-react";
 
 export function SlipScanner({ onBarcodeDetected, slipImages, onSlipImagesChange }) {
-  const [scanning, setScanning] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const scanIntervalRef = useRef(null);
   const backendUrl = process.env.REACT_APP_BACKEND_URL;
 
-  useEffect(() => {
-    return () => stopCamera();
+  const stopCamera = useCallback(() => {
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setCameraActive(false);
+    setScanning(false);
   }, []);
 
-  const handleSlipUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  useEffect(() => {
+    return () => stopCamera();
+  }, [stopCamera]);
+
+  // When cameraActive turns true, connect the stream to the video element
+  useEffect(() => {
+    if (cameraActive && streamRef.current && videoRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [cameraActive]);
+
+  const uploadAndScan = async (file) => {
     setUploading(true);
     try {
       const compressed = await compressImage(file);
       const formData = new FormData();
       formData.append("file", compressed);
       const uploadRes = await api.post("/upload", formData, { headers: { "Content-Type": "multipart/form-data" } });
-      const url = uploadRes.data.url;
-      onSlipImagesChange([...(slipImages || []), url]);
+      onSlipImagesChange([...(slipImages || []), uploadRes.data.url]);
 
-      // Try barcode scan on the uploaded image
+      // Try barcode scan on the original image
       const scanForm = new FormData();
       scanForm.append("file", file);
       const scanRes = await api.post("/scan-barcode", scanForm, { headers: { "Content-Type": "multipart/form-data" } });
@@ -46,8 +68,21 @@ export function SlipScanner({ onBarcodeDetected, slipImages, onSlipImagesChange 
       toast.error("Upload failed");
     } finally {
       setUploading(false);
-      e.target.value = "";
     }
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await uploadAndScan(file);
+    e.target.value = "";
+  };
+
+  const handleCameraCapture = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await uploadAndScan(file);
+    e.target.value = "";
   };
 
   const startCamera = async () => {
@@ -56,18 +91,14 @@ export function SlipScanner({ onBarcodeDetected, slipImages, onSlipImagesChange 
         video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
       });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
+      // Set cameraActive first so video element renders, then useEffect connects the stream
       setCameraActive(true);
       setScanning(true);
 
-      // Start scanning frames
       scanIntervalRef.current = setInterval(() => {
         captureAndScan();
       }, 1500);
-    } catch (err) {
+    } catch {
       toast.error("Could not access camera");
       setCameraActive(false);
     }
@@ -76,13 +107,14 @@ export function SlipScanner({ onBarcodeDetected, slipImages, onSlipImagesChange 
   const captureAndScan = async () => {
     if (!videoRef.current || !canvasRef.current) return;
     const video = videoRef.current;
+    if (video.videoWidth === 0 || video.videoHeight === 0) return;
     const canvas = canvasRef.current;
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(video, 0, 0);
     canvas.toBlob(async (blob) => {
-      if (!blob) return;
+      if (!blob || blob.size < 100) return;
       const formData = new FormData();
       formData.append("file", blob, "scan.jpg");
       try {
@@ -96,19 +128,6 @@ export function SlipScanner({ onBarcodeDetected, slipImages, onSlipImagesChange 
     }, "image/jpeg", 0.8);
   };
 
-  const stopCamera = () => {
-    if (scanIntervalRef.current) {
-      clearInterval(scanIntervalRef.current);
-      scanIntervalRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-      streamRef.current = null;
-    }
-    setCameraActive(false);
-    setScanning(false);
-  };
-
   const removeSlip = (idx) => {
     onSlipImagesChange(slipImages.filter((_, i) => i !== idx));
   };
@@ -116,7 +135,8 @@ export function SlipScanner({ onBarcodeDetected, slipImages, onSlipImagesChange 
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
-        <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleSlipUpload} />
+        <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
+        <input type="file" ref={cameraInputRef} className="hidden" accept="image/*" capture="environment" onChange={handleCameraCapture} />
         <Button
           type="button"
           variant="outline"
@@ -127,6 +147,16 @@ export function SlipScanner({ onBarcodeDetected, slipImages, onSlipImagesChange 
         >
           {uploading ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Upload className="w-4 h-4 mr-1" />}
           Upload Slip
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => cameraInputRef.current?.click()}
+          disabled={uploading}
+          data-testid="camera-slip-btn"
+        >
+          <Camera className="w-4 h-4 mr-1" /> Camera
         </Button>
         {!cameraActive ? (
           <Button
@@ -151,10 +181,10 @@ export function SlipScanner({ onBarcodeDetected, slipImages, onSlipImagesChange 
         )}
       </div>
 
-      {/* Camera preview */}
+      {/* Camera preview for barcode scanning */}
       {cameraActive && (
         <div className="relative rounded-lg overflow-hidden border bg-black" data-testid="camera-preview">
-          <video ref={videoRef} className="w-full max-h-48 object-cover" playsInline muted />
+          <video ref={videoRef} className="w-full max-h-48 object-cover" playsInline muted autoPlay />
           <canvas ref={canvasRef} className="hidden" />
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="w-3/4 h-1/2 border-2 border-dashed border-green-400 rounded-lg opacity-70" />
