@@ -18,6 +18,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { mobilePrintPdf } from "@/lib/mobilePrint";
+import { SlipScanner } from "@/components/SlipScanner";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
@@ -46,6 +47,7 @@ export default function OrderDetail() {
   const [formulationVisible, setFormulationVisible] = useState(true);
   const [packagingStaff, setPackagingStaff] = useState([]);
   const [dispatchData, setDispatchData] = useState({ courier_name: "", transporter_name: "", lr_no: "", dispatch_type: "" });
+  const [dispatchSlipImages, setDispatchSlipImages] = useState([]);
   const [previewImage, setPreviewImage] = useState(null);
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerGst, setCustomerGst] = useState("");
@@ -146,13 +148,14 @@ export default function OrderDetail() {
       lr_no: d.lr_no || "",
       dispatch_type: d.dispatch_type || order.shipping_method || "",
     });
+    setDispatchSlipImages(d.dispatch_slip_images || []);
     setShowDispatch(true);
   };
 
   const saveDispatch = async () => {
     setSaving(true);
     try {
-      await api.put(`/orders/${id}/dispatch`, dispatchData);
+      await api.put(`/orders/${id}/dispatch`, { ...dispatchData, dispatch_slip_images: dispatchSlipImages });
       toast.success("Order dispatched!"); setShowDispatch(false); loadOrder();
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
     finally { setSaving(false); }
@@ -751,6 +754,18 @@ export default function OrderDetail() {
                 {order.dispatch.courier_name && <div><span className="text-muted-foreground">Courier:</span> {order.dispatch.courier_name}</div>}
                 {order.dispatch.transporter_name && <div><span className="text-muted-foreground">Transporter:</span> {order.dispatch.transporter_name}</div>}
                 {order.dispatch.lr_no && <div><span className="text-muted-foreground">LR No:</span> {order.dispatch.lr_no}</div>}
+                {order.dispatch.dispatch_slip_images?.length > 0 && (
+                  <div className="pt-2">
+                    <span className="text-muted-foreground text-xs uppercase font-medium">Dispatch Slip</span>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {order.dispatch.dispatch_slip_images.map((url, i) => (
+                        <button key={i} className="w-16 h-16 rounded border overflow-hidden" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
+                          <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Slip ${i+1}`} className="w-full h-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </>
             ) : <p className="text-muted-foreground">Not dispatched yet.</p>}
           </CardContent>
@@ -849,7 +864,15 @@ export default function OrderDetail() {
             {dispatchData.dispatch_type === "transport" && (
               <div><Label>Transporter</Label><Input value={dispatchData.transporter_name} onChange={(e) => setDispatchData({ ...dispatchData, transporter_name: e.target.value })} /></div>
             )}
-            <div><Label>LR / Tracking No.</Label><Input value={dispatchData.lr_no} onChange={(e) => setDispatchData({ ...dispatchData, lr_no: e.target.value })} /></div>
+            <div><Label>LR / Tracking No.</Label><Input value={dispatchData.lr_no} onChange={(e) => setDispatchData({ ...dispatchData, lr_no: e.target.value })} data-testid="dispatch-lr-input" /></div>
+            <div>
+              <Label className="mb-2 block">Courier / Transport Slip</Label>
+              <SlipScanner
+                onBarcodeDetected={(code) => setDispatchData(prev => ({ ...prev, lr_no: code }))}
+                slipImages={dispatchSlipImages}
+                onSlipImagesChange={setDispatchSlipImages}
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDispatch(false)}>Cancel</Button>

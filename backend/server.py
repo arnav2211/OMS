@@ -183,6 +183,7 @@ class DispatchUpdate(BaseModel):
     lr_no: str = ""
     dispatch_type: str = ""
     shipping_method: str = ""
+    dispatch_slip_images: List[str] = []
 
 class PICreate(BaseModel):
     customer_id: str
@@ -1319,6 +1320,7 @@ async def update_dispatch(order_id: str, req: DispatchUpdate, user=Depends(get_c
         "courier_name": req.courier_name,
         "transporter_name": req.transporter_name or order.get("transporter_name", ""),
         "lr_no": req.lr_no,
+        "dispatch_slip_images": req.dispatch_slip_images,
         "dispatched_by": user["name"],
         "dispatched_at": datetime.now(timezone.utc).isoformat()
     }
@@ -1716,6 +1718,25 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
         content = await file.read()
         await f.write(content)
     return {"url": f"/api/uploads/{filename}", "filename": filename}
+
+@api_router.post("/scan-barcode")
+async def scan_barcode(file: UploadFile = File(...), user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "dispatch", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    try:
+        from pyzbar.pyzbar import decode as pyzbar_decode
+        from PIL import Image
+        content = await file.read()
+        img = Image.open(io.BytesIO(content))
+        barcodes = pyzbar_decode(img)
+        if barcodes:
+            code = barcodes[0].data.decode("utf-8")
+            return {"found": True, "code": code, "type": barcodes[0].type}
+        return {"found": False, "code": "", "type": ""}
+    except Exception as e:
+        logging.error(f"Barcode scan error: {e}")
+        return {"found": False, "code": "", "type": "", "error": str(e)}
+
 
 # Reports
 @api_router.get("/reports/sales")
