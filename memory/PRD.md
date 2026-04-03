@@ -7,6 +7,7 @@ Full-stack Order Management System for CitSpray Aroma Sciences with role-based a
 - **Backend:** FastAPI + Motor (MongoDB) + Pydantic + JWT Auth
 - **Frontend:** React + Tailwind CSS + Shadcn/UI
 - **PDF Tools:** pdfplumber (parsing), ReportLab (generation), PyPDF2 (merging)
+- **Barcode:** pyzbar + Pillow (server-side), html5-qrcode (client-side camera scan)
 - **Key Pattern:** Lean projections with server-side pagination for list endpoints
 
 ## What's Been Implemented
@@ -36,25 +37,34 @@ Full-stack Order Management System for CitSpray Aroma Sciences with role-based a
 - Backend pagination & server-side search for all major lists
 - Lean projections excluding heavy nested data from list views
 - Compressed logo_pdf.png for PDF generation
-- GST/Non-GST and Invoice Upload Status columns
 
-### Bug Fixes (Latest)
-- [2026-04-02] Fixed Packaging "Pack" dialog not showing items/upload options (lean projection issue - openOrder now fetches full order detail)
-- Fixed formulation data loss on order update (safe $set merging)
-- Fixed executive report period filter (IST timezone)
-- Fixed mobile print popup blocker issues
+### Phase 5 - Dispatch Enhancements (Latest)
+- **Courier/Transport Slip Upload:** Admin, Packaging, Dispatch can upload slip images during dispatch
+- **Barcode Auto-Fill:** Uploaded slip images scanned for barcodes; LR No. auto-filled if detected
+- **Camera Barcode Scan:** Manual camera scan option to read barcodes directly
+- **Packaging Dispatch Access:** Packaging role can dispatch from Order Detail page
+- **Slip images stored** in `dispatch.dispatch_slip_images` array and displayed in order detail
+
+### Bug Fixes (Latest Session)
+- [2026-04-03] Fixed Packaging "Pack" dialog not showing items/upload options (lean projection)
+- [2026-04-03] Fixed PI edit form loading empty (lean projection - now fetches full PI)
+- [2026-04-03] Fixed duplicate item name image collision (composite key product_name__idx)
+- [2026-04-03] Fixed /all-orders alias search (pre-lookup customers by alias)
+- [2026-04-03] Fixed payment proof not visible in Accounts dashboard (removed from lean exclusion)
 
 ## Key API Endpoints
-- `GET /api/orders` - Paginated, lean projection, server-side search
+- `GET /api/orders` - Paginated, lean projection, server-side search (incl. alias)
 - `GET /api/orders/{id}` - Full order detail
 - `PUT /api/orders/{id}` - Safe merge update (preserves formulations)
+- `PUT /api/orders/{id}/dispatch` - Dispatch with slip images support
+- `POST /api/scan-barcode` - Barcode detection from uploaded image (pyzbar)
 - `PUT /api/orders/{id}/packaging` - Packaging status update
 - `POST /api/orders/{id}/request-edit` - Formulation lock edit request
-- `PUT /api/admin/edit-permissions/{id}` - Admin approval
 - `POST /api/orders/{id}/invoice-upload` - Tax + E-Way merge
 - `GET /api/orders/{id}/print` - Packing slip PDF
 
-## Key DB Collections
+## Key DB Schema
+- **orders.dispatch:** `{ courier_name, transporter_name, lr_no, dispatch_slip_images: [], dispatched_by, dispatched_at }`
 - **orders:** `{ formulation_locked, extra_shipping_details, items[].formulation, ... }`
 - **customers:** `{ alias, phone_numbers, gst_no, ... }`
 - **addresses:** `{ address_name, ... }`

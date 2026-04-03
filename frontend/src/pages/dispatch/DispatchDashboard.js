@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Truck, Send, Eye, Search } from "lucide-react";
+import { SlipScanner } from "@/components/SlipScanner";
 
 const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
 const NO_LR_METHODS = ["porter", "self_arranged", "office_collection"];
@@ -25,6 +26,7 @@ export default function DispatchDashboard() {
   const [courierName, setCourierName] = useState("");
   const [transporterName, setTransporterName] = useState("");
   const [lrNo, setLrNo] = useState("");
+  const [dispatchSlipImages, setDispatchSlipImages] = useState([]);
   const [editShippingMethod, setEditShippingMethod] = useState("");
   const [dispSearch, setDispSearch] = useState("");
 
@@ -53,6 +55,7 @@ export default function DispatchDashboard() {
     setCourierName(order.dispatch?.courier_name || order.courier_name || "");
     setTransporterName(order.dispatch?.transporter_name || order.transporter_name || "");
     setLrNo(order.dispatch?.lr_no || "");
+    setDispatchSlipImages(order.dispatch?.dispatch_slip_images || []);
     setShowDispatch(true);
   };
 
@@ -77,6 +80,7 @@ export default function DispatchDashboard() {
         lr_no: lrNo,
         dispatch_type: method,
         shipping_method: method,
+        dispatch_slip_images: dispatchSlipImages,
       });
       toast.success("Order dispatched!");
       setShowDispatch(false);
@@ -246,11 +250,20 @@ export default function DispatchDashboard() {
                       data-testid="dispatch-lr-input"
                     />
                   </div>
+                  <div>
+                    <Label className="mb-2 block">Courier / Transport Slip</Label>
+                    <SlipScanner
+                      onBarcodeDetected={(code) => setLrNo(code)}
+                      slipImages={dispatchSlipImages}
+                      onSlipImagesChange={setDispatchSlipImages}
+                    />
+                  </div>
                 </>
               )}
 
               {/* For courier, also show LR field */}
               {editShippingMethod === "courier" && (
+                <>
                 <div>
                   <Label>Tracking Number</Label>
                   <Input
@@ -260,6 +273,15 @@ export default function DispatchDashboard() {
                     data-testid="dispatch-tracking-input"
                   />
                 </div>
+                <div>
+                  <Label className="mb-2 block">Courier Slip</Label>
+                  <SlipScanner
+                    onBarcodeDetected={(code) => setLrNo(code)}
+                    slipImages={dispatchSlipImages}
+                    onSlipImagesChange={setDispatchSlipImages}
+                  />
+                </div>
+                </>
               )}
 
               {/* Porter / Self-arranged / Office Collection: just dispatch */}
