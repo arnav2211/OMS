@@ -3608,6 +3608,28 @@ async def dtdc_check_pincode(pincode: str):
     return {"serviceable": False, "message": "This pincode is not serviceable by DTDC."}
 
 
+# ─── Shree Anjani Serviceability Checker ─────────────────────────────────
+
+import httpx
+
+@api_router.get("/anjani/check/{pincode}")
+async def anjani_check_pincode(pincode: str):
+    pincode = pincode.strip()
+    if not pincode.isdigit() or len(pincode) != 6:
+        return {"serviceable": False, "message": "Invalid pincode format."}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client_http:
+            resp = await client_http.get(f"https://api-customer.shreeanjani.co.in/public/centers-by-pincode/{pincode}")
+            data = resp.json()
+        if data.get("success") and data.get("data") and len(data["data"]) > 0:
+            return {"serviceable": True, "centers": data["data"]}
+        return {"serviceable": False, "message": "This pincode is not serviceable by Shree Anjani."}
+    except Exception as e:
+        logging.error(f"Anjani API error: {e}")
+        return {"serviceable": False, "message": "Unable to check serviceability right now. Please try again."}
+
+
+
 app.include_router(api_router)
 app.mount("/api/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 

@@ -24,6 +24,7 @@ import AmazonPacking from "@/pages/amazon/AmazonPacking";
 import AmazonDispatch from "@/pages/amazon/AmazonDispatch";
 import AdminAccounts from "@/pages/admin/AdminAccounts";
 import DTDCCalculator from "@/pages/DTDCCalculator";
+import AnjaniChecker from "@/pages/AnjaniChecker";
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
@@ -72,6 +73,7 @@ function AppRoutes() {
       <Route path="/amazon-dispatch" element={<ProtectedRoute allowedRoles={["admin", "packaging", "dispatch"]}><AmazonDispatch /></ProtectedRoute>} />
       <Route path="/accounts" element={<ProtectedRoute allowedRoles={["admin"]}><AdminAccounts /></ProtectedRoute>} />
       <Route path="/dtdc" element={<ProtectedRoute><DTDCCalculator /></ProtectedRoute>} />
+      <Route path="/anjani" element={<ProtectedRoute><AnjaniChecker /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
