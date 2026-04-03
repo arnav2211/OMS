@@ -305,3 +305,12 @@ frontend/node_modules/.cache/default-development/16.pack
 # Environment files
 *.env
 *.env.*
+frontend/node_modules/.cache/default-development/29.pack
+-e 
+# Environment files
+*.env
+*.env.*
+-e 
+# Environment files
+*.env
+*.env.*

@@ -245,14 +245,17 @@ export default function OrderDetail() {
   const packedBoxImageUrls = order.packaging?.packed_box_images || [];
 
   const sharePackedBoxImages = async () => {
-    if (!packedBoxImageUrls.length) return toast.error("No packed box images to share");
+    const dispatchSlipUrls = order.dispatch?.dispatch_slip_images || [];
+    const allUrls = [...packedBoxImageUrls, ...dispatchSlipUrls];
+    if (!allUrls.length) return toast.error("No images to share");
     try {
       const blobs = await Promise.all(
-        packedBoxImageUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
+        allUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
       );
       const files = blobs.map((blob, i) => {
         const ext = blob.type.includes("png") ? "png" : "jpg";
-        return new File([blob], `packed-box-${order.order_number}-${i + 1}.${ext}`, { type: blob.type });
+        const label = i < packedBoxImageUrls.length ? `packed-box-${i + 1}` : `dispatch-slip-${i - packedBoxImageUrls.length + 1}`;
+        return new File([blob], `${label}-${order.order_number}.${ext}`, { type: blob.type });
       });
 
       if (navigator.canShare && navigator.canShare({ files })) {
@@ -279,6 +282,40 @@ export default function OrderDetail() {
       if (err.name !== "AbortError") toast.error("Share failed");
     }
   };
+
+  const shareDispatchSlip = async () => {
+    const slipUrls = order.dispatch?.dispatch_slip_images || [];
+    if (!slipUrls.length) return toast.error("No dispatch slip to share");
+    try {
+      const blobs = await Promise.all(
+        slipUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
+      );
+      const files = blobs.map((blob, i) => {
+        const ext = blob.type.includes("png") ? "png" : "jpg";
+        return new File([blob], `dispatch-slip-${order.order_number}-${i + 1}.${ext}`, { type: blob.type });
+      });
+      if (navigator.canShare && navigator.canShare({ files })) {
+        await navigator.share({ files, title: `Dispatch Slip - ${order.order_number}` });
+      } else {
+        files.forEach((file) => {
+          const url = URL.createObjectURL(file);
+          const a = document.createElement("a");
+          a.href = url; a.download = file.name;
+          document.body.appendChild(a); a.click();
+          document.body.removeChild(a); URL.revokeObjectURL(url);
+        });
+        toast.success("Dispatch slip downloaded.");
+        if (customerPhone) {
+          const clean = customerPhone.replace(/[^0-9]/g, "");
+          const waPhone = clean.startsWith("91") ? clean : `91${clean}`;
+          setTimeout(() => window.open(`https://wa.me/${waPhone}`, "_blank"), 500);
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") toast.error("Share failed");
+    }
+  };
+
 
   const shareInvoice = async () => {
     if (!order.tax_invoice_url) return toast.error("No invoice to share");
@@ -641,7 +678,7 @@ export default function OrderDetail() {
                   <Button variant="outline" size="sm" onClick={sharePackingImages} data-testid="share-packing-images-btn">
                     <Share2 className="w-4 h-4 mr-1 text-green-600" /> Share All Images
                   </Button>
-                  {packedBoxImageUrls.length > 0 && (
+                  {(packedBoxImageUrls.length > 0 || order.dispatch?.dispatch_slip_images?.length > 0) && (
                     <Button variant="outline" size="sm" onClick={sharePackedBoxImages} data-testid="share-packed-box-images-btn">
                       <Share2 className="w-4 h-4 mr-1 text-blue-600" /> Share Packed Box Images
                     </Button>
@@ -747,9 +784,28 @@ export default function OrderDetail() {
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Dispatch</CardTitle>
-              {["admin", "dispatch", "packaging"].includes(user?.role) && order.status === "packed" && (
-                <Button variant="outline" size="sm" onClick={openDispatch} data-testid="dispatch-order-btn"><Truck className="w-4 h-4 mr-1" /> Dispatch</Button>
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-base">Dispatch</CardTitle>
+                {order.dispatch?.dispatched_at && (order.dispatch.courier_name || order.dispatch.lr_no) && (
+                  <button
+                    className="text-muted-foreground hover:text-primary transition-colors"
+                    onClick={() => {
+                      const parts = [];
+                      if (order.dispatch.courier_name) parts.push(`Courier: ${order.dispatch.courier_name}`);
+                      if (order.dispatch.transporter_name) parts.push(`Transporter: ${order.dispatch.transporter_name}`);
+                      if (order.dispatch.lr_no) parts.push(`LR No: ${order.dispatch.lr_no}`);
+                      copyToClipboard(parts.join("\n"), "Dispatch details");
+                    }}
+                    data-testid="copy-dispatch-details-btn"
+                  >
+                    <ClipboardCopy className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              {["admin", "dispatch", "packaging"].includes(user?.role) && (order.status === "packed" || order.status === "dispatched") && (
+                <Button variant="outline" size="sm" onClick={openDispatch} data-testid="dispatch-order-btn">
+                  <Truck className="w-4 h-4 mr-1" /> {order.status === "dispatched" ? "Edit Dispatch" : "Dispatch"}
+                </Button>
               )}
             </div>
           </CardHeader>
@@ -770,6 +826,11 @@ export default function OrderDetail() {
                         </button>
                       ))}
                     </div>
+                    {["admin", "telecaller", "packaging", "dispatch"].includes(user?.role) && (
+                      <Button variant="outline" size="sm" className="mt-2" onClick={shareDispatchSlip} data-testid="share-dispatch-slip-btn">
+                        <Share2 className="w-4 h-4 mr-1 text-blue-600" /> Share Slip
+                      </Button>
+                    )}
                   </div>
                 )}
               </>
