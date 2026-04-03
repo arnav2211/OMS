@@ -820,7 +820,7 @@ async def list_orders(
         "_id": 0, "items": 0, "free_samples": 0,
         "billing_address": 0, "shipping_address": 0,
         "packaging": 0, "dispatch_details": 0,
-        "payment_screenshots": 0, "payment_mode_details": 0,
+        "payment_mode_details": 0,
         "remark": 0, "purpose": 0, "extra_shipping_details": 0,
     }
 
