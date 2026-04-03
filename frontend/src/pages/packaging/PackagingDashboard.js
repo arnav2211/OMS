@@ -306,7 +306,9 @@ export default function PackagingDashboard() {
 
               {/* Items with formulations */}
               <h4 className="text-sm font-semibold">Items</h4>
-              {selectedOrder.items?.map((item, idx) => (
+              {selectedOrder.items?.map((item, idx) => {
+                const itemKey = `${item.product_name}__${idx}`;
+                return (
                 <div key={idx} className="p-3 rounded-lg border space-y-2" data-testid={`pkg-item-${idx}`}>
                   <div className="flex items-center justify-between flex-wrap gap-1">
                     <span className="font-medium text-sm">{item.product_name}</span>
@@ -321,12 +323,12 @@ export default function PackagingDashboard() {
                     </div>
                   )}
                   <div className="flex flex-wrap gap-2 mt-2">
-                    {(itemImages[item.product_name] || []).map((url, i) => (
+                    {(itemImages[itemKey] || []).map((url, i) => (
                       <div key={i} className="relative w-16 h-16 rounded border overflow-hidden group">
                         <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
                         <button
                           className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
-                          onClick={() => setItemImages((prev) => ({ ...prev, [item.product_name]: prev[item.product_name].filter((_, j) => j !== i) }))}
+                          onClick={() => setItemImages((prev) => ({ ...prev, [itemKey]: prev[itemKey].filter((_, j) => j !== i) }))}
                         >
                           <X className="w-4 h-4 text-white" />
                         </button>
@@ -334,7 +336,7 @@ export default function PackagingDashboard() {
                     ))}
                     <button
                       className="w-16 h-16 rounded border-2 border-dashed flex items-center justify-center hover:bg-accent transition-colors"
-                      onClick={() => triggerUpload("item", item.product_name)}
+                      onClick={() => triggerUpload("item", itemKey)}
                       disabled={uploading}
                       data-testid={`upload-item-img-${idx}`}
                       title="Gallery / Files"
@@ -343,7 +345,7 @@ export default function PackagingDashboard() {
                     </button>
                     <button
                       className="w-16 h-16 rounded border-2 border-dashed flex items-center justify-center hover:bg-accent transition-colors"
-                      onClick={() => triggerCameraUpload("item", item.product_name)}
+                      onClick={() => triggerCameraUpload("item", itemKey)}
                       disabled={uploading}
                       data-testid={`camera-item-img-${idx}`}
                       title="Camera"
@@ -352,7 +354,8 @@ export default function PackagingDashboard() {
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
 
               <Separator />
 

@@ -231,20 +231,24 @@ export default function PIBuilder() {
     setShowBuilder(true);
   };
 
-  const openEditPI = (pi) => {
-    setEditingPi(pi);
-    const cust = customers.find(c => c.id === pi.customer_id);
-    setSelectedCustomer(cust || { id: pi.customer_id, name: pi.customer_name });
-    setItems(pi.items.length ? pi.items.map(i => ({ ...i })) : [emptyItem()]);
-    setGstApplicable(pi.gst_applicable); setShowRate(pi.show_rate !== false);
-    setShippingCharge(pi.shipping_charge || 0);
-    const allCharges = pi.additional_charges || [];
-    setAdditionalCharges(allCharges.filter(c => c.name !== "Local Charges"));
-    setRemark(pi.remark || "");
-    setBillingAddress(pi.billing_address || null); setShippingAddress(pi.shipping_address || null);
-    setSameAsBilling(pi.billing_address_id === pi.shipping_address_id);
-    setFreeSamples(pi.free_samples || []);
-    setShowBuilder(true);
+  const openEditPI = async (pi) => {
+    try {
+      const res = await api.get(`/proforma-invoices/${pi.id}`);
+      const fullPi = res.data;
+      setEditingPi(fullPi);
+      const cust = customers.find(c => c.id === fullPi.customer_id);
+      setSelectedCustomer(cust || { id: fullPi.customer_id, name: fullPi.customer_name });
+      setItems(fullPi.items?.length ? fullPi.items.map(i => ({ ...i })) : [emptyItem()]);
+      setGstApplicable(fullPi.gst_applicable); setShowRate(fullPi.show_rate !== false);
+      setShippingCharge(fullPi.shipping_charge || 0);
+      const allCharges = fullPi.additional_charges || [];
+      setAdditionalCharges(allCharges.filter(c => c.name !== "Local Charges"));
+      setRemark(fullPi.remark || "");
+      setBillingAddress(fullPi.billing_address || null); setShippingAddress(fullPi.shipping_address || null);
+      setSameAsBilling(fullPi.billing_address_id === fullPi.shipping_address_id);
+      setFreeSamples(fullPi.free_samples || []);
+      setShowBuilder(true);
+    } catch { toast.error("Failed to load PI details"); }
   };
 
   const handleSubmit = async () => {
