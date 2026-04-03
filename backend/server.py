@@ -3497,6 +3497,117 @@ async def delete_amazon_order_image(
     return {"status": "deleted"}
 
 # Static + Mount
+
+# ─── DTDC Serviceability & Rate Calculator ───────────────────────────────
+
+# Load DTDC pincodes into memory at startup
+import openpyxl
+_dtdc_pincodes = {}
+try:
+    _wb = openpyxl.load_workbook(os.path.join(os.path.dirname(__file__), "dtdc_pincodes.xlsx"), read_only=True)
+    _ws = _wb.active
+    for row in _ws.iter_rows(min_row=2, values_only=True):
+        pincode = str(row[0]).strip() if row[0] else ""
+        if pincode:
+            _dtdc_pincodes[pincode] = {
+                "pincode": pincode,
+                "city": str(row[1]).strip() if row[1] else "",
+                "state": str(row[2]).strip() if row[2] else "",
+                "category": str(row[3]).strip() if row[3] else "",
+            }
+    _wb.close()
+    logging.info(f"DTDC: Loaded {len(_dtdc_pincodes)} pincodes")
+except Exception as e:
+    logging.error(f"DTDC pincode load error: {e}")
+
+GROUND_EXPRESS_RATES = {
+    "Within City": {"base": 77, "per_kg": 20},
+    "Within State": {"base": 93, "per_kg": 24},
+    "Within Zone": {"base": 111, "per_kg": 30},
+    "Metros": {"base": 141, "per_kg": 37},
+    "Rest of India": {"base": 152, "per_kg": 41},
+    "Special destination": {"base": 215, "per_kg": 58},
+}
+
+STANDARD_RATES = {
+    "Within City": {"base": 24, "per_500g": 16},
+    "Within State": {"base": 34, "per_500g": 20},
+    "Within Zone": {"base": 37, "per_500g": 29},
+    "Metros": {"base": 63, "per_500g": 56},
+    "Rest of India": {"base": 69, "per_500g": 58},
+    "Special destination": {"base": 98, "per_500g": 89},
+}
+
+import math
+
+def calc_ground_express(category: str, weight_kg: float) -> int:
+    rate = GROUND_EXPRESS_RATES.get(category)
+    if not rate:
+        return 0
+    if weight_kg <= 3:
+        return rate["base"]
+    extra_kg = math.ceil(weight_kg - 3)
+    return rate["base"] + extra_kg * rate["per_kg"]
+
+def calc_standard(category: str, weight_kg: float) -> int:
+    rate = STANDARD_RATES.get(category)
+    if not rate:
+        return 0
+    if weight_kg <= 0.5:
+        return rate["base"]
+    extra_slabs = math.ceil((weight_kg - 0.5) / 0.5)
+    return rate["base"] + extra_slabs * rate["per_500g"]
+
+def ceil_to_10(value: int) -> int:
+    return math.ceil(value / 10) * 10
+
+@api_router.post("/dtdc/calculate")
+async def dtdc_calculate(body: dict):
+    pincode = str(body.get("pincode", "")).strip()
+    kg = float(body.get("kg", 0))
+    grams = float(body.get("grams", 0))
+    total_weight = (kg * 1000 + grams) / 1000
+
+    if pincode not in _dtdc_pincodes:
+        return {"serviceable": False, "message": "This pincode is not serviceable by DTDC."}
+
+    info = _dtdc_pincodes[pincode]
+    category = info["category"]
+
+    ground_cost = calc_ground_express(category, total_weight)
+    standard_cost = calc_standard(category, total_weight)
+
+    if ground_cost <= standard_cost:
+        final_cost = ceil_to_10(ground_cost)
+        series = "D-Series"
+        selected_method = "Ground Express"
+    else:
+        final_cost = ceil_to_10(standard_cost)
+        series = "M-Series"
+        selected_method = "Standard"
+
+    return {
+        "serviceable": True,
+        "pincode": pincode,
+        "city": info["city"],
+        "state": info["state"],
+        "category": category,
+        "total_weight_kg": round(total_weight, 3),
+        "ground_express_cost": ground_cost,
+        "standard_cost": standard_cost,
+        "selected_method": selected_method,
+        "series": series,
+        "final_charge": final_cost,
+    }
+
+@api_router.get("/dtdc/check/{pincode}")
+async def dtdc_check_pincode(pincode: str):
+    pincode = pincode.strip()
+    if pincode in _dtdc_pincodes:
+        return {"serviceable": True, **_dtdc_pincodes[pincode]}
+    return {"serviceable": False, "message": "This pincode is not serviceable by DTDC."}
+
+
 app.include_router(api_router)
 app.mount("/api/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
