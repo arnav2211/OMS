@@ -143,24 +143,6 @@ export default function DTDCCalculator() {
                 <span className="text-muted-foreground">Weight</span>
                 <span className="font-medium" data-testid="dtdc-result-weight">{result.total_weight_kg} kg</span>
               </div>
-
-              {/* Rate Comparison */}
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                <div className={`p-3 rounded-lg border text-center ${result.selected_method === "Ground Express" ? "border-green-300 bg-green-50 dark:bg-green-950/30 dark:border-green-800" : "border-muted"}`}>
-                  <p className="text-xs text-muted-foreground uppercase font-medium">Ground Express</p>
-                  <p className={`text-lg font-bold mt-1 ${result.selected_method === "Ground Express" ? "text-green-700 dark:text-green-400" : ""}`} data-testid="dtdc-ground-cost">
-                    {"\u20B9"}{result.ground_express_cost}
-                  </p>
-                  {result.selected_method === "Ground Express" && <span className="text-[10px] text-green-600 dark:text-green-400 font-medium uppercase">Cheaper</span>}
-                </div>
-                <div className={`p-3 rounded-lg border text-center ${result.selected_method === "Standard" ? "border-green-300 bg-green-50 dark:bg-green-950/30 dark:border-green-800" : "border-muted"}`}>
-                  <p className="text-xs text-muted-foreground uppercase font-medium">Standard</p>
-                  <p className={`text-lg font-bold mt-1 ${result.selected_method === "Standard" ? "text-green-700 dark:text-green-400" : ""}`} data-testid="dtdc-standard-cost">
-                    {"\u20B9"}{result.standard_cost}
-                  </p>
-                  {result.selected_method === "Standard" && <span className="text-[10px] text-green-600 dark:text-green-400 font-medium uppercase">Cheaper</span>}
-                </div>
-              </div>
             </div>
 
             {/* Final Result */}
