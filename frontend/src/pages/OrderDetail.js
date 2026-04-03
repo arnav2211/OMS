@@ -651,7 +651,7 @@ export default function OrderDetail() {
             {order.packaging?.item_images && Object.entries(order.packaging.item_images).map(([key, urls]) => (
               urls?.length > 0 && (
                 <div key={key}>
-                  <p className="text-xs font-medium text-muted-foreground uppercase mb-2">Item: {key}</p>
+                  <p className="text-xs font-medium text-muted-foreground uppercase mb-2">Item: {key.includes("__") ? key.split("__")[0] : key}</p>
                   <div className="flex flex-wrap gap-2">
                     {urls.map((url, i) => (
                       <div key={i} className="relative w-20 h-20 rounded-lg border overflow-hidden group">
@@ -1142,32 +1142,35 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving }) {
         <Label className="text-sm font-medium">Packaging Images</Label>
 
         {/* Item Images */}
-        {order.items?.map(item => (
-          <div key={item.product_name}>
+        {order.items?.map((item, idx) => {
+          const itemKey = `${item.product_name}__${idx}`;
+          return (
+          <div key={itemKey}>
             <Label className="text-xs font-medium text-muted-foreground uppercase">{item.product_name}</Label>
             <div className="flex flex-wrap gap-2 mt-1">
-              {(itemImages[item.product_name] || []).map((url, i) => (
+              {(itemImages[itemKey] || []).map((url, i) => (
                 <div key={i} className="relative w-16 h-16 rounded-lg border overflow-hidden group">
                   <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
                   <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={() => removeImage("item", url, item.product_name)}><X className="w-3 h-3" /></button>
+                    onClick={() => removeImage("item", url, itemKey)}><X className="w-3 h-3" /></button>
                 </div>
               ))}
               <label className="w-16 h-16 rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-accent transition-colors">
                 <Upload className="w-3 h-3 text-muted-foreground" />
                 <span className="text-[10px] text-muted-foreground">Files</span>
                 <input type="file" accept="image/*" className="sr-only" disabled={uploading}
-                  onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "item", item.product_name); e.target.value = ""; }} />
+                  onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "item", itemKey); e.target.value = ""; }} />
               </label>
               <label className="w-16 h-16 rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-accent transition-colors bg-secondary/30">
                 <Upload className="w-3 h-3 text-muted-foreground" />
                 <span className="text-[10px] text-muted-foreground">Camera</span>
                 <input type="file" accept="image/*" capture="environment" className="sr-only" disabled={uploading}
-                  onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "item", item.product_name); e.target.value = ""; }} />
+                  onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "item", itemKey); e.target.value = ""; }} />
               </label>
             </div>
           </div>
-        ))}
+          );
+        })}
 
         {/* Order Images */}
         <div>
