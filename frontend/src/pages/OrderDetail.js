@@ -245,14 +245,17 @@ export default function OrderDetail() {
   const packedBoxImageUrls = order.packaging?.packed_box_images || [];
 
   const sharePackedBoxImages = async () => {
-    if (!packedBoxImageUrls.length) return toast.error("No packed box images to share");
+    const dispatchSlipUrls = order.dispatch?.dispatch_slip_images || [];
+    const allUrls = [...packedBoxImageUrls, ...dispatchSlipUrls];
+    if (!allUrls.length) return toast.error("No images to share");
     try {
       const blobs = await Promise.all(
-        packedBoxImageUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
+        allUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
       );
       const files = blobs.map((blob, i) => {
         const ext = blob.type.includes("png") ? "png" : "jpg";
-        return new File([blob], `packed-box-${order.order_number}-${i + 1}.${ext}`, { type: blob.type });
+        const label = i < packedBoxImageUrls.length ? `packed-box-${i + 1}` : `dispatch-slip-${i - packedBoxImageUrls.length + 1}`;
+        return new File([blob], `${label}-${order.order_number}.${ext}`, { type: blob.type });
       });
 
       if (navigator.canShare && navigator.canShare({ files })) {
@@ -635,7 +638,7 @@ export default function OrderDetail() {
                   <Button variant="outline" size="sm" onClick={sharePackingImages} data-testid="share-packing-images-btn">
                     <Share2 className="w-4 h-4 mr-1 text-green-600" /> Share All Images
                   </Button>
-                  {packedBoxImageUrls.length > 0 && (
+                  {(packedBoxImageUrls.length > 0 || order.dispatch?.dispatch_slip_images?.length > 0) && (
                     <Button variant="outline" size="sm" onClick={sharePackedBoxImages} data-testid="share-packed-box-images-btn">
                       <Share2 className="w-4 h-4 mr-1 text-blue-600" /> Share Packed Box Images
                     </Button>
