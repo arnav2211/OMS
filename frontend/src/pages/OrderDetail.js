@@ -778,7 +778,24 @@ export default function OrderDetail() {
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Dispatch</CardTitle>
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-base">Dispatch</CardTitle>
+                {order.dispatch?.dispatched_at && (order.dispatch.courier_name || order.dispatch.lr_no) && (
+                  <button
+                    className="text-muted-foreground hover:text-primary transition-colors"
+                    onClick={() => {
+                      const parts = [];
+                      if (order.dispatch.courier_name) parts.push(`Courier: ${order.dispatch.courier_name}`);
+                      if (order.dispatch.transporter_name) parts.push(`Transporter: ${order.dispatch.transporter_name}`);
+                      if (order.dispatch.lr_no) parts.push(`LR No: ${order.dispatch.lr_no}`);
+                      copyToClipboard(parts.join("\n"), "Dispatch details");
+                    }}
+                    data-testid="copy-dispatch-details-btn"
+                  >
+                    <ClipboardCopy className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
               {["admin", "dispatch", "packaging"].includes(user?.role) && (order.status === "packed" || order.status === "dispatched") && (
                 <Button variant="outline" size="sm" onClick={openDispatch} data-testid="dispatch-order-btn">
                   <Truck className="w-4 h-4 mr-1" /> {order.status === "dispatched" ? "Edit Dispatch" : "Dispatch"}
