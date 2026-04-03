@@ -10,7 +10,7 @@ import {
 import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
-  FileText, TrendingUp, Bell, ShoppingBag, Calculator,
+  FileText, TrendingUp, Bell, ShoppingBag, Calculator, MapPinCheck,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -22,6 +22,7 @@ const NAV_ITEMS = {
     { label: "Create Order", icon: Plus, path: "/create-order" },
     { label: "Customers", icon: Users, path: "/customers" },
     { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
+    { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
   ],
   packaging: [
@@ -32,6 +33,7 @@ const NAV_ITEMS = {
     { label: "Amazon Packing", icon: ShoppingBag, path: "/amazon-packing" },
     { label: "Amazon Dispatch", icon: Truck, path: "/amazon-dispatch" },
     { label: "Dispatch", icon: Truck, path: "/dispatch" },
+    { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
   ],
   dispatch: [
@@ -39,6 +41,7 @@ const NAV_ITEMS = {
     { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Dispatch Queue", icon: Truck, path: "/dispatch" },
     { label: "Amazon Dispatch", icon: ShoppingBag, path: "/amazon-dispatch" },
+    { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
   ],
   admin: [
@@ -55,12 +58,14 @@ const NAV_ITEMS = {
     { label: "Accounts", icon: BarChart3, path: "/accounts" },
     { label: "Item Analytics", icon: TrendingUp, path: "/item-analytics" },
     { label: "Users", icon: Settings, path: "/users" },
+    { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
   ],
   accounts: [
     { label: "Dashboard", icon: Home, path: "/" },
     { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Customers", icon: Users, path: "/customers" },
+    { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
   ],
 };
