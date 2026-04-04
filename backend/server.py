@@ -3651,8 +3651,8 @@ async def create_admin_alert(body: dict, user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Only admin can send alerts")
     title = body.get("title", "").strip()
     message = body.get("message", "").strip()
-    if not title or not message:
-        raise HTTPException(status_code=400, detail="Title and message are required")
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
 
     recipients = body.get("recipients", [])  # list of user IDs
     recipient_roles = body.get("recipient_roles", [])  # list of roles
@@ -3691,7 +3691,7 @@ async def create_admin_alert(body: dict, user=Depends(get_current_user)):
 async def get_pending_alerts(user=Depends(get_current_user)):
     uid = user["id"]
     alerts = await db.admin_alerts.find(
-        {"recipient_ids": uid, f"acknowledgements.{uid}": {"$exists": False}},
+        {"recipient_ids": uid, f"acknowledgements.{uid}": {"$exists": False}, "cancelled": {"$ne": True}},
         {"_id": 0}
     ).sort("created_at", -1).to_list(50)
     return alerts
@@ -3706,6 +3706,19 @@ async def acknowledge_alert(alert_id: str, user=Depends(get_current_user)):
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Alert not found")
     return {"message": "Acknowledged"}
+
+@api_router.put("/admin/alerts/{alert_id}/cancel")
+async def cancel_alert(alert_id: str, user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can cancel alerts")
+    result = await db.admin_alerts.update_one(
+        {"id": alert_id},
+        {"$set": {"cancelled": True, "cancelled_at": datetime.now(timezone.utc).isoformat(), "cancelled_by": user["name"]}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"message": "Alert cancelled"}
+
 
 @api_router.get("/admin/alerts/history")
 async def get_alert_history(user=Depends(get_current_user)):
