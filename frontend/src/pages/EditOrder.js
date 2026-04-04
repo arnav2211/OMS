@@ -579,6 +579,8 @@ export default function EditOrder() {
 
   const handleSave = async () => {
     if (items.some(i => !i.product_name)) return toast.error("All items need a product name");
+    if (!billingAddress) return toast.error("Select a billing address");
+    if (!sameAsBilling && !shippingAddress) return toast.error("Select a shipping address");
     if (modeOfPayment === "Other" && !paymentModeDetails) return toast.error("Specify payment details for 'Other'");
     setSaving(true);
     try {

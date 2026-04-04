@@ -254,6 +254,8 @@ export default function PIBuilder() {
   const handleSubmit = async () => {
     if (!selectedCustomer) return toast.error("Select a customer");
     if (items.some(i => !i.product_name)) return toast.error("All items need a product name");
+    if (!billingAddress) return toast.error("Select a billing address");
+    if (!sameAsBilling && !shippingAddress) return toast.error("Select a shipping address");
     setSubmitting(true);
     try {
       const payload = {
