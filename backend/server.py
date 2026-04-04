@@ -1786,10 +1786,24 @@ async def scan_barcode(file: UploadFile = File(...), user=Depends(get_current_us
         raise HTTPException(status_code=403, detail="Not authorized")
     try:
         from pyzbar.pyzbar import decode as pyzbar_decode
-        from PIL import Image
+        from PIL import Image, ImageEnhance
         content = await file.read()
         img = Image.open(io.BytesIO(content))
+
+        # Try original image first
         barcodes = pyzbar_decode(img)
+
+        # If not found, try grayscale with enhanced contrast
+        if not barcodes:
+            gray = img.convert("L")
+            enhanced = ImageEnhance.Contrast(gray).enhance(2.0)
+            barcodes = pyzbar_decode(enhanced)
+
+        # If still not found, try sharpened version
+        if not barcodes:
+            sharp = ImageEnhance.Sharpness(gray).enhance(2.0)
+            barcodes = pyzbar_decode(sharp)
+
         if barcodes:
             code = barcodes[0].data.decode("utf-8")
             return {"found": True, "code": code, "type": barcodes[0].type}
