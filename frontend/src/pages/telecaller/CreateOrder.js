@@ -388,6 +388,8 @@ export default function CreateOrder() {
   const handleSubmit = async () => {
     if (!selectedCustomer) return toast.error("Select a customer");
     if (items.some((i) => !i.product_name)) return toast.error("All items need a product name");
+    if (!billingAddress) return toast.error("Select a billing address");
+    if (!sameAsBilling && !shippingAddress) return toast.error("Select a shipping address");
     if (shippingMethod === "courier" && !courierName) return toast.error("Select a courier");
     if (modeOfPayment === "Other" && !paymentModeDetails) return toast.error("Please specify payment details for 'Other'");
 
