@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Send, Bell, CheckCircle2, Clock, Users, User, Loader2, Search, X } from "lucide-react";
+import { Send, Bell, CheckCircle2, Clock, Users, User, Loader2, Search, X, Ban } from "lucide-react";
 
 const ROLES = [
   { value: "telecaller", label: "Telecallers" },
@@ -75,7 +75,6 @@ export default function AdminAlerts() {
 
   const handleSend = async () => {
     if (!title.trim()) return toast.error("Enter a title");
-    if (!message.trim()) return toast.error("Enter a message");
     if (selectedUserIds.length === 0 && selectedRoles.length === 0) return toast.error("Select at least one recipient or team");
     setSending(true);
     try {
@@ -95,6 +94,16 @@ export default function AdminAlerts() {
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to send alert");
     } finally { setSending(false); }
+  };
+
+  const cancelAlert = async (alertId) => {
+    try {
+      await api.put(`/admin/alerts/${alertId}/cancel`);
+      toast.success("Alert cancelled");
+      loadHistory();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to cancel");
+    }
   };
 
   const fmt = (iso) => {
@@ -211,11 +220,24 @@ export default function AdminAlerts() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-sm">{a.title}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5 whitespace-pre-wrap">{a.message}</p>
+                    {a.message && <p className="text-xs text-muted-foreground mt-0.5 whitespace-pre-wrap">{a.message}</p>}
                   </div>
-                  <Badge variant={a.fully_acknowledged ? "default" : "outline"} className={`shrink-0 text-[10px] ${a.fully_acknowledged ? "bg-green-600" : "border-amber-400 text-amber-600"}`}>
-                    {a.fully_acknowledged ? <><CheckCircle2 className="w-3 h-3 mr-0.5" /> All Acked</> : <><Clock className="w-3 h-3 mr-0.5" /> {a.ack_count}/{a.total_count}</>}
-                  </Badge>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {a.cancelled ? (
+                      <Badge variant="outline" className="text-[10px] border-red-300 text-red-600"><Ban className="w-3 h-3 mr-0.5" /> Cancelled</Badge>
+                    ) : (
+                      <>
+                        <Badge variant={a.fully_acknowledged ? "default" : "outline"} className={`text-[10px] ${a.fully_acknowledged ? "bg-green-600" : "border-amber-400 text-amber-600"}`}>
+                          {a.fully_acknowledged ? <><CheckCircle2 className="w-3 h-3 mr-0.5" /> All Acked</> : <><Clock className="w-3 h-3 mr-0.5" /> {a.ack_count}/{a.total_count}</>}
+                        </Badge>
+                        {!a.fully_acknowledged && (
+                          <button type="button" onClick={() => cancelAlert(a.id)} className="text-red-500 hover:text-red-700 transition-colors p-1 rounded hover:bg-red-50 dark:hover:bg-red-950/30" title="Cancel alert" data-testid={`cancel-alert-${a.id}`}>
+                            <Ban className="w-4 h-4" />
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
                 <div className="text-[11px] text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
                   <span>Sent: {fmt(a.created_at)}</span>
