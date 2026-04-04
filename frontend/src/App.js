@@ -23,6 +23,7 @@ import AmazonOrderDetail from "@/pages/amazon/AmazonOrderDetail";
 import AmazonPacking from "@/pages/amazon/AmazonPacking";
 import AmazonDispatch from "@/pages/amazon/AmazonDispatch";
 import AdminAccounts from "@/pages/admin/AdminAccounts";
+import AdminAlerts from "@/pages/admin/AdminAlerts";
 import DTDCCalculator from "@/pages/DTDCCalculator";
 import AnjaniChecker from "@/pages/AnjaniChecker";
 
@@ -72,6 +73,7 @@ function AppRoutes() {
       <Route path="/amazon-packing" element={<ProtectedRoute allowedRoles={["admin", "packaging"]}><AmazonPacking /></ProtectedRoute>} />
       <Route path="/amazon-dispatch" element={<ProtectedRoute allowedRoles={["admin", "packaging", "dispatch"]}><AmazonDispatch /></ProtectedRoute>} />
       <Route path="/accounts" element={<ProtectedRoute allowedRoles={["admin"]}><AdminAccounts /></ProtectedRoute>} />
+      <Route path="/admin-alerts" element={<ProtectedRoute allowedRoles={["admin"]}><AdminAlerts /></ProtectedRoute>} />
       <Route path="/dtdc" element={<ProtectedRoute><DTDCCalculator /></ProtectedRoute>} />
       <Route path="/anjani" element={<ProtectedRoute><AnjaniChecker /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
