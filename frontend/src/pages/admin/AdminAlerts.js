@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import api from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Send, Bell, CheckCircle2, Clock, Users, User, Loader2 } from "lucide-react";
+import { Send, Bell, CheckCircle2, Clock, Users, User, Loader2, Search, X } from "lucide-react";
 
 const ROLES = [
   { value: "telecaller", label: "Telecallers" },
@@ -25,6 +25,11 @@ export default function AdminAlerts() {
   const [message, setMessage] = useState("");
   const [orderId, setOrderId] = useState("");
   const [customerName, setCustomerName] = useState("");
+  const [orderSearch, setOrderSearch] = useState("");
+  const [orderResults, setOrderResults] = useState([]);
+  const [orderSearching, setOrderSearching] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const searchTimeout = useRef(null);
   const [sending, setSending] = useState(false);
   const [tab, setTab] = useState("send");
 
@@ -39,6 +44,34 @@ export default function AdminAlerts() {
 
   const toggleUser = (id) => setSelectedUserIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const toggleRole = (role) => setSelectedRoles(prev => prev.includes(role) ? prev.filter(x => x !== role) : [...prev, role]);
+
+  const handleOrderSearch = (val) => {
+    setOrderSearch(val);
+    if (searchTimeout.current) clearTimeout(searchTimeout.current);
+    if (!val.trim()) { setOrderResults([]); return; }
+    searchTimeout.current = setTimeout(async () => {
+      setOrderSearching(true);
+      try {
+        const res = await api.get(`/orders?search=${encodeURIComponent(val.trim())}&page_size=8&view_all=true`);
+        setOrderResults(res.data.orders || []);
+      } catch { setOrderResults([]); }
+      finally { setOrderSearching(false); }
+    }, 300);
+  };
+
+  const pickOrder = (o) => {
+    setSelectedOrder(o);
+    setOrderId(o.order_number);
+    setCustomerName(o.customer_name);
+    setOrderSearch("");
+    setOrderResults([]);
+  };
+
+  const clearOrder = () => {
+    setSelectedOrder(null);
+    setOrderId("");
+    setCustomerName("");
+  };
 
   const handleSend = async () => {
     if (!title.trim()) return toast.error("Enter a title");
@@ -57,6 +90,7 @@ export default function AdminAlerts() {
       toast.success(res.data.message);
       setTitle(""); setMessage(""); setOrderId(""); setCustomerName("");
       setSelectedUserIds([]); setSelectedRoles([]);
+      setSelectedOrder(null);
       loadHistory();
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to send alert");
@@ -124,15 +158,40 @@ export default function AdminAlerts() {
               <Textarea value={message} onChange={e => setMessage(e.target.value)} placeholder="Enter detailed instruction..." data-testid="alert-message-input" className="mt-1" rows={3} />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>Order ID (optional)</Label>
-                <Input value={orderId} onChange={e => setOrderId(e.target.value)} placeholder="CS-0001" data-testid="alert-order-input" className="mt-1" />
-              </div>
-              <div>
-                <Label>Customer Name (optional)</Label>
-                <Input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Customer" data-testid="alert-customer-input" className="mt-1" />
-              </div>
+            <div>
+              <Label>Link Order (optional)</Label>
+              {selectedOrder ? (
+                <div className="mt-1 flex items-center gap-2 px-3 py-2 rounded-lg border bg-muted/50">
+                  <div className="flex-1 min-w-0 text-sm">
+                    <span className="font-semibold">{selectedOrder.order_number}</span>
+                    <span className="text-muted-foreground"> — {selectedOrder.customer_name}</span>
+                    {selectedOrder.customer_alias && <span className="text-muted-foreground text-xs"> ({selectedOrder.customer_alias})</span>}
+                  </div>
+                  <button type="button" onClick={clearOrder} className="text-muted-foreground hover:text-destructive"><X className="w-4 h-4" /></button>
+                </div>
+              ) : (
+                <div className="relative mt-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    value={orderSearch}
+                    onChange={e => handleOrderSearch(e.target.value)}
+                    placeholder="Search by name, alias, phone, GST, order no..."
+                    className="pl-9"
+                    data-testid="alert-order-search"
+                  />
+                  {orderSearching && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-muted-foreground" />}
+                  {orderResults.length > 0 && (
+                    <div className="absolute z-50 w-full mt-1 bg-popover border rounded-lg shadow-lg max-h-48 overflow-y-auto" data-testid="alert-order-results">
+                      {orderResults.map(o => (
+                        <button key={o.id} type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors border-b last:border-0 flex justify-between" onClick={() => pickOrder(o)}>
+                          <span className="font-medium">{o.order_number}</span>
+                          <span className="text-muted-foreground truncate ml-2">{o.customer_name}{o.customer_alias ? ` (${o.customer_alias})` : ""}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <Button onClick={handleSend} disabled={sending} className="w-full" data-testid="send-alert-btn">
