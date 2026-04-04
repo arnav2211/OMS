@@ -10,10 +10,11 @@ import {
 import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
-  FileText, TrendingUp, Bell, ShoppingBag, Calculator, MapPinCheck,
+  FileText, TrendingUp, Bell, ShoppingBag, Calculator, MapPinCheck, Megaphone,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
+import { AlertListener } from "@/components/AlertListener";
 
 const NAV_ITEMS = {
   telecaller: [
@@ -58,6 +59,7 @@ const NAV_ITEMS = {
     { label: "Accounts", icon: BarChart3, path: "/accounts" },
     { label: "Item Analytics", icon: TrendingUp, path: "/item-analytics" },
     { label: "Users", icon: Settings, path: "/users" },
+    { label: "Alerts", icon: Megaphone, path: "/admin-alerts" },
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
   ],
@@ -276,6 +278,7 @@ export default function Layout({ children }) {
           {children}
         </main>
       </div>
+      <AlertListener />
     </div>
   );
 }

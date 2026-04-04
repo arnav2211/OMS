@@ -3582,6 +3582,94 @@ async def anjani_check_pincode(pincode: str):
         return {"serviceable": False, "message": "Unable to check serviceability right now. Please try again."}
 
 
+# ─── Admin Alert / Urgent Notification System ────────────────────────────
+
+@api_router.post("/admin/alerts")
+async def create_admin_alert(body: dict, user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can send alerts")
+    title = body.get("title", "").strip()
+    message = body.get("message", "").strip()
+    if not title or not message:
+        raise HTTPException(status_code=400, detail="Title and message are required")
+
+    recipients = body.get("recipients", [])  # list of user IDs
+    recipient_roles = body.get("recipient_roles", [])  # list of roles
+    order_id = body.get("order_id", "")
+    customer_name = body.get("customer_name", "")
+
+    # Build list of target user IDs
+    target_user_ids = set(recipients)
+    if recipient_roles:
+        role_users = await db.users.find({"role": {"$in": recipient_roles}, "active": {"$ne": False}}, {"_id": 0, "id": 1}).to_list(500)
+        for u in role_users:
+            target_user_ids.add(u["id"])
+
+    if not target_user_ids:
+        raise HTTPException(status_code=400, detail="No recipients selected")
+
+    alert_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    alert_doc = {
+        "id": alert_id,
+        "title": title,
+        "message": message,
+        "sent_by": user["name"],
+        "sent_by_id": user["id"],
+        "order_id": order_id,
+        "customer_name": customer_name,
+        "recipient_ids": list(target_user_ids),
+        "recipient_roles": recipient_roles,
+        "acknowledgements": {},
+        "created_at": now,
+    }
+    await db.admin_alerts.insert_one(alert_doc)
+    return {"id": alert_id, "message": f"Alert sent to {len(target_user_ids)} user(s)"}
+
+@api_router.get("/admin/alerts/pending")
+async def get_pending_alerts(user=Depends(get_current_user)):
+    uid = user["id"]
+    alerts = await db.admin_alerts.find(
+        {"recipient_ids": uid, f"acknowledgements.{uid}": {"$exists": False}},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+    return alerts
+
+@api_router.put("/admin/alerts/{alert_id}/acknowledge")
+async def acknowledge_alert(alert_id: str, user=Depends(get_current_user)):
+    now = datetime.now(timezone.utc).isoformat()
+    result = await db.admin_alerts.update_one(
+        {"id": alert_id, "recipient_ids": user["id"]},
+        {"$set": {f"acknowledgements.{user['id']}": {"name": user["name"], "at": now}}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"message": "Acknowledged"}
+
+@api_router.get("/admin/alerts/history")
+async def get_alert_history(user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    alerts = await db.admin_alerts.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    # Enrich with user names for display
+    all_user_ids = set()
+    for a in alerts:
+        all_user_ids.update(a.get("recipient_ids", []))
+    users_map = {}
+    if all_user_ids:
+        users_list = await db.users.find({"id": {"$in": list(all_user_ids)}}, {"_id": 0, "id": 1, "name": 1, "role": 1}).to_list(500)
+        users_map = {u["id"]: u for u in users_list}
+    for a in alerts:
+        a["recipients_info"] = [users_map.get(uid, {"id": uid, "name": "Unknown"}) for uid in a.get("recipient_ids", [])]
+        total = len(a.get("recipient_ids", []))
+        acked = len(a.get("acknowledgements", {}))
+        a["ack_count"] = acked
+        a["total_count"] = total
+        a["fully_acknowledged"] = acked >= total
+    return alerts
+
+
+
 
 app.include_router(api_router)
 app.mount("/api/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
