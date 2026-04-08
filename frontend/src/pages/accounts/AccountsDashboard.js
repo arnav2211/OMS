@@ -58,6 +58,9 @@ export default function AccountsDashboard() {
   const [invoiceLoading, setInvoiceLoading] = useState(true);
   const [uploading, setUploading] = useState({});
   const [invoiceFilter, setInvoiceFilter] = useState("all");
+  const [invoicePage, setInvoicePage] = useState(1);
+  const [invoiceTotal, setInvoiceTotal] = useState(0);
+  const [invoiceTotalPages, setInvoiceTotalPages] = useState(1);
 
   // Invoice upload modal state
   const [uploadModal, setUploadModal] = useState({ open: false, orderId: null, orderNumber: "" });
@@ -75,10 +78,13 @@ export default function AccountsDashboard() {
   const [payDateTo, setPayDateTo] = useState("");
   const [updating, setUpdating] = useState({});
   const [previewScreenshots, setPreviewScreenshots] = useState(null);
+  const [payPage, setPayPage] = useState(1);
+  const [payTotal, setPayTotal] = useState(0);
+  const [payTotalPages, setPayTotalPages] = useState(1);
 
   useEffect(() => { loadStats(); }, [period, dateFrom, dateTo]);
-  useEffect(() => { if (tab === "invoices") loadGstOrders(); }, [tab]);
-  useEffect(() => { if (tab === "payment") loadAllOrders(); }, [tab]);
+  useEffect(() => { if (tab === "invoices") loadGstOrders(); }, [tab, invoicePage]);
+  useEffect(() => { if (tab === "payment") loadAllOrders(); }, [tab, payPage]);
 
   const loadStats = async () => {
     try {
@@ -93,16 +99,20 @@ export default function AccountsDashboard() {
   const loadGstOrders = async () => {
     setInvoiceLoading(true);
     try {
-      const res = await api.get("/orders?view_all=true&page_size=200");
-      setGstOrders((res.data.orders || []).filter(o => o.gst_applicable));
+      const res = await api.get(`/orders?view_all=true&gst_only=true&page=${invoicePage}&page_size=50`);
+      setGstOrders(res.data.orders || []);
+      setInvoiceTotal(res.data.total || 0);
+      setInvoiceTotalPages(res.data.total_pages || 1);
     } catch { } finally { setInvoiceLoading(false); }
   };
 
   const loadAllOrders = async () => {
     setPaymentLoading(true);
     try {
-      const res = await api.get("/orders?view_all=true&page_size=200");
+      const res = await api.get(`/orders?view_all=true&page=${payPage}&page_size=50`);
       setAllOrders(res.data.orders || []);
+      setPayTotal(res.data.total || 0);
+      setPayTotalPages(res.data.total_pages || 1);
     } catch { } finally { setPaymentLoading(false); }
   };
 
@@ -303,11 +313,18 @@ export default function AccountsDashboard() {
                     </TableBody>
                   </Table>
               )}
+              {/* Invoice Pagination */}
+              <div className="flex items-center justify-between mt-4 text-sm">
+                <span className="text-muted-foreground">{invoiceTotal} GST orders</span>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" disabled={invoicePage <= 1} onClick={() => setInvoicePage(p => p - 1)}>Previous</Button>
+                  <span className="text-muted-foreground">Page {invoicePage} of {invoiceTotalPages}</span>
+                  <Button variant="outline" size="sm" disabled={invoicePage >= invoiceTotalPages} onClick={() => setInvoicePage(p => p + 1)}>Next</Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
-
-        {/* ── PAYMENT CHECK TAB ─────────────────────────────── */}
         <TabsContent value="payment">
           <Card>
             <CardHeader className="pb-3">
@@ -426,9 +443,15 @@ export default function AccountsDashboard() {
                     </TableBody>
                   </Table>
               )}
-              {filteredAllOrders.length > 0 && (
-                <p className="text-sm text-muted-foreground mt-3 text-right">{filteredAllOrders.length} order(s)</p>
-              )}
+              {/* Payment Pagination */}
+              <div className="flex items-center justify-between mt-4 text-sm">
+                <span className="text-muted-foreground">{payTotal} orders total</span>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" disabled={payPage <= 1} onClick={() => setPayPage(p => p - 1)}>Previous</Button>
+                  <span className="text-muted-foreground">Page {payPage} of {payTotalPages}</span>
+                  <Button variant="outline" size="sm" disabled={payPage >= payTotalPages} onClick={() => setPayPage(p => p + 1)}>Next</Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
