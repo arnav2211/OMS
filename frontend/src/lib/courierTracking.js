@@ -20,10 +20,10 @@ export const COURIER_LR_PATTERNS = {
 
 // Courier Tracking URLs
 const TRACKING_URLS = {
-  DTDC: (lr) => `https://www.dtdc.in/tracking/shipment-tracking.asp?strCnno=${lr}`,
-  Anjani: (lr) => `https://www.shreeanjanicourier.com/`,
+  DTDC: (lr) => `https://txk.dtdc.com/ctbs-tracking/customerInterface.tr?submitName=showCITrackingDetails&cType=Consignment&cnNo==${lr}`,
+  Anjani: (lr) => `https://shreeanjani.co.in/tracking?awb=${lr}`,
   Professional: (lr) => `https://www.tpcindia.com/track-info.aspx?id=${lr}&type=0&service=0`,
-  "India Post": (lr) => `https://www.indiapost.gov.in/_layouts/15/dop.portal.tracking/trackconsignment.aspx?ConsignmentNumber=${lr}`,
+  "India Post": (lr) => `https://www.indiapost.gov.in`,
 };
 
 /**
