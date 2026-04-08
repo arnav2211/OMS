@@ -65,8 +65,10 @@ export function getTrackingUrl(courierName, lrNo) {
  */
 export function extractPorterLink(text) {
   if (!text) return null;
-  const match = text.match(/https?:\/\/(?:www\.)?porter\.in\/[^\s)"\]]+/i);
-  return match ? match[0] : null;
+  const match = text.match(/(?:https?:\/\/)?(?:www\.)?porter\.in\/[\w/.-]+/i);
+  if (!match) return null;
+  const link = match[0];
+  return link.startsWith("http") ? link : `https://${link}`;
 }
 
 /**
