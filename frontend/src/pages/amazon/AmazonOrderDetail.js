@@ -13,7 +13,8 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Package, Truck, X, Upload, Copy, Edit2 } from "lucide-react";
+import { ArrowLeft, Package, Truck, X, Upload, Copy, Edit2, ExternalLink } from "lucide-react";
+import { validateLrNumber, getTrackingUrl, COURIER_LR_PATTERNS } from "@/lib/courierTracking";
 
 const STATUS_BADGE = {
   new: "bg-blue-100 text-blue-800",
@@ -37,6 +38,7 @@ export default function AmazonOrderDetail() {
   const [packagingStaff, setPackagingStaff] = useState([]);
   const [previewImage, setPreviewImage] = useState(null);
   const [lrNumber, setLrNumber] = useState("");
+  const [lrValidationError, setLrValidationError] = useState("");
   const [editingCourier, setEditingCourier] = useState(false);
   const [courierValue, setCourierValue] = useState("");
 
@@ -82,6 +84,17 @@ export default function AmazonOrderDetail() {
   };
 
   const dispatchOrder = async () => {
+    if (order.ship_type === "self_ship") {
+      if (!lrNumber.trim()) return toast.error("LR Number is mandatory");
+      // Regex validation for courier-specific LR
+      if (order.courier_name) {
+        const validation = validateLrNumber(order.courier_name, lrNumber);
+        if (!validation.valid) {
+          setLrValidationError(validation.message);
+          return toast.error(validation.message);
+        }
+      }
+    }
     setSaving(true);
     try {
       await api.put(`/amazon/orders/${id}/dispatch`, { lr_number: lrNumber });
@@ -193,7 +206,24 @@ export default function AmazonOrderDetail() {
               )}
             </div>
           )}
-          {order.dispatch?.lr_number && <div className="flex justify-between"><span className="text-sm text-muted-foreground">LR Number</span><span className="text-sm font-mono">{order.dispatch.lr_number}</span></div>}
+          {order.dispatch?.lr_number && (
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">LR Number</span>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-mono">{order.dispatch.lr_number}</span>
+                {(() => {
+                  const trackUrl = getTrackingUrl(order.courier_name, order.dispatch.lr_number);
+                  return trackUrl ? (
+                    <a href={trackUrl} target="_blank" rel="noopener noreferrer">
+                      <Button variant="outline" size="sm" className="h-7 text-xs" data-testid="am-track-btn">
+                        <ExternalLink className="w-3 h-3 mr-1" /> Track
+                      </Button>
+                    </a>
+                  ) : null;
+                })()}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -330,7 +360,14 @@ export default function AmazonOrderDetail() {
             {order.ship_type === "self_ship" && (
               <div>
                 <Label className="text-sm">LR Number <span className="text-red-500">*</span></Label>
-                <Input value={lrNumber} onChange={e => setLrNumber(e.target.value)} placeholder="Enter LR / Tracking number" data-testid="am-lr-input" />
+                <Input
+                  value={lrNumber}
+                  onChange={e => { setLrNumber(e.target.value); setLrValidationError(""); }}
+                  className={lrValidationError ? "border-red-500" : ""}
+                  placeholder={order.courier_name ? `Format: ${COURIER_LR_PATTERNS[order.courier_name]?.label || "Enter LR number"}` : "Enter LR / Tracking number"}
+                  data-testid="am-lr-input"
+                />
+                {lrValidationError && <p className="text-xs text-red-500 mt-1" data-testid="am-lr-validation-error">{lrValidationError}</p>}
               </div>
             )}
             {order.ship_type === "easy_ship" && (

@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RefreshCw, Truck, Edit2 } from "lucide-react";
+import { validateLrNumber, COURIER_LR_PATTERNS } from "@/lib/courierTracking";
 
 const COURIERS = ["DTDC", "Anjani", "Professional", "India Post"];
 
@@ -27,6 +28,7 @@ export default function AmazonDispatch() {
   // Self ship
   const [dispatchSelf, setDispatchSelf] = useState(null);
   const [lrNumber, setLrNumber] = useState("");
+  const [lrValidationError, setLrValidationError] = useState("");
   const [selfDispatching, setSelfDispatching] = useState(false);
   // Courier edit
   const [editCourier, setEditCourier] = useState(null);
@@ -67,9 +69,17 @@ export default function AmazonDispatch() {
   };
 
   // Self Ship - individual dispatch with mandatory LR
-  const openSelfDispatch = (order) => { setDispatchSelf(order); setLrNumber(""); };
+  const openSelfDispatch = (order) => { setDispatchSelf(order); setLrNumber(""); setLrValidationError(""); };
   const dispatchSelfShip = async () => {
     if (!lrNumber.trim()) return toast.error("LR number is mandatory for self ship");
+    // Regex validation based on courier
+    if (dispatchSelf?.courier_name) {
+      const validation = validateLrNumber(dispatchSelf.courier_name, lrNumber);
+      if (!validation.valid) {
+        setLrValidationError(validation.message);
+        return toast.error(validation.message);
+      }
+    }
     setSelfDispatching(true);
     try {
       await api.put(`/amazon/orders/${dispatchSelf.id}/dispatch`, { lr_number: lrNumber.trim() });
@@ -212,7 +222,14 @@ export default function AmazonDispatch() {
             <div className="text-sm"><span className="text-muted-foreground">Courier:</span> <span className="font-medium">{dispatchSelf?.courier_name}</span></div>
             <div>
               <Label className="text-sm">LR Number <span className="text-red-500">*</span></Label>
-              <Input value={lrNumber} onChange={e => setLrNumber(e.target.value)} placeholder="Enter LR / Tracking number" data-testid="self-lr-input" />
+              <Input
+                value={lrNumber}
+                onChange={e => { setLrNumber(e.target.value); setLrValidationError(""); }}
+                className={lrValidationError ? "border-red-500" : ""}
+                placeholder={dispatchSelf?.courier_name ? `Format: ${COURIER_LR_PATTERNS[dispatchSelf.courier_name]?.label || "Enter LR number"}` : "Enter LR / Tracking number"}
+                data-testid="self-lr-input"
+              />
+              {lrValidationError && <p className="text-xs text-red-500 mt-1" data-testid="self-lr-validation-error">{lrValidationError}</p>}
             </div>
           </div>
           <DialogFooter>

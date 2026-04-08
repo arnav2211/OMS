@@ -184,6 +184,7 @@ class DispatchUpdate(BaseModel):
     dispatch_type: str = ""
     shipping_method: str = ""
     dispatch_slip_images: List[str] = []
+    porter_link: str = ""
 
 class PICreate(BaseModel):
     customer_id: str
@@ -1316,16 +1317,17 @@ async def update_dispatch(order_id: str, req: DispatchUpdate, user=Depends(get_c
         raise HTTPException(status_code=404, detail="Order not found")
 
     shipping_method = req.shipping_method or order.get("shipping_method", "")
-    # For transport: dispatch team must provide LR number
-    if shipping_method == "transport" and user["role"] in ["dispatch", "packaging"]:
-        if not req.lr_no:
-            raise HTTPException(status_code=400, detail="LR Number is mandatory for transport dispatch")
+    # Mandatory LR for courier and transport
+    if shipping_method in ["courier", "transport"] and not req.lr_no:
+        raise HTTPException(status_code=400, detail="LR / Tracking Number is mandatory for courier and transport dispatch")
 
     dispatch = {
         "courier_name": req.courier_name,
         "transporter_name": req.transporter_name or order.get("transporter_name", ""),
         "lr_no": req.lr_no,
         "dispatch_slip_images": req.dispatch_slip_images,
+        "dispatch_type": req.dispatch_type or shipping_method,
+        "porter_link": req.porter_link,
         "dispatched_by": user["name"],
         "dispatched_at": datetime.now(timezone.utc).isoformat()
     }
