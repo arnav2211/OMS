@@ -26,27 +26,38 @@ export function AlertListener() {
   }, []);
 
   // Start/stop alarm sound based on alerts
-  const startAlarm = useCallback(() => {
-    if (oscRef.current) return;
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      audioCtxRef.current = ctx;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.type = "square";
-      osc.frequency.value = 800;
-      gain.gain.value = 0.3;
-      osc.start();
-      oscRef.current = osc;
-      // Modulate for alarm effect
-      intervalRef.current = setInterval(() => {
-        if (!oscRef.current) return;
-        oscRef.current.frequency.value = oscRef.current.frequency.value === 800 ? 600 : 800;
-      }, 400);
-    } catch {}
-  }, []);
+const startAlarm = useCallback(() => {
+  if (oscRef.current) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtxRef.current = ctx;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    // Softer waveform
+    osc.type = "triangle";
+
+    // Pleasant alert base tone
+    osc.frequency.value = 660;
+
+    // Lower volume
+    gain.gain.value = 0.12;
+
+    osc.start();
+    oscRef.current = osc;
+
+    // Gentle alternating tone
+    intervalRef.current = setInterval(() => {
+      if (!oscRef.current) return;
+      oscRef.current.frequency.value =
+        oscRef.current.frequency.value === 660 ? 550 : 660;
+    }, 700);
+  } catch {}
+}, []);
 
   const stopAlarm = useCallback(() => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
