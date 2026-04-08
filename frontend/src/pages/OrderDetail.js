@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2, Copy, ClipboardCopy, History, Upload, Lock } from "lucide-react";
+import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2, Copy, ClipboardCopy, History, Upload, Lock, ExternalLink } from "lucide-react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import api from "@/lib/api";
 import { compressImage } from "@/lib/compressImage";
@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { mobilePrintPdf } from "@/lib/mobilePrint";
 import { SlipScanner } from "@/components/SlipScanner";
+import { validateLrNumber, getTrackingUrl, extractPorterLink, isLrMandatory, COURIER_LR_PATTERNS } from "@/lib/courierTracking";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
@@ -46,8 +47,10 @@ export default function OrderDetail() {
   const [formulationHistory, setFormulationHistory] = useState([]);
   const [formulationVisible, setFormulationVisible] = useState(true);
   const [packagingStaff, setPackagingStaff] = useState([]);
-  const [dispatchData, setDispatchData] = useState({ courier_name: "", transporter_name: "", lr_no: "", dispatch_type: "" });
+  const [dispatchData, setDispatchData] = useState({ courier_name: "", transporter_name: "", lr_no: "", dispatch_type: "", porter_link: "" });
   const [dispatchSlipImages, setDispatchSlipImages] = useState([]);
+  const [lrValidationError, setLrValidationError] = useState("");
+  const [porterPasteText, setPorterPasteText] = useState("");
   const [previewImage, setPreviewImage] = useState(null);
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerGst, setCustomerGst] = useState("");
@@ -147,15 +150,40 @@ export default function OrderDetail() {
       transporter_name: d.transporter_name || order.transporter_name || "",
       lr_no: d.lr_no || "",
       dispatch_type: d.dispatch_type || order.shipping_method || "",
+      porter_link: d.porter_link || "",
     });
     setDispatchSlipImages(d.dispatch_slip_images || []);
+    setPorterPasteText(d.porter_link || "");
+    setLrValidationError("");
     setShowDispatch(true);
   };
 
   const saveDispatch = async () => {
+    const dtype = dispatchData.dispatch_type;
+    // Mandatory LR for courier and transport
+    if (isLrMandatory(dtype) && !dispatchData.lr_no.trim()) {
+      return toast.error("LR / Tracking Number is mandatory for " + (dtype === "courier" ? "Courier" : "Transport") + " dispatch");
+    }
+    // Courier-specific regex validation
+    if (dtype === "courier" && dispatchData.courier_name && dispatchData.lr_no.trim()) {
+      const validation = validateLrNumber(dispatchData.courier_name, dispatchData.lr_no);
+      if (!validation.valid) {
+        setLrValidationError(validation.message);
+        return toast.error(validation.message);
+      }
+    }
+    // Courier must be selected
+    if (dtype === "courier" && !dispatchData.courier_name) {
+      return toast.error("Select a courier");
+    }
     setSaving(true);
     try {
-      await api.put(`/orders/${id}/dispatch`, { ...dispatchData, dispatch_slip_images: dispatchSlipImages });
+      const payload = { ...dispatchData, dispatch_slip_images: dispatchSlipImages };
+      // For Porter, include the extracted link
+      if (dtype === "porter" && dispatchData.porter_link) {
+        payload.porter_link = dispatchData.porter_link;
+      }
+      await api.put(`/orders/${id}/dispatch`, payload);
       toast.success("Order dispatched!"); setShowDispatch(false); loadOrder();
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
     finally { setSaving(false); }
@@ -481,9 +509,32 @@ export default function OrderDetail() {
               </div>
             )}
             {order.dispatch?.lr_no && (
-              <div className="flex justify-between">
+              <div className="flex justify-between items-center">
                 <span className="text-sm text-muted-foreground">LR No</span>
-                <span className="text-sm font-mono" data-testid="order-lr">{order.dispatch.lr_no}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-mono" data-testid="order-lr">{order.dispatch.lr_no}</span>
+                  {(() => {
+                    const courierName = order.dispatch?.courier_name || order.courier_name;
+                    const trackUrl = getTrackingUrl(courierName, order.dispatch.lr_no);
+                    return trackUrl ? (
+                      <a href={trackUrl} target="_blank" rel="noopener noreferrer">
+                        <Button variant="outline" size="sm" className="h-7 text-xs" data-testid="track-lr-btn">
+                          <ExternalLink className="w-3 h-3 mr-1" /> Track
+                        </Button>
+                      </a>
+                    ) : null;
+                  })()}
+                </div>
+              </div>
+            )}
+            {order.dispatch?.porter_link && (
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-muted-foreground">Porter Tracking</span>
+                <a href={order.dispatch.porter_link} target="_blank" rel="noopener noreferrer">
+                  <Button variant="outline" size="sm" className="h-7 text-xs" data-testid="track-porter-btn">
+                    <ExternalLink className="w-3 h-3 mr-1" /> Track
+                  </Button>
+                </a>
               </div>
             )}
             {order.dispatch?.tracking_number && (
@@ -815,7 +866,33 @@ export default function OrderDetail() {
                 <div><span className="text-muted-foreground">Dispatched:</span> {new Date(order.dispatch.dispatched_at).toLocaleString("en-IN")}</div>
                 {order.dispatch.courier_name && <div><span className="text-muted-foreground">Courier:</span> {order.dispatch.courier_name}</div>}
                 {order.dispatch.transporter_name && <div><span className="text-muted-foreground">Transporter:</span> {order.dispatch.transporter_name}</div>}
-                {order.dispatch.lr_no && <div><span className="text-muted-foreground">LR No:</span> {order.dispatch.lr_no}</div>}
+                {order.dispatch.lr_no && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-muted-foreground">LR No:</span>
+                    <span className="font-mono">{order.dispatch.lr_no}</span>
+                    {(() => {
+                      const cn = order.dispatch?.courier_name || order.courier_name;
+                      const url = getTrackingUrl(cn, order.dispatch.lr_no);
+                      return url ? (
+                        <a href={url} target="_blank" rel="noopener noreferrer">
+                          <Button variant="outline" size="sm" className="h-6 text-xs px-2" data-testid="dispatch-track-btn">
+                            <ExternalLink className="w-3 h-3 mr-1" /> Track
+                          </Button>
+                        </a>
+                      ) : null;
+                    })()}
+                  </div>
+                )}
+                {order.dispatch?.porter_link && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-muted-foreground">Porter:</span>
+                    <a href={order.dispatch.porter_link} target="_blank" rel="noopener noreferrer">
+                      <Button variant="outline" size="sm" className="h-6 text-xs px-2" data-testid="dispatch-porter-track-btn">
+                        <ExternalLink className="w-3 h-3 mr-1" /> Track
+                      </Button>
+                    </a>
+                  </div>
+                )}
                 {order.dispatch.dispatch_slip_images?.length > 0 && (
                   <div className="pt-2">
                     <span className="text-muted-foreground text-xs uppercase font-medium">Dispatch Slip</span>
@@ -831,6 +908,21 @@ export default function OrderDetail() {
                         <Share2 className="w-4 h-4 mr-1 text-blue-600" /> Share Slip
                       </Button>
                     )}
+                  </div>
+                )}
+                {/* Porter with link but no slip images: share tracking link */}
+                {order.dispatch?.porter_link && !order.dispatch?.dispatch_slip_images?.length && ["admin", "telecaller", "packaging", "dispatch"].includes(user?.role) && (
+                  <div className="pt-2">
+                    <Button variant="outline" size="sm" onClick={() => {
+                      const link = order.dispatch.porter_link;
+                      if (navigator.share) {
+                        navigator.share({ title: `Porter Tracking - ${order.order_number}`, url: link }).catch(() => {});
+                      } else {
+                        copyToClipboard(link, "Porter tracking link");
+                      }
+                    }} data-testid="share-porter-link-btn">
+                      <Share2 className="w-4 h-4 mr-1 text-blue-600" /> Share Tracking Link
+                    </Button>
                   </div>
                 )}
               </>
@@ -921,14 +1013,14 @@ export default function OrderDetail() {
           <DialogHeader><DialogTitle>Dispatch Order</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div><Label>Dispatch Type</Label>
-              <Select value={dispatchData.dispatch_type} onValueChange={(v) => setDispatchData({ ...dispatchData, dispatch_type: v })}>
+              <Select value={dispatchData.dispatch_type} onValueChange={(v) => { setDispatchData({ ...dispatchData, dispatch_type: v }); setLrValidationError(""); }}>
                 <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
                 <SelectContent><SelectItem value="courier">Courier</SelectItem><SelectItem value="transport">Transport</SelectItem><SelectItem value="porter">Porter</SelectItem><SelectItem value="self_arranged">Self-Arranged</SelectItem><SelectItem value="office_collection">Office Collection</SelectItem></SelectContent>
               </Select>
             </div>
             {dispatchData.dispatch_type === "courier" && (
-              <div><Label>Courier</Label>
-                <Select value={dispatchData.courier_name} onValueChange={(v) => setDispatchData({ ...dispatchData, courier_name: v })}>
+              <div><Label>Courier <span className="text-red-500">*</span></Label>
+                <Select value={dispatchData.courier_name} onValueChange={(v) => { setDispatchData({ ...dispatchData, courier_name: v }); setLrValidationError(""); }}>
                   <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
                   <SelectContent>{COURIER_OPTIONS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
                 </Select>
@@ -937,19 +1029,65 @@ export default function OrderDetail() {
             {dispatchData.dispatch_type === "transport" && (
               <div><Label>Transporter</Label><Input value={dispatchData.transporter_name} onChange={(e) => setDispatchData({ ...dispatchData, transporter_name: e.target.value })} /></div>
             )}
-            <div><Label>LR / Tracking No.</Label><Input value={dispatchData.lr_no} onChange={(e) => setDispatchData({ ...dispatchData, lr_no: e.target.value })} data-testid="dispatch-lr-input" /></div>
-            <div>
-              <Label className="mb-2 block">Courier / Transport Slip</Label>
-              <SlipScanner
-                onBarcodeDetected={(code) => setDispatchData(prev => ({ ...prev, lr_no: code }))}
-                slipImages={dispatchSlipImages}
-                onSlipImagesChange={setDispatchSlipImages}
-              />
-            </div>
+            {(dispatchData.dispatch_type === "courier" || dispatchData.dispatch_type === "transport") && (
+              <>
+                <div>
+                  <Label>LR / Tracking No. <span className="text-red-500">*</span></Label>
+                  <Input
+                    value={dispatchData.lr_no}
+                    onChange={(e) => { setDispatchData({ ...dispatchData, lr_no: e.target.value }); setLrValidationError(""); }}
+                    data-testid="dispatch-lr-input"
+                    className={lrValidationError ? "border-red-500" : ""}
+                    placeholder={dispatchData.dispatch_type === "courier" && dispatchData.courier_name
+                      ? `Format: ${(COURIER_LR_PATTERNS[dispatchData.courier_name]?.label || "Enter tracking number")}`
+                      : "LR / Docket No."}
+                  />
+                  {lrValidationError && <p className="text-xs text-red-500 mt-1" data-testid="lr-validation-error">{lrValidationError}</p>}
+                </div>
+                <div>
+                  <Label className="mb-2 block">Courier / Transport Slip</Label>
+                  <SlipScanner
+                    onBarcodeDetected={(code) => { setDispatchData(prev => ({ ...prev, lr_no: code })); setLrValidationError(""); }}
+                    slipImages={dispatchSlipImages}
+                    onSlipImagesChange={setDispatchSlipImages}
+                  />
+                </div>
+              </>
+            )}
+            {dispatchData.dispatch_type === "porter" && (
+              <div>
+                <Label>Porter Tracking Link / Message</Label>
+                <Textarea
+                  value={porterPasteText}
+                  onChange={(e) => {
+                    const text = e.target.value;
+                    setPorterPasteText(text);
+                    const link = extractPorterLink(text);
+                    setDispatchData(prev => ({ ...prev, porter_link: link || "" }));
+                  }}
+                  placeholder="Paste Porter message or tracking link here..."
+                  className="min-h-[80px]"
+                  data-testid="porter-link-input"
+                />
+                {dispatchData.porter_link && (
+                  <p className="text-xs text-green-600 mt-1 flex items-center gap-1" data-testid="porter-link-extracted">
+                    <ExternalLink className="w-3 h-3" /> Extracted: <a href={dispatchData.porter_link} target="_blank" rel="noopener noreferrer" className="underline truncate max-w-[300px]">{dispatchData.porter_link}</a>
+                  </p>
+                )}
+                {porterPasteText && !dispatchData.porter_link && (
+                  <p className="text-xs text-amber-600 mt-1">No porter.in link found in pasted text</p>
+                )}
+              </div>
+            )}
+            {["self_arranged", "office_collection"].includes(dispatchData.dispatch_type) && (
+              <p className="text-sm text-muted-foreground p-3 rounded bg-secondary">
+                No LR number or courier details required. Click dispatch to mark as dispatched.
+              </p>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDispatch(false)}>Cancel</Button>
-            <Button onClick={saveDispatch} disabled={saving}>{saving ? "Dispatching..." : "Dispatch"}</Button>
+            <Button onClick={saveDispatch} disabled={saving} data-testid="confirm-dispatch-btn">{saving ? "Dispatching..." : "Dispatch"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

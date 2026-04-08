@@ -6,16 +6,17 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Truck, Send, Eye, Search } from "lucide-react";
+import { Truck, Send, Eye, Search, ExternalLink } from "lucide-react";
 import { SlipScanner } from "@/components/SlipScanner";
+import { validateLrNumber, extractPorterLink, COURIER_LR_PATTERNS } from "@/lib/courierTracking";
 
 const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
-const NO_LR_METHODS = ["porter", "self_arranged", "office_collection"];
 
 export default function DispatchDashboard() {
   const { user } = useAuth();
@@ -29,6 +30,9 @@ export default function DispatchDashboard() {
   const [dispatchSlipImages, setDispatchSlipImages] = useState([]);
   const [editShippingMethod, setEditShippingMethod] = useState("");
   const [dispSearch, setDispSearch] = useState("");
+  const [lrValidationError, setLrValidationError] = useState("");
+  const [porterPasteText, setPorterPasteText] = useState("");
+  const [porterLink, setPorterLink] = useState("");
 
   useEffect(() => { loadOrders(); }, []);
 
@@ -56,6 +60,9 @@ export default function DispatchDashboard() {
     setTransporterName(order.dispatch?.transporter_name || order.transporter_name || "");
     setLrNo(order.dispatch?.lr_no || "");
     setDispatchSlipImages(order.dispatch?.dispatch_slip_images || []);
+    setLrValidationError("");
+    setPorterPasteText(order.dispatch?.porter_link || "");
+    setPorterLink(order.dispatch?.porter_link || "");
     setShowDispatch(true);
   };
 
@@ -63,9 +70,9 @@ export default function DispatchDashboard() {
     if (!selectedOrder) return;
     const method = editShippingMethod || selectedOrder.shipping_method;
 
-    // For transport: LR is mandatory for dispatch/packaging
-    if (method === "transport" && ["dispatch", "packaging"].includes(user?.role) && !lrNo) {
-      return toast.error("LR Number is mandatory for transport dispatch");
+    // Mandatory LR for courier and transport
+    if ((method === "courier" || method === "transport") && !lrNo.trim()) {
+      return toast.error("LR / Tracking Number is mandatory for " + (method === "courier" ? "Courier" : "Transport") + " dispatch");
     }
 
     // For courier: must select courier
@@ -73,15 +80,28 @@ export default function DispatchDashboard() {
       return toast.error("Select a courier");
     }
 
+    // Courier-specific regex validation
+    if (method === "courier" && courierName && lrNo.trim()) {
+      const validation = validateLrNumber(courierName, lrNo);
+      if (!validation.valid) {
+        setLrValidationError(validation.message);
+        return toast.error(validation.message);
+      }
+    }
+
     try {
-      await api.put(`/orders/${selectedOrder.id}/dispatch`, {
+      const payload = {
         courier_name: courierName,
         transporter_name: transporterName,
         lr_no: lrNo,
         dispatch_type: method,
         shipping_method: method,
         dispatch_slip_images: dispatchSlipImages,
-      });
+      };
+      if (method === "porter" && porterLink) {
+        payload.porter_link = porterLink;
+      }
+      await api.put(`/orders/${selectedOrder.id}/dispatch`, payload);
       toast.success("Order dispatched!");
       setShowDispatch(false);
       loadOrders();
@@ -204,7 +224,7 @@ export default function DispatchDashboard() {
               {/* Editable shipping method */}
               <div>
                 <Label>Shipping Method</Label>
-                <Select value={editShippingMethod} onValueChange={setEditShippingMethod}>
+                <Select value={editShippingMethod} onValueChange={(v) => { setEditShippingMethod(v); setLrValidationError(""); }}>
                   <SelectTrigger data-testid="dispatch-shipping-method-select"><SelectValue placeholder="Select method" /></SelectTrigger>
                   <SelectContent>
                     {SHIPPING_METHODS.map(m => (
@@ -217,8 +237,8 @@ export default function DispatchDashboard() {
               {/* Courier dispatch */}
               {editShippingMethod === "courier" && (
                 <div>
-                  <Label>Courier *</Label>
-                  <Select value={courierName} onValueChange={setCourierName}>
+                  <Label>Courier <span className="text-red-500">*</span></Label>
+                  <Select value={courierName} onValueChange={(v) => { setCourierName(v); setLrValidationError(""); }}>
                     <SelectTrigger data-testid="dispatch-courier-select"><SelectValue placeholder="Select courier" /></SelectTrigger>
                     <SelectContent>
                       {COURIER_OPTIONS.map((c) => (
@@ -231,29 +251,37 @@ export default function DispatchDashboard() {
 
               {/* Transport dispatch */}
               {editShippingMethod === "transport" && (
+                <div>
+                  <Label>Transporter Name</Label>
+                  <Input
+                    value={transporterName}
+                    onChange={(e) => setTransporterName(e.target.value)}
+                    placeholder="Transporter name"
+                    data-testid="dispatch-transporter-input"
+                  />
+                </div>
+              )}
+
+              {/* LR/Tracking field for Courier + Transport */}
+              {(editShippingMethod === "courier" || editShippingMethod === "transport") && (
                 <>
                   <div>
-                    <Label>Transporter Name</Label>
-                    <Input
-                      value={transporterName}
-                      onChange={(e) => setTransporterName(e.target.value)}
-                      placeholder="Transporter name"
-                      data-testid="dispatch-transporter-input"
-                    />
-                  </div>
-                  <div>
-                    <Label>LR Number {["dispatch", "packaging"].includes(user?.role) ? "*" : ""}</Label>
+                    <Label>LR / Tracking No. <span className="text-red-500">*</span></Label>
                     <Input
                       value={lrNo}
-                      onChange={(e) => setLrNo(e.target.value)}
-                      placeholder="LR / Docket No."
+                      onChange={(e) => { setLrNo(e.target.value); setLrValidationError(""); }}
+                      className={lrValidationError ? "border-red-500" : ""}
+                      placeholder={editShippingMethod === "courier" && courierName
+                        ? `Format: ${COURIER_LR_PATTERNS[courierName]?.label || "Enter tracking number"}`
+                        : "LR / Docket No."}
                       data-testid="dispatch-lr-input"
                     />
+                    {lrValidationError && <p className="text-xs text-red-500 mt-1" data-testid="lr-validation-error">{lrValidationError}</p>}
                   </div>
                   <div>
-                    <Label className="mb-2 block">Courier / Transport Slip</Label>
+                    <Label className="mb-2 block">{editShippingMethod === "courier" ? "Courier" : "Transport"} Slip</Label>
                     <SlipScanner
-                      onBarcodeDetected={(code) => setLrNo(code)}
+                      onBarcodeDetected={(code) => { setLrNo(code); setLrValidationError(""); }}
                       slipImages={dispatchSlipImages}
                       onSlipImagesChange={setDispatchSlipImages}
                     />
@@ -261,31 +289,35 @@ export default function DispatchDashboard() {
                 </>
               )}
 
-              {/* For courier, also show LR field */}
-              {editShippingMethod === "courier" && (
-                <>
+              {/* Porter: link extraction */}
+              {editShippingMethod === "porter" && (
                 <div>
-                  <Label>Tracking Number</Label>
-                  <Input
-                    value={lrNo}
-                    onChange={(e) => setLrNo(e.target.value)}
-                    placeholder="Tracking No."
-                    data-testid="dispatch-tracking-input"
+                  <Label>Porter Tracking Link / Message</Label>
+                  <Textarea
+                    value={porterPasteText}
+                    onChange={(e) => {
+                      const text = e.target.value;
+                      setPorterPasteText(text);
+                      const link = extractPorterLink(text);
+                      setPorterLink(link || "");
+                    }}
+                    placeholder="Paste Porter message or tracking link here..."
+                    className="min-h-[80px]"
+                    data-testid="porter-link-input"
                   />
+                  {porterLink && (
+                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1" data-testid="porter-link-extracted">
+                      <ExternalLink className="w-3 h-3" /> Extracted: <a href={porterLink} target="_blank" rel="noopener noreferrer" className="underline truncate max-w-[250px]">{porterLink}</a>
+                    </p>
+                  )}
+                  {porterPasteText && !porterLink && (
+                    <p className="text-xs text-amber-600 mt-1">No porter.in link found in pasted text</p>
+                  )}
                 </div>
-                <div>
-                  <Label className="mb-2 block">Courier Slip</Label>
-                  <SlipScanner
-                    onBarcodeDetected={(code) => setLrNo(code)}
-                    slipImages={dispatchSlipImages}
-                    onSlipImagesChange={setDispatchSlipImages}
-                  />
-                </div>
-                </>
               )}
 
-              {/* Porter / Self-arranged / Office Collection: just dispatch */}
-              {NO_LR_METHODS.includes(editShippingMethod) && (
+              {/* Self-arranged / Office Collection */}
+              {["self_arranged", "office_collection"].includes(editShippingMethod) && (
                 <p className="text-sm text-muted-foreground p-3 rounded bg-secondary">
                   No LR number or courier details required for {getShippingLabel(editShippingMethod)}.
                   Click dispatch to mark as dispatched.
