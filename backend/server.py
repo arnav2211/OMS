@@ -1528,6 +1528,7 @@ async def update_payment_check(order_id: str, body: dict, user=Depends(get_curre
 async def print_order_addresses(body: dict, user=Depends(get_current_user)):
     if user["role"] not in ["admin", "packaging"]:
         raise HTTPException(status_code=403, detail="Admin or packaging only")
+
     order_ids = body.get("order_ids", [])
     quantities = body.get("quantities", {})  # {order_id: count}
     if not order_ids:
@@ -1538,47 +1539,92 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
         o = await db.orders.find_one({"id": oid}, {"_id": 0})
         if o:
             orders.append(o)
+
     if not orders:
         raise HTTPException(status_code=404, detail="No valid orders found")
 
-    customer_ids = list(set(o.get("customer_id", "") for o in orders))
-    customers_list = await db.customers.find({"id": {"$in": customer_ids}}, {"_id": 0}).to_list(500)
+    customer_ids = list(set(o.get("customer_id", "") for o in orders if o.get("customer_id")))
+    customers_list = await db.customers.find(
+        {"id": {"$in": customer_ids}},
+        {"_id": 0}
+    ).to_list(500)
     customers = {c["id"]: c for c in customers_list}
 
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm)
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=5 * mm,   # reduced from 8mm
+        rightMargin=5 * mm,  # reduced from 8mm
+        topMargin=8 * mm,
+        bottomMargin=8 * mm
+    )
+
     styles = getSampleStyleSheet()
 
-    addr_normal = ParagraphStyle('AddrN', parent=styles['Normal'], fontSize=10, leading=15, fontName='Helvetica')
+    # Bigger + still compact
+    addr_style = ParagraphStyle(
+        "AddrStyle",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=10.5,   # increased from 9
+        leading=12.5,    # adjusted accordingly
+        spaceBefore=0,
+        spaceAfter=0,
+    )
 
     def make_address_cell(order, customer):
+        name = (order.get("customer_name") or "Unknown").strip()
         sa = order.get("shipping_address") or {}
         # Use address_name if set, otherwise customer name
         name = sa.get("address_name") or order.get("customer_name", "Unknown")
         phones = customer.get("phone_numbers", []) if customer else []
 
-        lines = [f"<b>To</b>", f"<b>{name}</b>", ""]
+        address_parts = []
+
         if sa.get("address_line"):
-            lines.append(sa["address_line"])
-        city_line = ""
-        if sa.get("city") and sa.get("pincode"):
-            city_line = f"{sa['city']} - {sa['pincode']}"
-        elif sa.get("city"):
-            city_line = sa["city"]
-        if city_line:
-            lines.append(city_line)
+            address_parts.append(sa["address_line"].strip())
+
+        city_state_line = []
+        if sa.get("city"):
+            if sa.get("pincode"):
+                city_state_line.append(f"{sa['city'].strip()} - {sa['pincode']}")
+            else:
+                city_state_line.append(sa["city"].strip())
+
         if sa.get("state"):
-            lines.append(sa["state"])
-        if phones:
-            clean_phones = [p.replace("+91", "").replace("+", "").strip() for p in phones]
-            mob_str = ", ".join(clean_phones)
-            lines.append("")
-            lines.append(f"<b>Mob no.-{mob_str}</b>")
+            city_state_line.append(sa["state"].strip())
 
-        return Paragraph("<br/>".join(lines), addr_normal)
+        if city_state_line:
+            address_parts.append(", ".join(city_state_line))
 
-    pw = A4[0] - 24*mm
-    col_w = (pw - 8*mm) / 2
+        clean_phones = []
+        for p in phones:
+            if p:
+                cp = p.replace("+91", "").replace("+", "").strip()
+                if cp:
+                    clean_phones.append(cp)
+
+        mob_str = ", ".join(clean_phones)
+
+        lines = [
+            "<b>To</b>",
+            f"<b>{name}</b>",
+        ]
+
+        for part in address_parts:
+            lines.append(part)
+
+        if mob_str:
+            lines.append(f"<b>Mob no.- {mob_str}</b>")
+
+        return Paragraph("<br/>".join(lines), addr_style)
+
+    # 3 columns per row
+    page_width = A4[0] - (10 * mm)  # because 5mm left + 5mm right
+    gap = 3 * mm                    # slightly reduced gap between columns
+    col_w = (page_width - 2 * gap) / 3
 
     # Build expanded list with quantities
     expanded_orders = []
@@ -1588,31 +1634,46 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
             expanded_orders.append(o)
 
     row_data = []
-    for i in range(0, len(expanded_orders), 2):
-        left = make_address_cell(expanded_orders[i], customers.get(expanded_orders[i].get("customer_id", "")))
-        right = make_address_cell(expanded_orders[i + 1], customers.get(expanded_orders[i + 1].get("customer_id", ""))) if i + 1 < len(expanded_orders) else Paragraph("", addr_normal)
-        row_data.append([left, right])
+    for i in range(0, len(expanded_orders), 3):
+        row = []
 
-    table = Table(row_data, colWidths=[col_w, col_w], spaceBefore=2*mm, spaceAfter=2*mm)
+        for j in range(3):
+            if i + j < len(expanded_orders):
+                order = expanded_orders[i + j]
+                customer = customers.get(order.get("customer_id", ""))
+                row.append(make_address_cell(order, customer))
+            else:
+                row.append(Paragraph("", addr_style))  # or addr_style if that's your actual style
+
+        row_data.append(row)
+
+    table = Table(
+        row_data,
+        colWidths=[col_w, col_w, col_w],
+        spaceBefore=0,
+        spaceAfter=0
+    )
+
     table.setStyle(TableStyle([
-        ('BOX', (0, 0), (0, -1), 1, colors.black),
-        ('BOX', (1, 0), (1, -1), 1, colors.black),
+        ('BOX', (0, 0), (-1, -1), 1, colors.black),
+        ('INNERGRID', (0, 0), (-1, -1), 0.7, colors.black),
+
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('TOPPADDING', (0, 0), (-1, -1), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
-        ('LEFTPADDING', (0, 0), (-1, -1), 10),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 10),
-        ('LINEBELOW', (0, 0), (-1, -2), 0.5, colors.HexColor('#DDDDDD')),
+
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
     ]))
 
     doc.build([table])
     buffer.seek(0)
+
     return StreamingResponse(
         buffer,
         media_type="application/pdf",
         headers={"Content-Disposition": "inline; filename=shipping_addresses.pdf"}
     )
-
 # Packaging Staff Management
 @api_router.get("/packaging-staff")
 async def list_packaging_staff(user=Depends(get_current_user)):
