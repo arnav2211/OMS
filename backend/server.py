@@ -771,6 +771,7 @@ async def list_orders(
     date_to: Optional[str] = None,
     search: Optional[str] = None,
     view_all: Optional[bool] = False,
+    gst_only: Optional[bool] = False,
     page: int = 1,
     page_size: int = 50,
     user=Depends(get_current_user)
@@ -801,6 +802,10 @@ async def list_orders(
         query.setdefault("created_at", {})["$gte"] = date_from
     if date_to:
         query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
+
+    if gst_only:
+        query["gst_applicable"] = True
+
 
     # Server-side search: search across order_number, customer_name, and customer alias
     if search:
