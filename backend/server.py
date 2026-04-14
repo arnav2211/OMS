@@ -2237,7 +2237,7 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
     valb = ParagraphStyle('ValB', parent=styles['Normal'], fontSize=9,  leading=12, fontName='Helvetica-Bold')
     sm   = ParagraphStyle('Sm',   parent=styles['Normal'], fontSize=7.5,leading=10, textColor=colors.HexColor('#374151'))
     itm  = ParagraphStyle('Itm',  parent=styles['Normal'], fontSize=8,  leading=10)
-    form_sty = ParagraphStyle('Form', parent=styles['Normal'], fontSize=7.5, leading=10,
+    form_sty = ParagraphStyle('Form', parent=styles['Normal'], fontSize=9.5, leading=12,
                               textColor=AMBER, backColor=LAMBER)
     tot_sty  = ParagraphStyle('Tot',  parent=styles['Normal'], fontSize=9, leading=12, alignment=TA_RIGHT)
     totb_sty = ParagraphStyle('TotB', parent=styles['Normal'], fontSize=10, leading=13,
