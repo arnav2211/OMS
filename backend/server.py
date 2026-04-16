@@ -1818,6 +1818,29 @@ async def dashboard_stats(user=Depends(get_current_user)):
         "total_customers": total_customers
     }
 
+def _calc_product_sales(order, exclude_gst: bool, exclude_shipping: bool) -> float:
+    """Calculate product sales amount based on exclusion flags.
+    
+    exclude_shipping also excludes additional_charges (base + GST).
+    total_gst in DB = items_gst + shipping_gst + additional_charges_gst.
+    """
+    subtotal = order.get("subtotal", 0)
+    if exclude_gst and exclude_shipping:
+        return subtotal
+    shipping_charge = order.get("shipping_charge", 0)
+    shipping_gst = order.get("shipping_gst", 0)
+    additional_base = sum(c.get("amount", 0) for c in order.get("additional_charges", []))
+    additional_gst = sum(c.get("gst_amount", 0) for c in order.get("additional_charges", []))
+    total_gst_stored = order.get("total_gst", 0)
+    items_gst = total_gst_stored - shipping_gst - additional_gst
+    if exclude_gst:
+        # All base amounts, no GST at all
+        return subtotal + shipping_charge + additional_base
+    if exclude_shipping:
+        # Items base + items GST only (no shipping, no additional charges)
+        return subtotal + items_gst
+    return order.get("grand_total", 0)
+
 # Telecaller Sales Report
 @api_router.get("/reports/telecaller-sales")
 async def telecaller_sales(
@@ -1858,14 +1881,7 @@ async def telecaller_sales(
     product_only_amount = 0
     for order in orders:
         total_amount += order.get("grand_total", 0)
-        if exclude_gst and exclude_shipping:
-            product_only_amount += order.get("subtotal", 0)
-        elif exclude_gst:
-            product_only_amount += order.get("subtotal", 0) + order.get("shipping_charge", 0)
-        elif exclude_shipping:
-            product_only_amount += order.get("subtotal", 0) + order.get("total_gst", 0)
-        else:
-            product_only_amount += order.get("grand_total", 0)
+        product_only_amount += _calc_product_sales(order, exclude_gst, exclude_shipping)
 
     return {
         "period": period,
@@ -1916,14 +1932,7 @@ async def payment_received_sales(
     total_amount, product_sales = 0, 0
     for o in orders:
         total_amount += o.get("grand_total", 0)
-        if exclude_gst and exclude_shipping:
-            product_sales += o.get("subtotal", 0)
-        elif exclude_gst:
-            product_sales += o.get("subtotal", 0) + o.get("shipping_charge", 0)
-        elif exclude_shipping:
-            product_sales += o.get("subtotal", 0) + o.get("total_gst", 0)
-        else:
-            product_sales += o.get("grand_total", 0)
+        product_sales += _calc_product_sales(o, exclude_gst, exclude_shipping)
     return {"total_orders": len(orders), "total_amount": round(total_amount, 2), "product_sales": round(product_sales, 2)}
 
 # Accounts Dashboard Stats
@@ -2075,14 +2084,7 @@ async def admin_analytics(
         if s in status_counts:
             status_counts[s] += 1
         # Calculate product-only sales based on exclusions
-        if exclude_gst and exclude_shipping:
-            product_sales += order.get("subtotal", 0)
-        elif exclude_gst:
-            product_sales += order.get("subtotal", 0) + order.get("shipping_charge", 0)
-        elif exclude_shipping:
-            product_sales += order.get("subtotal", 0) + order.get("total_gst", 0)
-        else:
-            product_sales += order.get("grand_total", 0)
+        product_sales += _calc_product_sales(order, exclude_gst, exclude_shipping)
         # Per-executive breakdown
         tid = order.get("telecaller_id", "unknown")
         tname = order.get("telecaller_name", "Unknown")
