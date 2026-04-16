@@ -91,6 +91,7 @@ export default function AdminDashboard() {
   useEffect(() => { loadAnalytics(); }, [period, dateFrom, dateTo, excludeGst, excludeShipping]);
   useEffect(() => { loadExecPerf(); }, [execPerfPeriod, execPerfDateFrom, execPerfDateTo]);
   useEffect(() => { if (activeTab === "edit-requests") loadEditPermissions(); }, [activeTab]);
+  useEffect(() => { if (selectedExec) loadExecReport(selectedExec); }, [execExcludeGst, execExcludeShipping, execDateFrom, execDateTo]);
 
   const loadAnalytics = async () => {
     setAnalyticsLoading(true);
@@ -502,12 +503,12 @@ export default function AdminDashboard() {
                 </div>
                 {execPeriod === "custom" && (
                   <>
-                    <div><Label className="text-xs">From</Label><Input type="date" value={execDateFrom} onChange={e => { setExecDateFrom(e.target.value); if (selectedExec) loadExecReport(selectedExec); }} className="w-36" /></div>
-                    <div><Label className="text-xs">To</Label><Input type="date" value={execDateTo} onChange={e => { setExecDateTo(e.target.value); if (selectedExec) loadExecReport(selectedExec); }} className="w-36" /></div>
+                    <div><Label className="text-xs">From</Label><Input type="date" value={execDateFrom} onChange={e => setExecDateFrom(e.target.value)} className="w-36" /></div>
+                    <div><Label className="text-xs">To</Label><Input type="date" value={execDateTo} onChange={e => setExecDateTo(e.target.value)} className="w-36" /></div>
                   </>
                 )}
-                <div className="flex items-center gap-2"><Checkbox id="execExGst" checked={execExcludeGst} onCheckedChange={v => { setExecExcludeGst(v); if (selectedExec) setTimeout(() => loadExecReport(selectedExec), 0); }} /><Label htmlFor="execExGst" className="text-xs cursor-pointer">Excl. GST</Label></div>
-                <div className="flex items-center gap-2"><Checkbox id="execExShip" checked={execExcludeShipping} onCheckedChange={v => { setExecExcludeShipping(v); if (selectedExec) setTimeout(() => loadExecReport(selectedExec), 0); }} /><Label htmlFor="execExShip" className="text-xs cursor-pointer">Excl. Shipping</Label></div>
+                <div className="flex items-center gap-2"><Checkbox id="execExGst" checked={execExcludeGst} onCheckedChange={setExecExcludeGst} /><Label htmlFor="execExGst" className="text-xs cursor-pointer">Excl. GST</Label></div>
+                <div className="flex items-center gap-2"><Checkbox id="execExShip" checked={execExcludeShipping} onCheckedChange={setExecExcludeShipping} /><Label htmlFor="execExShip" className="text-xs cursor-pointer">Excl. Shipping</Label></div>
               </div>
               {executiveReport && (
                 <div className="space-y-4 mt-4">
