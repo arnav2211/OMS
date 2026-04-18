@@ -44,13 +44,14 @@ Build a comprehensive Order Management System for CitSpray Aroma Sciences with r
 - Composite keys for image grouping
 - SlipScanner with barcode scanning (pyzbar + html5-qrcode)
 - Image crop functionality (react-image-crop)
+- **Status auto-transition**: Saving packaging from Order Detail page now auto-transitions "new" → "packaging" (Fixed 2026-04-18)
 
-### Dispatch Module (Updated 2026-04-08)
+### Dispatch Module
 - Dispatch dialog with editable shipping method
-- **LR/Tracking No. mandatory** for Courier and Transport
-- **Courier-specific Regex validation**: DTDC, Anjani, Professional, India Post
-- **Track button** opens courier's official tracking URL
-- **Porter link extraction** from pasted messages (bare porter.in/... links supported)
+- LR/Tracking No. mandatory for Courier and Transport
+- Courier-specific Regex validation: DTDC, Anjani, Professional, India Post
+- Track button opens courier's official tracking URL
+- Porter link extraction from pasted messages (bare porter.in/... links supported)
 - Porter Track + Share Tracking Link buttons
 - Dispatch slip upload with barcode scanning
 - Share packed boxes + dispatch slip combined
@@ -68,9 +69,11 @@ Build a comprehensive Order Management System for CitSpray Aroma Sciences with r
 
 ### Admin Features
 - Executive reports with IST timezone fix
+- Excl. GST / Excl. Shipping calculations fixed (properly decomposes total_gst into items/shipping/additional GST) (Fixed 2026-04-17)
 - Admin alert/popup system with continuous audio alarm
 - Order search in admin alerts
 - Alert cancellation
+- **Sidebar**: Amazon Orders/Packing/Dispatch grouped under collapsible "Amazon" menu; Packaging & Dispatch remain standalone (Updated 2026-04-18)
 
 ### Utility Tools
 - DTDC Serviceability & Rate Calculator (/DTDC)
@@ -92,6 +95,8 @@ Build a comprehensive Order Management System for CitSpray Aroma Sciences with r
 - pyzbar requires libzbar0 OS package
 - Admin alerts use 3-second polling + Web Audio API
 - Porter link regex handles bare porter.in/... URLs (no https:// prefix required)
+- Admin sidebar uses grouped nav with hover (desktop) / tap (mobile) for Amazon sub-items
+- Packaging auto-transition: backend auto-sets status to "packaging" when current is "new" and no explicit status sent
 
 ## Prioritized Backlog
 
