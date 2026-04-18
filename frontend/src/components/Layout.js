@@ -11,6 +11,7 @@ import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
   FileText, TrendingUp, Bell, ShoppingBag, Calculator, MapPinCheck, Megaphone,
+  ChevronDown, Layers,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -53,9 +54,14 @@ const NAV_ITEMS = {
     { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
     { label: "Packaging", icon: Package, path: "/packaging" },
     { label: "Dispatch", icon: Truck, path: "/dispatch" },
-    { label: "Amazon Orders", icon: ShoppingBag, path: "/amazon-orders" },
-    { label: "Amazon Packing", icon: ShoppingBag, path: "/amazon-packing" },
-    { label: "Amazon Dispatch", icon: Truck, path: "/amazon-dispatch" },
+    {
+      label: "Amazon", icon: ShoppingBag, group: true,
+      children: [
+        { label: "Amazon Orders", icon: ShoppingBag, path: "/amazon-orders" },
+        { label: "Amazon Packing", icon: Package, path: "/amazon-packing" },
+        { label: "Amazon Dispatch", icon: Truck, path: "/amazon-dispatch" },
+      ],
+    },
     { label: "Accounts", icon: BarChart3, path: "/accounts" },
     { label: "Item Analytics", icon: TrendingUp, path: "/item-analytics" },
     { label: "Users", icon: Settings, path: "/users" },
@@ -79,9 +85,39 @@ export default function Layout({ children }) {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifCount, setNotifCount] = useState(0);
+  const [expandedGroup, setExpandedGroup] = useState(null);
+  const [hoverGroup, setHoverGroup] = useState(null);
+  const hoverTimeout = useRef(null);
   const lastCheckRef = useRef(localStorage.getItem("citspray_last_notif_check") || new Date(Date.now() - 86400000).toISOString());
 
   const navItems = NAV_ITEMS[user?.role] || [];
+
+  // Auto-expand group if a child route is active
+  useEffect(() => {
+    for (const item of navItems) {
+      if (item.group && item.children?.some(c => c.path === location.pathname)) {
+        setExpandedGroup(item.label);
+        break;
+      }
+    }
+  }, [location.pathname]);
+
+  const isMobile = () => typeof window !== "undefined" && window.innerWidth < 1024;
+
+  const handleGroupInteraction = (label) => {
+    setExpandedGroup(prev => prev === label ? null : label);
+  };
+
+  const handleGroupMouseEnter = (label) => {
+    if (isMobile()) return;
+    clearTimeout(hoverTimeout.current);
+    setHoverGroup(label);
+  };
+
+  const handleGroupMouseLeave = () => {
+    if (isMobile()) return;
+    hoverTimeout.current = setTimeout(() => setHoverGroup(null), 200);
+  };
 
   const handleLogout = () => {
     logout();
@@ -189,6 +225,53 @@ export default function Layout({ children }) {
         {/* Nav */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto" data-testid="sidebar-nav">
           {navItems.map((item) => {
+            if (item.group) {
+              const Icon = item.icon;
+              const isChildActive = item.children?.some(c => c.path === location.pathname);
+              const isOpen = expandedGroup === item.label || hoverGroup === item.label;
+              return (
+                <div
+                  key={item.label}
+                  onMouseEnter={() => handleGroupMouseEnter(item.label)}
+                  onMouseLeave={handleGroupMouseLeave}
+                  data-testid={`nav-group-${item.label.toLowerCase()}`}
+                >
+                  <button
+                    onClick={() => handleGroupInteraction(item.label)}
+                    className={`sidebar-nav-item w-full justify-between ${isChildActive ? "active" : "text-muted-foreground"}`}
+                    data-testid={`nav-group-toggle-${item.label.toLowerCase()}`}
+                  >
+                    <span className="flex items-center gap-3">
+                      <Icon className="w-4 h-4" />
+                      {item.label}
+                    </span>
+                    <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  <div
+                    className={`overflow-hidden transition-all duration-200 ${isOpen ? "max-h-60 opacity-100" : "max-h-0 opacity-0"}`}
+                  >
+                    <div className="pl-4 mt-0.5 space-y-0.5 border-l-2 border-border ml-5">
+                      {item.children.map(child => {
+                        const ChildIcon = child.icon;
+                        const childActive = location.pathname === child.path;
+                        return (
+                          <Link
+                            key={child.path}
+                            to={child.path}
+                            data-testid={`nav-${child.label.toLowerCase().replace(/\s/g, "-")}`}
+                            className={`sidebar-nav-item text-sm py-1.5 ${childActive ? "active" : "text-muted-foreground"}`}
+                            onClick={() => setSidebarOpen(false)}
+                          >
+                            <ChildIcon className="w-3.5 h-3.5" />
+                            {child.label}
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              );
+            }
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
             return (

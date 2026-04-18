@@ -1261,6 +1261,9 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
         packaging["checked_by"] = updates["checked_by"]
 
     new_status = updates.get("status", order["status"])
+    # Auto-transition: if status is "new" and packaging data is being saved, move to "packaging"
+    if new_status == "new" and "status" not in updates:
+        new_status = "packaging"
     if new_status == "packed":
         # Validate mandatory fields
         if not packaging.get("item_packed_by"):
