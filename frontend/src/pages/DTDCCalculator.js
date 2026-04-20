@@ -39,7 +39,7 @@ export default function DTDCCalculator() {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight" data-testid="dtdc-page-title">DTDC Rate Calculator</h1>
+        <h1 className="text-2xl font-bold tracking-tight" data-testid="dtdc-page-title">DTDC Servicibilty Check</h1>
         <p className="text-sm text-muted-foreground mt-1">Check serviceability & calculate shipping cost</p>
       </div>
 
