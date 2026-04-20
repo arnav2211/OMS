@@ -26,7 +26,7 @@ const CHECK_COLORS = {
   pending: "bg-yellow-100 text-yellow-800",
   pending_recheck: "bg-red-100 text-red-800",
 };
-const CHECK_LABELS = { received: "CHECKED", pending: "Pending", pending_recheck: "Re-check" };
+const CHECK_LABELS = { received: "Check", pending: "Pending", pending_recheck: "Re-check" };
 const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
 
 export default function AllOrders() {
@@ -288,7 +288,7 @@ export default function AllOrders() {
                 <SelectTrigger className="w-36 h-8 text-xs" data-testid="check-status-filter"><SelectValue placeholder="Check Status" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Checks</SelectItem>
-                  <SelectItem value="received">CHECKED</SelectItem>
+                  <SelectItem value="received">Checked</SelectItem>
                   <SelectItem value="pending">Pending</SelectItem>
                   <SelectItem value="pending_recheck">Pending Re-check</SelectItem>
                 </SelectContent>
