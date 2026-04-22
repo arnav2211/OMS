@@ -103,6 +103,7 @@ export default function PIBuilder() {
   const [additionalCharges, setAdditionalCharges] = useState([]);
   const [remark, setRemark] = useState("");
   const [termsAndConditions, setTermsAndConditions] = useState("");
+  const [editingTerms, setEditingTerms] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [freeSamples, setFreeSamples] = useState([]);
   const [billingAddress, setBillingAddress] = useState(null);
@@ -643,20 +644,34 @@ export default function PIBuilder() {
             <CardContent className="pt-6 space-y-3">
               <div className="flex items-center justify-between">
                 <Label className="text-sm font-medium">Terms & Conditions</Label>
-                {termsAndConditions && (
-                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setTermsAndConditions("")} data-testid="reset-terms-btn">
-                    Reset to Default
-                  </Button>
-                )}
+                <div className="flex items-center gap-2">
+                  {termsAndConditions && editingTerms && (
+                    <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setTermsAndConditions(""); setEditingTerms(false); }} data-testid="reset-terms-btn">
+                      Reset to Default
+                    </Button>
+                  )}
+                  {!editingTerms ? (
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setEditingTerms(true)} data-testid="edit-terms-btn">
+                      Edit Terms
+                    </Button>
+                  ) : (
+                    <Button variant="default" size="sm" className="h-7 text-xs" onClick={() => setEditingTerms(false)} data-testid="done-editing-terms-btn">
+                      Done
+                    </Button>
+                  )}
+                </div>
               </div>
               <Textarea
                 value={termsAndConditions || DEFAULT_TERMS}
                 onChange={e => setTermsAndConditions(e.target.value)}
-                className="min-h-[160px] text-sm leading-relaxed"
+                className={`min-h-[160px] text-sm leading-relaxed ${!editingTerms ? "opacity-70 cursor-not-allowed" : ""}`}
+                readOnly={!editingTerms}
                 data-testid="terms-textarea"
               />
               <p className="text-xs text-muted-foreground">
-                {termsAndConditions ? "Custom terms for this PI only." : "Default terms. Edit to override for this PI only."}
+                {!editingTerms
+                  ? (termsAndConditions ? "Custom terms for this PI. Click 'Edit Terms' to modify." : "Default terms applied. Click 'Edit Terms' to override for this PI.")
+                  : "Editing mode — changes apply to this PI only."}
               </p>
             </CardContent>
           </Card>
