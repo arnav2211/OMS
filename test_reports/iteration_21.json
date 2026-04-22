@@ -1,0 +1,73 @@
+{
+  "summary": "PI Terms & Conditions feature testing completed. All 13 backend tests passed. Frontend UI verified - Terms textarea with default terms pre-filled, helper text, Reset button functionality all working correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_pi_terms_conditions.py",
+    "/app/test_reports/pytest/pytest_pi_terms.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Terms & Conditions feature implemented correctly",
+    "PICreate model accepts terms_and_conditions field (line 200 in server.py)",
+    "DEFAULT_PI_TERMS constant defined with 7 default terms (line 202-210)",
+    "POST /api/proforma-invoices stores terms_and_conditions correctly",
+    "PUT /api/proforma-invoices/{id} updates terms_and_conditions correctly",
+    "GET /api/proforma-invoices/{id} returns terms_and_conditions field",
+    "PDF generation uses custom terms if set, otherwise defaults (lines 3095-3128)",
+    "Both GST and Non-GST PI PDFs share same terms rendering code",
+    "Frontend DEFAULT_TERMS constant matches backend DEFAULT_PI_TERMS",
+    "Terms textarea pre-filled with defaults, shows helper text",
+    "Reset to Default button appears only when terms are modified",
+    "Reset button clears termsAndConditions state to empty string (uses defaults)"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_pi_terms_conditions.py"
+  ],
+  "success_rate": {
+    "backend": "100% (13/13 passed)",
+    "frontend": "100% (all features verified via Playwright)"
+  },
+  "features_verified": {
+    "backend_pi_create_with_terms": "PASS - POST /api/proforma-invoices accepts terms_and_conditions field",
+    "backend_pi_create_without_terms": "PASS - PI created without terms stores empty string (defaults used in PDF)",
+    "backend_pi_update_terms": "PASS - PUT /api/proforma-invoices/{id} updates terms_and_conditions",
+    "backend_pi_get_returns_terms": "PASS - GET /api/proforma-invoices/{id} returns terms_and_conditions field",
+    "backend_gst_pi_with_terms": "PASS - GST PI created with custom terms",
+    "backend_pdf_default_terms": "PASS - PDF generated with default terms when no custom terms set",
+    "backend_pdf_custom_terms": "PASS - PDF generated with custom terms when set",
+    "backend_gst_pdf_with_terms": "PASS - GST PI PDF generated with terms section",
+    "backend_existing_non_gst_pi": "PASS - Existing Non-GST PI (0242f1c9-3882-447d-9a3d-4cfd7a1dba71) returns terms field",
+    "backend_existing_gst_pi": "PASS - Existing GST PI (d9441f44-830f-4ffc-9c9d-9a50d5431ff2) returns terms field",
+    "backend_empty_terms_uses_defaults": "PASS - Empty terms_and_conditions uses defaults in PDF",
+    "backend_reset_terms_to_empty": "PASS - Terms can be reset to empty (use defaults)",
+    "frontend_pi_builder_page_loads": "PASS - /proforma page loads with PI list",
+    "frontend_create_pi_button": "PASS - 'New PI' button opens PI form",
+    "frontend_terms_textarea_exists": "PASS - Terms & Conditions textarea found with data-testid='terms-textarea'",
+    "frontend_terms_prefilled_defaults": "PASS - Textarea pre-filled with 7 default terms (503 chars)",
+    "frontend_default_terms_content": "PASS - Contains 'Goods once sold', 'Nagpur jurisdiction', '2-3 working days'",
+    "frontend_helper_text_default": "PASS - Shows 'Default terms. Edit to override for this PI only.'",
+    "frontend_reset_button_hidden": "PASS - Reset button not visible when using default terms",
+    "frontend_reset_button_appears": "PASS - Reset to Default button appears after modifying terms",
+    "frontend_reset_button_works": "PASS - Clicking Reset restores default terms",
+    "frontend_edit_pi_loads_terms": "PASS - Editing existing PI loads terms in textarea"
+  },
+  "test_credentials": {
+    "admin": "username=admin, password=admin123"
+  },
+  "seed_data_creation": "Created TEST_PI_TERMS Customer with unique phone number for testing",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "PI Terms & Conditions feature fully tested and working. Backend stores terms_and_conditions field in proforma_invoices collection. If empty/blank, PDF uses DEFAULT_PI_TERMS (7 terms). If set, PDF splits by newlines and shows custom terms only. Frontend shows textarea pre-filled with DEFAULT_TERMS constant. When user edits, termsAndConditions state becomes truthy. Reset button clears it back to empty string. Both GST and Non-GST PI PDFs share the same terms rendering code in server.py lines 3092-3128.",
+  "mocked_apis": {
+    "has_mocked_apis": true,
+    "mocked_apis_list": ["/api/gst-verify", "/api/pincode"]
+  }
+}

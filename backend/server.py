@@ -197,6 +197,17 @@ class PICreate(BaseModel):
     remark: str = ""
     billing_address_id: str = ""
     shipping_address_id: str = ""
+    terms_and_conditions: str = ""
+
+DEFAULT_PI_TERMS = [
+    "Goods once sold will not be taken back or exchanged.",
+    "All disputes are subject to Nagpur jurisdiction only.",
+    "Dispatch will be done within 2\u20133 working days after receipt of full payment.",
+    "Prices are subject to change without prior notice.",
+    "Delivery timelines may vary due to transport or unforeseen circumstances.",
+    "Any damage or shortage must be reported within 24 hours of delivery. Opening video of the package is mandatory for any claim.",
+    "Payment once made is non-refundable except in mutually agreed cases.",
+]
 
 # Auth Helpers
 def hash_password(password: str) -> str:
@@ -2531,6 +2542,7 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
         "billing_address": billing_addr,
         "shipping_address": shipping_addr,
         "free_samples": [s.model_dump() for s in req.free_samples],
+        "terms_and_conditions": req.terms_and_conditions,
         "created_by": user["id"],
         "created_by_name": user["name"],
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -2656,6 +2668,7 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
         "billing_address": billing_addr,
         "shipping_address": shipping_addr,
         "free_samples": [s.model_dump() for s in req.free_samples],
+        "terms_and_conditions": req.terms_and_conditions,
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     await db.proforma_invoices.update_one({"id": pi_id}, {"$set": update_data})
@@ -3138,7 +3151,45 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
             elements.append(Spacer(1, 1*mm))
 
     # ─────────────────────────────────────────────────────────────
-    # ── F. BANK DETAILS + QR CODE (logic unchanged) ──────────────
+    # ── F. TERMS & CONDITIONS ─────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────
+    terms_text = pi.get("terms_and_conditions", "")
+    if terms_text:
+        terms_list = [t.strip() for t in terms_text.strip().split("\n") if t.strip()]
+    else:
+        terms_list = DEFAULT_PI_TERMS
+
+    elements.append(Spacer(1, 5*mm))
+    tc_header = Table(
+        [[Paragraph("<b>TERMS & CONDITIONS</b>",
+                     sty('TCH', fontSize=8, fontName='Helvetica-Bold', textColor=colors.white))]],
+        colWidths=[pw]
+    )
+    tc_header.setStyle(TableStyle([
+        ('BACKGROUND', (0,0),(-1,-1), GREEN if is_gst else DGRAY),
+        ('TOPPADDING', (0,0),(-1,-1), 4), ('BOTTOMPADDING', (0,0),(-1,-1), 4),
+        ('LEFTPADDING', (0,0),(-1,-1), 8), ('RIGHTPADDING', (0,0),(-1,-1), 8),
+    ]))
+    elements.append(tc_header)
+
+    tc_rows = []
+    for idx, term in enumerate(terms_list, 1):
+        tc_rows.append([
+            Paragraph(f"{idx}.", sty('TCN', fontSize=7.5, leading=11, textColor=DGRAY)),
+            Paragraph(term, sty('TCT', fontSize=7.5, leading=11, textColor=DGRAY)),
+        ])
+    tc_table = Table(tc_rows, colWidths=[8*mm, pw - 8*mm])
+    tc_table.setStyle(TableStyle([
+        ('VALIGN', (0,0),(-1,-1), 'TOP'),
+        ('TOPPADDING', (0,0),(-1,-1), 2), ('BOTTOMPADDING', (0,0),(-1,-1), 2),
+        ('LEFTPADDING', (0,0),(0,-1), 8), ('LEFTPADDING', (1,0),(1,-1), 2),
+        ('RIGHTPADDING', (0,0),(-1,-1), 4),
+        ('BOX', (0,0),(-1,-1), 0.5, SGRAY),
+    ]))
+    elements.append(tc_table)
+
+    # ─────────────────────────────────────────────────────────────
+    # ── G. BANK DETAILS + QR CODE (logic unchanged) ──────────────
     # ─────────────────────────────────────────────────────────────
     elements.append(Spacer(1, 7*mm))
     bank = BANK_GST if is_gst else BANK_NON_GST
