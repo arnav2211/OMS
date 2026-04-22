@@ -3226,21 +3226,23 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     ]))
     elements.append(tc_header)
 
-    tc_rows = []
+    tc_lines = []
     for idx, term in enumerate(terms_list, 1):
-        tc_rows.append([
-            Paragraph(f"{idx}.", sty('TCN', fontSize=6.5, leading=9, textColor=DGRAY)),
-            Paragraph(term, sty('TCT', fontSize=6.5, leading=9, textColor=DGRAY)),
-        ])
-    tc_table = Table(tc_rows, colWidths=[6*mm, pw - 6*mm])
-    tc_table.setStyle(TableStyle([
+        tc_lines.append(f"{idx}. {term}")
+    tc_body = Paragraph(
+        "<br/>".join(tc_lines),
+        sty('TCBody', fontSize=6.5, leading=9, textColor=DGRAY)
+    )
+    tc_wrap = Table([[tc_body]], colWidths=[pw])
+    tc_wrap.setStyle(TableStyle([
         ('VALIGN', (0,0),(-1,-1), 'TOP'),
-        ('TOPPADDING', (0,0),(-1,-1), 1.5), ('BOTTOMPADDING', (0,0),(-1,-1), 1.5),
-        ('LEFTPADDING', (0,0),(0,-1), 8), ('LEFTPADDING', (1,0),(1,-1), 2),
-        ('RIGHTPADDING', (0,0),(-1,-1), 4),
+        ('TOPPADDING', (0,0),(-1,-1), 4),
+        ('BOTTOMPADDING', (0,0),(-1,-1), 4),
+        ('LEFTPADDING', (0,0),(-1,-1), 8),
+        ('RIGHTPADDING', (0,0),(-1,-1), 8),
         ('BOX', (0,0),(-1,-1), 0.5, SGRAY),
     ]))
-    elements.append(tc_table)
+    elements.append(tc_wrap)
 
     doc.build(elements)
     buffer.seek(0)
