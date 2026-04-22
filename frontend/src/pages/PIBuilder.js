@@ -22,6 +22,16 @@ import { useAuth } from "@/contexts/AuthContext";
 const UNITS = ["mL", "L", "g", "Kg", "pcs", ""];
 const GST_RATES = [0, 5, 18];
 
+const DEFAULT_TERMS = [
+  "Goods once sold will not be taken back or exchanged.",
+  "All disputes are subject to Nagpur jurisdiction only.",
+  "Dispatch will be done within 2\u20133 working days after receipt of full payment.",
+  "Prices are subject to change without prior notice.",
+  "Delivery timelines may vary due to transport or unforeseen circumstances.",
+  "Any damage or shortage must be reported within 24 hours of delivery. Opening video of the package is mandatory for any claim.",
+  "Payment once made is non-refundable except in mutually agreed cases.",
+].join("\n");
+
 const emptyItem = () => ({ product_name: "", qty: 0, unit: "", rate: 0, amount: 0, gst_rate: 0, gst_amount: 0, total: 0, description: "" });
 const emptyAddress = () => ({ address_line: "", city: "", state: "", pincode: "", label: "", address_name: "" });
 const emptySample = () => ({ item_name: "", description: "" });
@@ -92,6 +102,7 @@ export default function PIBuilder() {
   const [shippingCharge, setShippingCharge] = useState(0);
   const [additionalCharges, setAdditionalCharges] = useState([]);
   const [remark, setRemark] = useState("");
+  const [termsAndConditions, setTermsAndConditions] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [freeSamples, setFreeSamples] = useState([]);
   const [billingAddress, setBillingAddress] = useState(null);
@@ -244,6 +255,7 @@ export default function PIBuilder() {
       const allCharges = fullPi.additional_charges || [];
       setAdditionalCharges(allCharges.filter(c => c.name !== "Local Charges"));
       setRemark(fullPi.remark || "");
+      setTermsAndConditions(fullPi.terms_and_conditions || "");
       setBillingAddress(fullPi.billing_address || null); setShippingAddress(fullPi.shipping_address || null);
       setSameAsBilling(fullPi.billing_address_id === fullPi.shipping_address_id);
       setFreeSamples(fullPi.free_samples || []);
@@ -271,6 +283,7 @@ export default function PIBuilder() {
           })),
         ],
         remark,
+        terms_and_conditions: termsAndConditions,
         free_samples: freeSamples.filter(s => s.item_name),
         billing_address_id: billingAddress?.id || "",
         shipping_address_id: sameAsBilling ? (billingAddress?.id || "") : (shippingAddress?.id || ""),
@@ -402,6 +415,7 @@ export default function PIBuilder() {
                               const dupCharges = d.additional_charges || [];
                               setAdditionalCharges(dupCharges.filter(c => c.name !== "Local Charges"));
                               setRemark(d.remark || "");
+                              setTermsAndConditions(d.terms_and_conditions || "");
                               setBillingAddress(d.billing_address || null);
                               setShippingAddress(d.shipping_address || null);
                               setSameAsBilling(d.billing_address_id === d.shipping_address_id);
@@ -621,6 +635,29 @@ export default function PIBuilder() {
           <Card>
             <CardContent className="pt-6 space-y-4">
               <div><Label>Remarks</Label><Textarea value={remark} onChange={e => setRemark(e.target.value)} /></div>
+            </CardContent>
+          </Card>
+
+          {/* Terms & Conditions */}
+          <Card>
+            <CardContent className="pt-6 space-y-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-medium">Terms & Conditions</Label>
+                {termsAndConditions && (
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setTermsAndConditions("")} data-testid="reset-terms-btn">
+                    Reset to Default
+                  </Button>
+                )}
+              </div>
+              <Textarea
+                value={termsAndConditions || DEFAULT_TERMS}
+                onChange={e => setTermsAndConditions(e.target.value)}
+                className="min-h-[160px] text-sm leading-relaxed"
+                data-testid="terms-textarea"
+              />
+              <p className="text-xs text-muted-foreground">
+                {termsAndConditions ? "Custom terms for this PI only." : "Default terms. Edit to override for this PI only."}
+              </p>
             </CardContent>
           </Card>
 
