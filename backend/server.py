@@ -2824,7 +2824,7 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4,
                             leftMargin=15*mm, rightMargin=15*mm,
-                            topMargin=12*mm, bottomMargin=15*mm)
+                            topMargin=3*mm, bottomMargin=3*mm)
     styles = getSampleStyleSheet()
     elements = []
     pw = A4[0] - 30*mm
