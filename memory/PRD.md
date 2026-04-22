@@ -34,9 +34,10 @@ Build a comprehensive Order Management System for CitSpray Aroma Sciences with r
 - Direct editing from order/PI forms
 - State/UT dropdown validation (INDIAN_STATES)
 
-### Proforma Invoice (PI)
+### Proforma Invoice (PI) & Quotation
 - Create, Edit, Print PIs
 - Search bar (Customer, Alias, Phone, GST, ID)
+- **Terms & Conditions**: Default 7 terms auto-rendered in PDF. Per-PI custom terms override via editable textarea. Reset to Default button. (Added 2026-04-18)
 
 ### Packaging Module
 - Pack dialog with staff assignment
@@ -44,22 +45,20 @@ Build a comprehensive Order Management System for CitSpray Aroma Sciences with r
 - Composite keys for image grouping
 - SlipScanner with barcode scanning (pyzbar + html5-qrcode)
 - Image crop functionality (react-image-crop)
-- **Status auto-transition**: Saving packaging from Order Detail page now auto-transitions "new" → "packaging" (Fixed 2026-04-18)
+- Status auto-transition: "new" → "packaging" when saved from Order Detail (Fixed 2026-04-18)
 
 ### Dispatch Module
 - Dispatch dialog with editable shipping method
 - LR/Tracking No. mandatory for Courier and Transport
 - Courier-specific Regex validation: DTDC, Anjani, Professional, India Post
 - Track button opens courier's official tracking URL
-- Porter link extraction from pasted messages (bare porter.in/... links supported)
-- Porter Track + Share Tracking Link buttons
+- Porter link extraction from pasted messages
 - Dispatch slip upload with barcode scanning
-- Share packed boxes + dispatch slip combined
 
 ### Accounts Module
 - Tax Invoice upload with E-way Bill merge (PyPDF2)
 - Server-side pagination with gst_only flag
-- Payment verification (Received/Pending/Re-check)
+- Payment verification
 
 ### Amazon Orders
 - PDF parsing with pdfplumber
@@ -69,11 +68,9 @@ Build a comprehensive Order Management System for CitSpray Aroma Sciences with r
 
 ### Admin Features
 - Executive reports with IST timezone fix
-- Excl. GST / Excl. Shipping calculations fixed (properly decomposes total_gst into items/shipping/additional GST) (Fixed 2026-04-17)
+- Excl. GST / Excl. Shipping calculations fixed (Fixed 2026-04-17)
 - Admin alert/popup system with continuous audio alarm
-- Order search in admin alerts
-- Alert cancellation
-- **Sidebar**: Amazon Orders/Packing/Dispatch grouped under collapsible "Amazon" menu; Packaging & Dispatch remain standalone (Updated 2026-04-18)
+- Sidebar: Amazon items grouped under collapsible "Amazon" menu (Updated 2026-04-18)
 
 ### Utility Tools
 - DTDC Serviceability & Rate Calculator (/DTDC)
@@ -90,13 +87,9 @@ Build a comprehensive Order Management System for CitSpray Aroma Sciences with r
 - Special libs: pyzbar, html5-qrcode, react-image-crop, PyPDF2, reportlab
 
 ## Key Technical Notes
-- State validation uses INDIAN_STATES array (strict matching)
-- Mobile print uses navigator.share() API
-- pyzbar requires libzbar0 OS package
-- Admin alerts use 3-second polling + Web Audio API
-- Porter link regex handles bare porter.in/... URLs (no https:// prefix required)
-- Admin sidebar uses grouped nav with hover (desktop) / tap (mobile) for Amazon sub-items
-- Packaging auto-transition: backend auto-sets status to "packaging" when current is "new" and no explicit status sent
+- Order/PI counters stored in MongoDB `counters` collection (auto-increment via `find_one_and_update` with `$inc`)
+- PI Terms: DEFAULT_PI_TERMS (7 items) used when `terms_and_conditions` is empty. Custom terms stored per-PI, split by newline for PDF rendering
+- Admin sidebar uses grouped nav with hover/tap for Amazon sub-items
 
 ## Prioritized Backlog
 
