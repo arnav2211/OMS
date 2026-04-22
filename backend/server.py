@@ -3151,45 +3151,7 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
             elements.append(Spacer(1, 1*mm))
 
     # ─────────────────────────────────────────────────────────────
-    # ── F. TERMS & CONDITIONS ─────────────────────────────────────
-    # ─────────────────────────────────────────────────────────────
-    terms_text = pi.get("terms_and_conditions", "")
-    if terms_text:
-        terms_list = [t.strip() for t in terms_text.strip().split("\n") if t.strip()]
-    else:
-        terms_list = DEFAULT_PI_TERMS
-
-    elements.append(Spacer(1, 5*mm))
-    tc_header = Table(
-        [[Paragraph("<b>TERMS & CONDITIONS</b>",
-                     sty('TCH', fontSize=8, fontName='Helvetica-Bold', textColor=colors.white))]],
-        colWidths=[pw]
-    )
-    tc_header.setStyle(TableStyle([
-        ('BACKGROUND', (0,0),(-1,-1), GREEN if is_gst else DGRAY),
-        ('TOPPADDING', (0,0),(-1,-1), 4), ('BOTTOMPADDING', (0,0),(-1,-1), 4),
-        ('LEFTPADDING', (0,0),(-1,-1), 8), ('RIGHTPADDING', (0,0),(-1,-1), 8),
-    ]))
-    elements.append(tc_header)
-
-    tc_rows = []
-    for idx, term in enumerate(terms_list, 1):
-        tc_rows.append([
-            Paragraph(f"{idx}.", sty('TCN', fontSize=7.5, leading=11, textColor=DGRAY)),
-            Paragraph(term, sty('TCT', fontSize=7.5, leading=11, textColor=DGRAY)),
-        ])
-    tc_table = Table(tc_rows, colWidths=[8*mm, pw - 8*mm])
-    tc_table.setStyle(TableStyle([
-        ('VALIGN', (0,0),(-1,-1), 'TOP'),
-        ('TOPPADDING', (0,0),(-1,-1), 2), ('BOTTOMPADDING', (0,0),(-1,-1), 2),
-        ('LEFTPADDING', (0,0),(0,-1), 8), ('LEFTPADDING', (1,0),(1,-1), 2),
-        ('RIGHTPADDING', (0,0),(-1,-1), 4),
-        ('BOX', (0,0),(-1,-1), 0.5, SGRAY),
-    ]))
-    elements.append(tc_table)
-
-    # ─────────────────────────────────────────────────────────────
-    # ── G. BANK DETAILS + QR CODE (logic unchanged) ──────────────
+    # ── F. BANK / PAYMENT DETAILS + QR CODE ──────────────────────
     # ─────────────────────────────────────────────────────────────
     elements.append(Spacer(1, 7*mm))
     bank = BANK_GST if is_gst else BANK_NON_GST
@@ -3241,6 +3203,44 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
         ('RIGHTPADDING', (0,0),(-1,-1), 8),
     ]))
     elements.append(pay_tbl)
+
+    # ─────────────────────────────────────────────────────────────
+    # ── G. TERMS & CONDITIONS (smaller font, after payment) ──────
+    # ─────────────────────────────────────────────────────────────
+    terms_text = pi.get("terms_and_conditions", "")
+    if terms_text:
+        terms_list = [t.strip() for t in terms_text.strip().split("\n") if t.strip()]
+    else:
+        terms_list = DEFAULT_PI_TERMS
+
+    elements.append(Spacer(1, 5*mm))
+    tc_header = Table(
+        [[Paragraph("<b>TERMS & CONDITIONS</b>",
+                     sty('TCH', fontSize=7, fontName='Helvetica-Bold', textColor=colors.white))]],
+        colWidths=[pw]
+    )
+    tc_header.setStyle(TableStyle([
+        ('BACKGROUND', (0,0),(-1,-1), GREEN if is_gst else DGRAY),
+        ('TOPPADDING', (0,0),(-1,-1), 3), ('BOTTOMPADDING', (0,0),(-1,-1), 3),
+        ('LEFTPADDING', (0,0),(-1,-1), 8), ('RIGHTPADDING', (0,0),(-1,-1), 8),
+    ]))
+    elements.append(tc_header)
+
+    tc_rows = []
+    for idx, term in enumerate(terms_list, 1):
+        tc_rows.append([
+            Paragraph(f"{idx}.", sty('TCN', fontSize=6.5, leading=9, textColor=DGRAY)),
+            Paragraph(term, sty('TCT', fontSize=6.5, leading=9, textColor=DGRAY)),
+        ])
+    tc_table = Table(tc_rows, colWidths=[6*mm, pw - 6*mm])
+    tc_table.setStyle(TableStyle([
+        ('VALIGN', (0,0),(-1,-1), 'TOP'),
+        ('TOPPADDING', (0,0),(-1,-1), 1.5), ('BOTTOMPADDING', (0,0),(-1,-1), 1.5),
+        ('LEFTPADDING', (0,0),(0,-1), 8), ('LEFTPADDING', (1,0),(1,-1), 2),
+        ('RIGHTPADDING', (0,0),(-1,-1), 4),
+        ('BOX', (0,0),(-1,-1), 0.5, SGRAY),
+    ]))
+    elements.append(tc_table)
 
     doc.build(elements)
     buffer.seek(0)
