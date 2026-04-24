@@ -736,7 +736,9 @@ export default function OrderDetail() {
             {order.packaging?.item_images && Object.entries(order.packaging.item_images).map(([key, urls]) => (
               urls?.length > 0 && (
                 <div key={key}>
-                  <p className="text-xs font-medium text-muted-foreground uppercase mb-2">Item: {key.includes("__") ? key.split("__")[0] : key}</p>
+                  <p className={`text-xs font-medium uppercase mb-2 ${key.startsWith("free_sample__") ? "text-purple-600" : "text-muted-foreground"}`}>
+                    {key.startsWith("free_sample__") ? `Free: ${key.split("__")[1]}` : `Item: ${key.includes("__") ? key.split("__")[0] : key}`}
+                  </p>
                   <div className="flex flex-wrap gap-2">
                     {urls.map((url, i) => (
                       <div key={i} className="relative w-20 h-20 rounded-lg border overflow-hidden group">
@@ -1376,6 +1378,37 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving }) {
                 <span className="text-[10px] text-muted-foreground">Camera</span>
                 <input type="file" accept="image/*" capture="environment" className="sr-only" disabled={uploading}
                   onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "item", itemKey); e.target.value = ""; }} />
+              </label>
+            </div>
+          </div>
+          );
+        })}
+
+        {/* Free Sample Images */}
+        {order.free_samples?.filter(s => s.item_name)?.map((sample, idx) => {
+          const sampleKey = `free_sample__${sample.item_name}__${idx}`;
+          return (
+          <div key={sampleKey}>
+            <Label className="text-xs font-medium text-purple-600 uppercase">Free: {sample.item_name}</Label>
+            <div className="flex flex-wrap gap-2 mt-1">
+              {(itemImages[sampleKey] || []).map((url, i) => (
+                <div key={i} className="relative w-16 h-16 rounded-lg border overflow-hidden group">
+                  <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
+                  <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={() => removeImage("item", url, sampleKey)}><X className="w-3 h-3" /></button>
+                </div>
+              ))}
+              <label className="w-16 h-16 rounded-lg border-2 border-dashed border-purple-300 flex flex-col items-center justify-center cursor-pointer hover:bg-purple-50 transition-colors">
+                <Upload className="w-3 h-3 text-purple-400" />
+                <span className="text-[10px] text-purple-400">Files</span>
+                <input type="file" accept="image/*" className="sr-only" disabled={uploading}
+                  onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "item", sampleKey); e.target.value = ""; }} />
+              </label>
+              <label className="w-16 h-16 rounded-lg border-2 border-dashed border-purple-300 flex flex-col items-center justify-center cursor-pointer hover:bg-purple-50 transition-colors bg-purple-50/30">
+                <Upload className="w-3 h-3 text-purple-400" />
+                <span className="text-[10px] text-purple-400">Camera</span>
+                <input type="file" accept="image/*" capture="environment" className="sr-only" disabled={uploading}
+                  onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], "item", sampleKey); e.target.value = ""; }} />
               </label>
             </div>
           </div>

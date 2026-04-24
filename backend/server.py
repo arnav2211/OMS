@@ -2295,24 +2295,44 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
         elements.append(cust_tbl)
         elements.append(Spacer(1, 5*mm))
 
-    # ── 5. ITEMS TABLE ──
+    # ── 5. ITEMS TABLE (includes free samples) ──
     headers = ['#', 'Item / Description', 'Qty', 'Unit', 'Amount', 'Formulation']
     col_widths = [7*mm, pw*0.22, 12*mm, 12*mm, 20*mm, pw - 7*mm - pw*0.22 - 12*mm - 12*mm - 20*mm]
     hdr_style = ParagraphStyle('IH', parent=styles['Normal'], fontSize=8, fontName='Helvetica-Bold',
                                textColor=colors.white, alignment=TA_CENTER)
     table_data = [[Paragraph(h, hdr_style) for h in headers]]
+    row_num = 0
     for i, item in enumerate(order.get("items", [])):
+        row_num += 1
         desc_text = item.get("product_name", "")
         if item.get("description"):
             desc_text += f"<br/><font color='#6B7280' size=7>{item['description']}</font>"
         formulation_text = item.get("formulation", "") or ""
         row = [
-            Paragraph(str(i + 1), ParagraphStyle('Num', parent=styles['Normal'], fontSize=8, alignment=TA_CENTER)),
+            Paragraph(str(row_num), ParagraphStyle('Num', parent=styles['Normal'], fontSize=8, alignment=TA_CENTER)),
             Paragraph(desc_text, itm),
             Paragraph(str(item.get("qty", 0)), ParagraphStyle('Qty', parent=styles['Normal'], fontSize=8, alignment=TA_RIGHT)),
             Paragraph(item.get("unit", ""), ParagraphStyle('Unit', parent=styles['Normal'], fontSize=8, alignment=TA_CENTER)),
             Paragraph(f"{item.get('amount', 0):.2f}", ParagraphStyle('Amt', parent=styles['Normal'], fontSize=8, alignment=TA_RIGHT, fontName='Helvetica-Bold')),
             Paragraph(formulation_text, form_sty) if formulation_text else Paragraph("", sm),
+        ]
+        table_data.append(row)
+
+    # Append free samples into the same table
+    free_sample_style = ParagraphStyle('FS', parent=styles['Normal'], fontSize=7.5, leading=10, textColor=colors.HexColor('#7C3AED'))
+    for s in order.get("free_samples", []):
+        row_num += 1
+        fs_name = f"<b>{s.get('item_name', '')}</b>  <font color='#7C3AED' size=7>[Free Sample]</font>"
+        if s.get("description"):
+            fs_name += f"<br/><font color='#6B7280' size=7>{s['description']}</font>"
+        fs_formulation = s.get("formulation", "") or ""
+        row = [
+            Paragraph(str(row_num), ParagraphStyle('Num', parent=styles['Normal'], fontSize=8, alignment=TA_CENTER)),
+            Paragraph(fs_name, itm),
+            Paragraph(str(s.get("qty", 1)) if s.get("qty") else "1", ParagraphStyle('Qty', parent=styles['Normal'], fontSize=8, alignment=TA_RIGHT)),
+            Paragraph(s.get("unit", "") or "", ParagraphStyle('Unit', parent=styles['Normal'], fontSize=8, alignment=TA_CENTER)),
+            Paragraph("—", ParagraphStyle('FSA', parent=styles['Normal'], fontSize=8, alignment=TA_CENTER, textColor=colors.HexColor('#9CA3AF'))),
+            Paragraph(fs_formulation, form_sty) if fs_formulation else Paragraph("", sm),
         ]
         table_data.append(row)
     items_t = Table(table_data, colWidths=col_widths, repeatRows=1)
@@ -2360,39 +2380,42 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
     ]))
     elements.append(tt)
 
-    # ── 7. PAYMENT / SAMPLES / DISPATCH / REMARKS ──
+    # ── 7. PAYMENT / DISPATCH / REMARKS ──
     extras = []
     # Purpose / Requirement
     if order.get("purpose"):
-        extras.append(f"<b>Purpose / Requirement:</b> {order['purpose']}")
+        extras.append(("normal", f"<b>Purpose / Requirement:</b> {order['purpose']}"))
     if order.get("mode_of_payment"):
         mop = f"<b>Mode of Payment:</b> {order['mode_of_payment']}"
         if order.get("payment_mode_details"):
             mop += f" ({order['payment_mode_details']})"
-        extras.append(mop)
-    if order.get("free_samples"):
-        extras.append("<b>Free Samples:</b>")
-        for s in order["free_samples"]:
-            t = s.get("item_name", "")
-            if s.get("description"): t += f" – {s['description']}"
-            if s.get("formulation"): t += f"  |  <i>Formulation: {s['formulation']}</i>"
-            extras.append(f"  · {t}")
+        extras.append(("normal", mop))
     if order.get("extra_shipping_details"):
-        extras.append(f"<b>Extra Shipping Details:</b> {order['extra_shipping_details']}")
+        extras.append(("normal", f"<b>Extra Shipping Details:</b> {order['extra_shipping_details']}"))
     if order.get("shipping_method"):
         dispatch_parts = [f"<b>Dispatch:</b> {order['shipping_method'].replace('_',' ').title()}"]
         if order.get("courier_name"):    dispatch_parts.append(f"Courier: {order['courier_name']}")
         if order.get("transporter_name"): dispatch_parts.append(f"Transporter: {order['transporter_name']}")
-        extras.append("  |  ".join(dispatch_parts))
+        extras.append(("normal", "  |  ".join(dispatch_parts)))
     if order.get("remark"):
-        extras.append(f"<b>Remarks:</b> {order['remark']}")
+        extras.append(("remark", order['remark']))
+
+    remark_sty = ParagraphStyle('Rmk', parent=styles['Normal'], fontSize=11, leading=15,
+                                fontName='Helvetica-Bold', textColor=colors.HexColor('#B91C1C'),
+                                backColor=colors.HexColor('#FEF2F2'),
+                                borderPadding=6, spaceBefore=2, spaceAfter=2)
 
     if extras:
         elements.append(Spacer(1, 4*mm))
         elements.append(sep())
         elements.append(Spacer(1, 3*mm))
-        for line in extras:
-            elements.append(Paragraph(line, ParagraphStyle('Ex', parent=styles['Normal'], fontSize=8, leading=12)))
+        for kind, line in extras:
+            if kind == "remark":
+                elements.append(Paragraph(f"REMARKS / SPECIAL INSTRUCTIONS:", ParagraphStyle('RmkH', parent=styles['Normal'], fontSize=8, fontName='Helvetica-Bold', textColor=colors.HexColor('#991B1B'))))
+                elements.append(Spacer(1, 1.5*mm))
+                elements.append(Paragraph(line, remark_sty))
+            else:
+                elements.append(Paragraph(line, ParagraphStyle('Ex', parent=styles['Normal'], fontSize=8, leading=12)))
             elements.append(Spacer(1, 1.5*mm))
 
     doc.build(elements)
