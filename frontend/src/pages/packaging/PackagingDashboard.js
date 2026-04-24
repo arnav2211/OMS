@@ -357,6 +357,54 @@ export default function PackagingDashboard() {
                 );
               })}
 
+              {/* Free Sample Images */}
+              {selectedOrder.free_samples?.filter(s => s.item_name)?.map((sample, idx) => {
+                const sampleKey = `free_sample__${sample.item_name}__${idx}`;
+                return (
+                <div key={sampleKey} className="p-3 rounded-lg border border-purple-200 space-y-2" data-testid={`pkg-free-sample-${idx}`}>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-sm text-purple-700">Free: {sample.item_name}</span>
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-600">Free Sample</span>
+                  </div>
+                  {formulationVisible && sample.formulation && (
+                    <div className="p-2 rounded bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+                      <p className="text-xs font-medium text-amber-700 dark:text-amber-400">Formulation:</p>
+                      <p className="text-sm mt-1 whitespace-pre-wrap">{sample.formulation}</p>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {(itemImages[sampleKey] || []).map((url, i) => (
+                      <div key={i} className="relative w-16 h-16 rounded border overflow-hidden group">
+                        <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
+                        <button
+                          className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
+                          onClick={() => setItemImages((prev) => ({ ...prev, [sampleKey]: prev[sampleKey].filter((_, j) => j !== i) }))}
+                        >
+                          <X className="w-4 h-4 text-white" />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      className="w-16 h-16 rounded border-2 border-dashed border-purple-300 flex items-center justify-center hover:bg-purple-50 transition-colors"
+                      onClick={() => triggerUpload("item", sampleKey)}
+                      disabled={uploading}
+                      data-testid={`upload-free-sample-img-${idx}`}
+                    >
+                      <Upload className="w-5 h-5 text-purple-400" />
+                    </button>
+                    <button
+                      className="w-16 h-16 rounded border-2 border-dashed border-purple-300 flex items-center justify-center hover:bg-purple-50 transition-colors"
+                      onClick={() => triggerCameraUpload("item", sampleKey)}
+                      disabled={uploading}
+                      data-testid={`camera-free-sample-img-${idx}`}
+                    >
+                      <Camera className="w-5 h-5 text-purple-400" />
+                    </button>
+                  </div>
+                </div>
+                );
+              })}
+
               <Separator />
 
               {/* Whole order images */}
