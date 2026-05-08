@@ -441,9 +441,13 @@ export default function OrderDetail() {
           {customerPhone && (
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Phone</span>
-              <button className="text-sm font-medium flex items-center gap-1 hover:text-primary transition-colors" onClick={() => copyToClipboard(customerPhone, "Phone number")} data-testid="copy-phone-btn">
-                {customerPhone} <ClipboardCopy className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex flex-col items-end gap-0.5">
+                {(order.customer_phone || [customerPhone]).map((ph, i) => (
+                  <button key={i} className="text-sm font-medium flex items-center gap-1 hover:text-primary transition-colors" onClick={() => copyToClipboard(ph, "Phone number")} data-testid={`copy-phone-btn${i > 0 ? `-${i}` : ""}`}>
+                    {ph} <ClipboardCopy className="w-3.5 h-3.5" />
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {customerGst && (
