@@ -1345,18 +1345,27 @@ async def update_dispatch(order_id: str, req: DispatchUpdate, user=Depends(get_c
         "dispatched_by": user["name"],
         "dispatched_at": datetime.now(timezone.utc).isoformat()
     }
+    # Clear irrelevant fields based on shipping method
+    if shipping_method != "courier":
+        dispatch["courier_name"] = ""
+    if shipping_method != "transport":
+        dispatch["transporter_name"] = ""
+    if shipping_method not in ["courier", "transport"]:
+        dispatch["lr_no"] = ""
+        dispatch["dispatch_slip_images"] = []
+    if shipping_method != "porter":
+        dispatch["porter_link"] = ""
+
     update_fields = {
         "dispatch": dispatch,
         "status": "dispatched",
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
-    # Allow updating shipping method from dispatch
+    # Always sync top-level fields and clear stale ones
     if req.shipping_method:
         update_fields["shipping_method"] = req.shipping_method
-    if req.courier_name:
-        update_fields["courier_name"] = req.courier_name
-    if req.transporter_name:
-        update_fields["transporter_name"] = req.transporter_name
+    update_fields["courier_name"] = dispatch["courier_name"]
+    update_fields["transporter_name"] = dispatch["transporter_name"]
     await db.orders.update_one({"id": order_id}, {"$set": update_fields})
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated
@@ -1371,12 +1380,19 @@ async def update_shipping_method(order_id: str, body: dict, user=Depends(get_cur
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     update_fields = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    new_method = body.get("shipping_method", order.get("shipping_method", ""))
     if "shipping_method" in body:
-        update_fields["shipping_method"] = body["shipping_method"]
-    if "courier_name" in body:
-        update_fields["courier_name"] = body["courier_name"]
-    if "transporter_name" in body:
-        update_fields["transporter_name"] = body["transporter_name"]
+        update_fields["shipping_method"] = new_method
+    # Set relevant field, clear the other
+    if new_method == "courier":
+        update_fields["courier_name"] = body.get("courier_name", "")
+        update_fields["transporter_name"] = ""
+    elif new_method == "transport":
+        update_fields["transporter_name"] = body.get("transporter_name", "")
+        update_fields["courier_name"] = ""
+    else:
+        update_fields["courier_name"] = ""
+        update_fields["transporter_name"] = ""
     await db.orders.update_one({"id": order_id}, {"$set": update_fields})
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated
