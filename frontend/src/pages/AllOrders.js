@@ -70,7 +70,7 @@ export default function AllOrders() {
   useEffect(() => {
     loadOrders();
     if (user?.role === "admin") loadUsers();
-  }, [viewAll, selectedTelecaller, currentPage, searchDebounced, statusFilter, payStatusFilter, checkStatusFilter, periodFilter, dateFrom, dateTo]);
+  }, [viewAll, selectedTelecaller, currentPage, searchDebounced, statusFilter, payStatusFilter, checkStatusFilter, shippingFilter, courierFilter, periodFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     const timer = setTimeout(() => { setSearchDebounced(search); setCurrentPage(1); }, 350);
@@ -99,6 +99,8 @@ export default function AllOrders() {
       if (statusFilter !== "all") params.set("status", statusFilter);
       if (payStatusFilter !== "all") params.set("payment_status", payStatusFilter);
       if (checkStatusFilter !== "all") params.set("check_status", checkStatusFilter);
+      if (shippingFilter !== "all") params.set("shipping_method", shippingFilter);
+      if (shippingFilter === "courier" && courierFilter !== "all") params.set("courier_name", courierFilter);
       if (periodFilter !== "all") params.set("period", periodFilter);
       if (periodFilter === "custom" && dateFrom) params.set("date_from", dateFrom);
       if (periodFilter === "custom" && dateTo) params.set("date_to", dateTo);
