@@ -16,6 +16,7 @@ import aiofiles
 import requests
 import phonenumbers
 import qrcode
+import pytz
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -784,6 +785,9 @@ async def list_orders(
     search: Optional[str] = None,
     view_all: Optional[bool] = False,
     gst_only: Optional[bool] = False,
+    payment_status: Optional[str] = None,
+    check_status: Optional[str] = None,
+    period: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
     user=Depends(get_current_user)
@@ -817,6 +821,37 @@ async def list_orders(
 
     if gst_only:
         query["gst_applicable"] = True
+
+    # Payment status filter (computed field: amount_paid vs grand_total)
+    if payment_status == "full":
+        query["$expr"] = {"$and": [{"$gt": ["$grand_total", 0]}, {"$gte": [{"$ifNull": ["$amount_paid", 0]}, "$grand_total"]}]}
+    elif payment_status == "partial":
+        query["$expr"] = {"$and": [{"$gt": [{"$ifNull": ["$amount_paid", 0]}, 0]}, {"$lt": [{"$ifNull": ["$amount_paid", 0]}, "$grand_total"]}]}
+    elif payment_status == "unpaid":
+        query["$expr"] = {"$lte": [{"$ifNull": ["$amount_paid", 0]}, 0]}
+
+    # Check status filter
+    if check_status and check_status != "all":
+        query["payment_check_status"] = check_status
+
+    # Period filter (server-side)
+    if period and period != "all":
+        ist = pytz.timezone("Asia/Kolkata")
+        now = datetime.now(ist)
+        if period == "today":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            query.setdefault("created_at", {})["$gte"] = start.isoformat()
+        elif period == "yesterday":
+            start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            end = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            query.setdefault("created_at", {})["$gte"] = start.isoformat()
+            query.setdefault("created_at", {})["$lte"] = end.isoformat()
+        elif period == "week":
+            start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+            query.setdefault("created_at", {})["$gte"] = start.isoformat()
+        elif period == "month":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            query.setdefault("created_at", {})["$gte"] = start.isoformat()
 
 
     # Server-side search: search across order_number, customer_name, and customer alias
@@ -1345,18 +1380,27 @@ async def update_dispatch(order_id: str, req: DispatchUpdate, user=Depends(get_c
         "dispatched_by": user["name"],
         "dispatched_at": datetime.now(timezone.utc).isoformat()
     }
+    # Clear irrelevant fields based on shipping method
+    if shipping_method != "courier":
+        dispatch["courier_name"] = ""
+    if shipping_method != "transport":
+        dispatch["transporter_name"] = ""
+    if shipping_method not in ["courier", "transport"]:
+        dispatch["lr_no"] = ""
+        dispatch["dispatch_slip_images"] = []
+    if shipping_method != "porter":
+        dispatch["porter_link"] = ""
+
     update_fields = {
         "dispatch": dispatch,
         "status": "dispatched",
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
-    # Allow updating shipping method from dispatch
+    # Always sync top-level fields and clear stale ones
     if req.shipping_method:
         update_fields["shipping_method"] = req.shipping_method
-    if req.courier_name:
-        update_fields["courier_name"] = req.courier_name
-    if req.transporter_name:
-        update_fields["transporter_name"] = req.transporter_name
+    update_fields["courier_name"] = dispatch["courier_name"]
+    update_fields["transporter_name"] = dispatch["transporter_name"]
     await db.orders.update_one({"id": order_id}, {"$set": update_fields})
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated
@@ -1371,12 +1415,19 @@ async def update_shipping_method(order_id: str, body: dict, user=Depends(get_cur
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     update_fields = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    new_method = body.get("shipping_method", order.get("shipping_method", ""))
     if "shipping_method" in body:
-        update_fields["shipping_method"] = body["shipping_method"]
-    if "courier_name" in body:
-        update_fields["courier_name"] = body["courier_name"]
-    if "transporter_name" in body:
-        update_fields["transporter_name"] = body["transporter_name"]
+        update_fields["shipping_method"] = new_method
+    # Set relevant field, clear the other
+    if new_method == "courier":
+        update_fields["courier_name"] = body.get("courier_name", "")
+        update_fields["transporter_name"] = ""
+    elif new_method == "transport":
+        update_fields["transporter_name"] = body.get("transporter_name", "")
+        update_fields["courier_name"] = ""
+    else:
+        update_fields["courier_name"] = ""
+        update_fields["transporter_name"] = ""
     await db.orders.update_one({"id": order_id}, {"$set": update_fields})
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated
