@@ -788,6 +788,8 @@ async def list_orders(
     payment_status: Optional[str] = None,
     check_status: Optional[str] = None,
     period: Optional[str] = None,
+    shipping_method: Optional[str] = None,
+    courier_name: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
     user=Depends(get_current_user)
@@ -809,7 +811,10 @@ async def list_orders(
             query["telecaller_id"] = telecaller_id
 
     if status:
-        query["status"] = status
+        if status == "yet_to_dispatch":
+            query["status"] = {"$in": ["new", "packaging", "packed"]}
+        else:
+            query["status"] = status
     if telecaller_id and user["role"] == "admin":
         query["telecaller_id"] = telecaller_id
     if customer_id:
@@ -833,6 +838,12 @@ async def list_orders(
     # Check status filter
     if check_status and check_status != "all":
         query["payment_check_status"] = check_status
+
+    # Shipping method filter
+    if shipping_method and shipping_method != "all":
+        query["shipping_method"] = shipping_method
+        if shipping_method == "courier" and courier_name and courier_name != "all":
+            query["courier_name"] = courier_name
 
     # Period filter (server-side)
     if period and period != "all":
