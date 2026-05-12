@@ -166,7 +166,7 @@ export default function Customers() {
                 {customers.map((c) => (
                   <React.Fragment key={c.id}>
                     <TableRow data-testid={`customer-row-${c.id}`}>
-                      <TableCell className="font-medium">{c.name}</TableCell>
+                      <TableCell className="font-medium">{c.name}{c.alias ? <span className="text-xs text-muted-foreground ml-1">({c.alias})</span> : ""}</TableCell>
                       <TableCell className="text-sm hidden sm:table-cell">{c.phone_numbers?.join(", ")}</TableCell>
                       <TableCell className="text-sm font-mono hidden sm:table-cell">{c.gst_no || "-"}</TableCell>
                       <TableCell className="text-sm hidden sm:table-cell">{c.email || "-"}</TableCell>
