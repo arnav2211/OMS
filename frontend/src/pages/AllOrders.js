@@ -67,7 +67,7 @@ export default function AllOrders() {
   useEffect(() => {
     loadOrders();
     if (user?.role === "admin") loadUsers();
-  }, [viewAll, selectedTelecaller, currentPage, searchDebounced]);
+  }, [viewAll, selectedTelecaller, currentPage, searchDebounced, statusFilter, payStatusFilter, checkStatusFilter, periodFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     const timer = setTimeout(() => { setSearchDebounced(search); setCurrentPage(1); }, 350);
@@ -93,6 +93,12 @@ export default function AllOrders() {
       params.set("page", currentPage.toString());
       params.set("page_size", PAGE_SIZE.toString());
       if (searchDebounced) params.set("search", searchDebounced);
+      if (statusFilter !== "all") params.set("status", statusFilter);
+      if (payStatusFilter !== "all") params.set("payment_status", payStatusFilter);
+      if (checkStatusFilter !== "all") params.set("check_status", checkStatusFilter);
+      if (periodFilter !== "all") params.set("period", periodFilter);
+      if (periodFilter === "custom" && dateFrom) params.set("date_from", dateFrom);
+      if (periodFilter === "custom" && dateTo) params.set("date_to", dateTo);
       const res = await api.get(`/orders?${params.toString()}`);
       const data = res.data;
       setOrders(data.orders || []);
@@ -101,34 +107,8 @@ export default function AllOrders() {
     } catch { } finally { setLoading(false); }
   };
 
-  const filteredOrders = orders.filter(o => {
-    if (statusFilter !== "all" && o.status !== statusFilter) return false;
-    if (payStatusFilter !== "all" && o.payment_status !== payStatusFilter) return false;
-    if (checkStatusFilter !== "all" && (o.payment_check_status || "pending") !== checkStatusFilter) return false;
-    if (periodFilter !== "all") {
-      const now = new Date();
-      const orderDate = new Date(o.created_at);
-      if (periodFilter === "today") {
-        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        if (orderDate < today) return false;
-      } else if (periodFilter === "yesterday") {
-        const y = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-        const ytEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        if (orderDate < y || orderDate >= ytEnd) return false;
-      } else if (periodFilter === "week") {
-        const ws = new Date(now); ws.setDate(now.getDate() - now.getDay());
-        ws.setHours(0,0,0,0);
-        if (orderDate < ws) return false;
-      } else if (periodFilter === "month") {
-        const ms = new Date(now.getFullYear(), now.getMonth(), 1);
-        if (orderDate < ms) return false;
-      } else if (periodFilter === "custom" && dateFrom) {
-        if (o.created_at < dateFrom) return false;
-        if (dateTo && o.created_at > dateTo + "T23:59:59") return false;
-      }
-    }
-    return true;
-  });
+  // Server handles all filtering — use orders directly
+  const filteredOrders = orders;
 
   const toggleSelect = (id) => {
     setSelectedOrders(prev => {
@@ -200,7 +180,7 @@ export default function AllOrders() {
               <Input placeholder="Search by order #, customer, alias, phone, GST..." className="pl-9 h-8 text-sm" value={search} onChange={e => setSearch(e.target.value)} data-testid="orders-search-input" />
             </div>
             {/* Period */}
-            <Select value={periodFilter} onValueChange={setPeriodFilter}>
+            <Select value={periodFilter} onValueChange={(v) => { setPeriodFilter(v); setCurrentPage(1); }}>
               <SelectTrigger className="w-28 sm:w-32 h-8 text-xs" data-testid="period-filter"><SelectValue placeholder="Period" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Time</SelectItem>
@@ -213,12 +193,12 @@ export default function AllOrders() {
             </Select>
             {periodFilter === "custom" && (
               <>
-                <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-36 h-8 text-xs" />
-                <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-36 h-8 text-xs" />
+                <Input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setCurrentPage(1); }} className="w-36 h-8 text-xs" />
+                <Input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setCurrentPage(1); }} className="w-36 h-8 text-xs" />
               </>
             )}
             {/* Order status */}
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setCurrentPage(1); }}>
               <SelectTrigger className="w-32 h-8 text-xs" data-testid="status-filter-select"><SelectValue placeholder="Status" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Status</SelectItem>
@@ -229,7 +209,7 @@ export default function AllOrders() {
               </SelectContent>
             </Select>
             {/* Payment status */}
-            <Select value={payStatusFilter} onValueChange={setPayStatusFilter}>
+            <Select value={payStatusFilter} onValueChange={(v) => { setPayStatusFilter(v); setCurrentPage(1); }}>
               <SelectTrigger className="w-36 h-8 text-xs" data-testid="pay-status-filter"><SelectValue placeholder="Payment" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Payments</SelectItem>
@@ -240,7 +220,7 @@ export default function AllOrders() {
             </Select>
             {/* Check status — visible to admin/telecaller/accounts */}
             {showPaymentCheck && (
-              <Select value={checkStatusFilter} onValueChange={setCheckStatusFilter}>
+              <Select value={checkStatusFilter} onValueChange={(v) => { setCheckStatusFilter(v); setCurrentPage(1); }}>
                 <SelectTrigger className="w-36 h-8 text-xs" data-testid="check-status-filter"><SelectValue placeholder="Check Status" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Checks</SelectItem>

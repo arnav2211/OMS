@@ -16,6 +16,7 @@ import aiofiles
 import requests
 import phonenumbers
 import qrcode
+import pytz
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -784,6 +785,9 @@ async def list_orders(
     search: Optional[str] = None,
     view_all: Optional[bool] = False,
     gst_only: Optional[bool] = False,
+    payment_status: Optional[str] = None,
+    check_status: Optional[str] = None,
+    period: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
     user=Depends(get_current_user)
@@ -817,6 +821,37 @@ async def list_orders(
 
     if gst_only:
         query["gst_applicable"] = True
+
+    # Payment status filter (computed field: amount_paid vs grand_total)
+    if payment_status == "full":
+        query["$expr"] = {"$and": [{"$gt": ["$grand_total", 0]}, {"$gte": [{"$ifNull": ["$amount_paid", 0]}, "$grand_total"]}]}
+    elif payment_status == "partial":
+        query["$expr"] = {"$and": [{"$gt": [{"$ifNull": ["$amount_paid", 0]}, 0]}, {"$lt": [{"$ifNull": ["$amount_paid", 0]}, "$grand_total"]}]}
+    elif payment_status == "unpaid":
+        query["$expr"] = {"$lte": [{"$ifNull": ["$amount_paid", 0]}, 0]}
+
+    # Check status filter
+    if check_status and check_status != "all":
+        query["payment_check_status"] = check_status
+
+    # Period filter (server-side)
+    if period and period != "all":
+        ist = pytz.timezone("Asia/Kolkata")
+        now = datetime.now(ist)
+        if period == "today":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            query.setdefault("created_at", {})["$gte"] = start.isoformat()
+        elif period == "yesterday":
+            start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            end = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            query.setdefault("created_at", {})["$gte"] = start.isoformat()
+            query.setdefault("created_at", {})["$lte"] = end.isoformat()
+        elif period == "week":
+            start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+            query.setdefault("created_at", {})["$gte"] = start.isoformat()
+        elif period == "month":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            query.setdefault("created_at", {})["$gte"] = start.isoformat()
 
 
     # Server-side search: search across order_number, customer_name, and customer alias
