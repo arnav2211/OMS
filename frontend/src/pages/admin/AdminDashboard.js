@@ -23,6 +23,7 @@ import {
 
 const PERIOD_OPTIONS = [
   { value: "today", label: "Today" },
+  { value: "yesterday", label: "Yesterday" },
   { value: "week", label: "This Week" },
   { value: "month", label: "This Month" },
   { value: "custom", label: "Custom Range" },

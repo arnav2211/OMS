@@ -27,6 +27,7 @@ const CHECK_COLORS = {
   pending_recheck: "bg-red-100 text-red-800",
 };
 const CHECK_LABELS = { received: "Checked", pending: "Pending", pending_recheck: "Re-check" };
+const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
 
 export default function AllOrders() {
   const { user } = useAuth();
@@ -34,14 +35,16 @@ export default function AllOrders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState(sp.get("q") || "");
-  const [searchDebounced, setSearchDebounced] = useState(sp.get("q") || "");
-  const [statusFilter, setStatusFilter] = useState(sp.get("status") || "all");
-  const [payStatusFilter, setPayStatusFilter] = useState(sp.get("pay") || "all");
-  const [checkStatusFilter, setCheckStatusFilter] = useState(sp.get("check") || "all");
-  const [periodFilter, setPeriodFilter] = useState(sp.get("period") || "all");
-  const [dateFrom, setDateFrom] = useState(sp.get("from") || "");
-  const [dateTo, setDateTo] = useState(sp.get("to") || "");
-  const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
+const [searchDebounced, setSearchDebounced] = useState(sp.get("q") || "");
+const [statusFilter, setStatusFilter] = useState(sp.get("status") || "all");
+const [payStatusFilter, setPayStatusFilter] = useState(sp.get("pay") || "all");
+const [checkStatusFilter, setCheckStatusFilter] = useState(sp.get("check") || "all");
+const [shippingFilter, setShippingFilter] = useState(sp.get("shipping") || "all");
+const [courierFilter, setCourierFilter] = useState(sp.get("courier") || "all");
+const [periodFilter, setPeriodFilter] = useState(sp.get("period") || "all");
+const [dateFrom, setDateFrom] = useState(sp.get("from") || "");
+const [dateTo, setDateTo] = useState(sp.get("to") || "");
+const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
   const [users, setUsers] = useState([]);
   const [selectedTelecaller, setSelectedTelecaller] = useState(sp.get("tc") || "all");
   const [selectedOrders, setSelectedOrders] = useState(new Set());
@@ -84,7 +87,7 @@ export default function AllOrders() {
   useEffect(() => {
     loadOrders();
     if (user?.role === "admin") loadUsers();
-  }, [viewAll, selectedTelecaller, currentPage, searchDebounced, statusFilter, payStatusFilter, checkStatusFilter, periodFilter, dateFrom, dateTo]);
+  }, [viewAll, selectedTelecaller, currentPage, searchDebounced, statusFilter, payStatusFilter, checkStatusFilter, shippingFilter, courierFilter, periodFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     const timer = setTimeout(() => { setSearchDebounced(search); setCurrentPage(1); }, 350);
@@ -113,6 +116,8 @@ export default function AllOrders() {
       if (statusFilter !== "all") params.set("status", statusFilter);
       if (payStatusFilter !== "all") params.set("payment_status", payStatusFilter);
       if (checkStatusFilter !== "all") params.set("check_status", checkStatusFilter);
+      if (shippingFilter !== "all") params.set("shipping_method", shippingFilter);
+      if (shippingFilter === "courier" && courierFilter !== "all") params.set("courier_name", courierFilter);
       if (periodFilter !== "all") params.set("period", periodFilter);
       if (periodFilter === "custom" && dateFrom) params.set("date_from", dateFrom);
       if (periodFilter === "custom" && dateTo) params.set("date_to", dateTo);
@@ -219,12 +224,42 @@ export default function AllOrders() {
               <SelectTrigger className="w-32 h-8 text-xs" data-testid="status-filter-select"><SelectValue placeholder="Status" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="yet_to_dispatch">Yet to dispatch</SelectItem>
                 <SelectItem value="new">New</SelectItem>
                 <SelectItem value="packaging">Packaging</SelectItem>
                 <SelectItem value="packed">Packed</SelectItem>
                 <SelectItem value="dispatched">Dispatched</SelectItem>
               </SelectContent>
             </Select>
+            {/* Shipping filter */}
+            <Select
+              value={shippingFilter}
+              onValueChange={(v) => {
+                setShippingFilter(v);
+                if (v !== "courier") setCourierFilter("all");
+              }}
+            >
+              <SelectTrigger className="w-36 h-8 text-xs" data-testid="shipping-filter"><SelectValue placeholder="Shipping" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Shipping</SelectItem>
+                <SelectItem value="courier">Courier</SelectItem>
+                <SelectItem value="transport">Transport</SelectItem>
+                <SelectItem value="porter">Porter</SelectItem>
+                <SelectItem value="office_collection">Office Collection</SelectItem>
+                <SelectItem value="self_arranged">Self Arranged Shipping</SelectItem>
+              </SelectContent>
+            </Select>
+            {shippingFilter === "courier" && (
+              <Select value={courierFilter} onValueChange={setCourierFilter}>
+                <SelectTrigger className="w-36 h-8 text-xs" data-testid="courier-filter"><SelectValue placeholder="Courier Name" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Couriers</SelectItem>
+                  {COURIER_OPTIONS.map((courier) => (
+                    <SelectItem key={courier} value={courier}>{courier}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             {/* Payment status */}
             <Select value={payStatusFilter} onValueChange={(v) => { setPayStatusFilter(v); setCurrentPage(1); }}>
               <SelectTrigger className="w-36 h-8 text-xs" data-testid="pay-status-filter"><SelectValue placeholder="Payment" /></SelectTrigger>
