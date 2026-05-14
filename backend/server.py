@@ -865,18 +865,26 @@ async def list_orders(
             query.setdefault("created_at", {})["$gte"] = start.isoformat()
 
 
-    # Server-side search: search across order_number, customer_name, and customer alias
+    # Server-side search: search across order_number, customer_name, alias, phone numbers, and GST
     if search:
-        # Find customer IDs matching alias
-        alias_cust_ids = []
-        async for c in db.customers.find({"alias": {"$regex": search, "$options": "i"}}, {"_id": 0, "id": 1}):
-            alias_cust_ids.append(c["id"])
+        # Find customer IDs matching alias, phone numbers (partial), or GST
+        phone_gst_alias_cust_ids = set()
+        async for c in db.customers.find(
+            {"$or": [
+                {"alias": {"$regex": search, "$options": "i"}},
+                {"phone_numbers": {"$elemMatch": {"$regex": search, "$options": "i"}}},
+                {"gst_no": {"$regex": search, "$options": "i"}},
+            ]},
+            {"_id": 0, "id": 1}
+        ):
+            phone_gst_alias_cust_ids.add(c["id"])
+
         or_conditions = [
             {"order_number": {"$regex": search, "$options": "i"}},
             {"customer_name": {"$regex": search, "$options": "i"}},
         ]
-        if alias_cust_ids:
-            or_conditions.append({"customer_id": {"$in": alias_cust_ids}})
+        if phone_gst_alias_cust_ids:
+            or_conditions.append({"customer_id": {"$in": list(phone_gst_alias_cust_ids)}})
         query["$or"] = or_conditions
 
     # Lean projection — exclude heavy nested data for list view
