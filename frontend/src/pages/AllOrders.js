@@ -65,12 +65,14 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
     if (periodFilter !== "all") p.set("period", periodFilter);
     if (periodFilter === "custom" && dateFrom) p.set("from", dateFrom);
     if (periodFilter === "custom" && dateTo) p.set("to", dateTo);
+    if (shippingFilter !== "all") p.set("shipping", shippingFilter);
+    if (shippingFilter === "courier" && courierFilter !== "all") p.set("courier", courierFilter);
     if (viewAll) p.set("viewAll", "true");
     if (selectedTelecaller !== "all") p.set("tc", selectedTelecaller);
     if (searchDebounced) p.set("q", searchDebounced);
     if (currentPage > 1) p.set("page", currentPage.toString());
     setSp(p, { replace: true });
-  }, [statusFilter, payStatusFilter, checkStatusFilter, periodFilter, dateFrom, dateTo, viewAll, selectedTelecaller, searchDebounced, currentPage]);
+  }, [statusFilter, payStatusFilter, checkStatusFilter, periodFilter, dateFrom, dateTo, shippingFilter, courierFilter, viewAll, selectedTelecaller, searchDebounced, currentPage]);
 
   const canPrintAddresses = user?.role === "admin" || user?.role === "packaging";
   const showPaymentCheck = ["admin", "telecaller", "accounts"].includes(user?.role);
