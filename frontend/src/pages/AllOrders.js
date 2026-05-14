@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import api from "@/lib/api";
 import { mobilePrintPdf } from "@/lib/mobilePrint";
 import { useAuth } from "@/contexts/AuthContext";
@@ -31,29 +31,46 @@ const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
 
 export default function AllOrders() {
   const { user } = useAuth();
+  const [sp, setSp] = useSearchParams();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [searchDebounced, setSearchDebounced] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [payStatusFilter, setPayStatusFilter] = useState("all");
-  const [checkStatusFilter, setCheckStatusFilter] = useState("all");
-  const [shippingFilter, setShippingFilter] = useState("all");
-  const [courierFilter, setCourierFilter] = useState("all");
-  const [periodFilter, setPeriodFilter] = useState("all");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [viewAll, setViewAll] = useState(false);
+  const [search, setSearch] = useState(sp.get("q") || "");
+const [searchDebounced, setSearchDebounced] = useState(sp.get("q") || "");
+const [statusFilter, setStatusFilter] = useState(sp.get("status") || "all");
+const [payStatusFilter, setPayStatusFilter] = useState(sp.get("pay") || "all");
+const [checkStatusFilter, setCheckStatusFilter] = useState(sp.get("check") || "all");
+const [shippingFilter, setShippingFilter] = useState(sp.get("shipping") || "all");
+const [courierFilter, setCourierFilter] = useState(sp.get("courier") || "all");
+const [periodFilter, setPeriodFilter] = useState(sp.get("period") || "all");
+const [dateFrom, setDateFrom] = useState(sp.get("from") || "");
+const [dateTo, setDateTo] = useState(sp.get("to") || "");
+const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
   const [users, setUsers] = useState([]);
-  const [selectedTelecaller, setSelectedTelecaller] = useState("all");
+  const [selectedTelecaller, setSelectedTelecaller] = useState(sp.get("tc") || "all");
   const [selectedOrders, setSelectedOrders] = useState(new Set());
   const [printLoading, setPrintLoading] = useState(false);
   const [printQuantities, setPrintQuantities] = useState({});
   const [showPrintDialog, setShowPrintDialog] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
+  const [currentPage, setCurrentPage] = useState(Number(sp.get("page")) || 1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalOrders, setTotalOrders] = useState(0);
   const PAGE_SIZE = 50;
+
+  // Sync filters to URL search params
+  useEffect(() => {
+    const p = new URLSearchParams();
+    if (statusFilter !== "all") p.set("status", statusFilter);
+    if (payStatusFilter !== "all") p.set("pay", payStatusFilter);
+    if (checkStatusFilter !== "all") p.set("check", checkStatusFilter);
+    if (periodFilter !== "all") p.set("period", periodFilter);
+    if (periodFilter === "custom" && dateFrom) p.set("from", dateFrom);
+    if (periodFilter === "custom" && dateTo) p.set("to", dateTo);
+    if (viewAll) p.set("viewAll", "true");
+    if (selectedTelecaller !== "all") p.set("tc", selectedTelecaller);
+    if (searchDebounced) p.set("q", searchDebounced);
+    if (currentPage > 1) p.set("page", currentPage.toString());
+    setSp(p, { replace: true });
+  }, [statusFilter, payStatusFilter, checkStatusFilter, periodFilter, dateFrom, dateTo, viewAll, selectedTelecaller, searchDebounced, currentPage]);
 
   const canPrintAddresses = user?.role === "admin" || user?.role === "packaging";
   const showPaymentCheck = ["admin", "telecaller", "accounts"].includes(user?.role);
