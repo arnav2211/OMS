@@ -888,9 +888,10 @@ async def list_orders(
         query["$or"] = or_conditions
 
     # Lean projection — exclude heavy nested data for list view
+    # NOTE: shipping_address is kept so DTDC export can read destination info
     list_projection = {
         "_id": 0, "items": 0, "free_samples": 0,
-        "billing_address": 0, "shipping_address": 0,
+        "billing_address": 0,
         "packaging": 0, "dispatch_details": 0,
         "payment_mode_details": 0,
         "remark": 0, "purpose": 0, "extra_shipping_details": 0,
