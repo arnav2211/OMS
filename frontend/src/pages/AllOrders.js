@@ -13,7 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Search, RefreshCw, Printer, PackageCheck } from "lucide-react";
+import { Search, RefreshCw, Printer, PackageCheck, FileSpreadsheet } from "lucide-react";
+import DTDCExportDialog from "@/components/DTDCExportDialog";
 
 const STATUS_COLORS = {
   new: "bg-blue-100 text-blue-800",
@@ -51,6 +52,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
   const [printLoading, setPrintLoading] = useState(false);
   const [printQuantities, setPrintQuantities] = useState({});
   const [showPrintDialog, setShowPrintDialog] = useState(false);
+  const [showDTDCDialog, setShowDTDCDialog] = useState(false);
   const [currentPage, setCurrentPage] = useState(Number(sp.get("page")) || 1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalOrders, setTotalOrders] = useState(0);
@@ -180,6 +182,19 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
     setShowPrintDialog(true);
   };
 
+  // Get selected DTDC orders for export
+  const selectedDTDCOrders = orders.filter(
+    o => selectedOrders.has(o.id) && o.courier_name === "DTDC"
+  );
+
+  const handleDTDCExport = () => {
+    if (selectedDTDCOrders.length === 0) {
+      toast.error("No DTDC orders selected. Select DTDC courier orders to export.");
+      return;
+    }
+    setShowDTDCDialog(true);
+  };
+
   return (
     <div className="space-y-6" data-testid="all-orders-page">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -189,6 +204,24 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
             <Button variant="default" size="sm" onClick={openPrintDialog} disabled={printLoading} data-testid="print-addresses-btn">
               <Printer className="w-4 h-4 mr-1" />
               {printLoading ? "Generating..." : `Print Addresses (${selectedOrders.size})`}
+            </Button>
+          )}
+          {selectedOrders.size > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDTDCExport}
+              data-testid="dtdc-export-btn"
+              className="border-green-500 text-green-700 hover:bg-green-50 gap-1.5"
+              title={selectedDTDCOrders.length > 0 ? `Export ${selectedDTDCOrders.length} DTDC order(s)` : "Select DTDC orders to export"}
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              DTDC Excel
+              {selectedDTDCOrders.length > 0 && (
+                <span className="ml-0.5 bg-green-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                  {selectedDTDCOrders.length}
+                </span>
+              )}
             </Button>
           )}
           <Button variant="outline" size="sm" onClick={loadOrders} data-testid="refresh-orders"><RefreshCw className="w-4 h-4 mr-1" />Refresh</Button>
@@ -440,6 +473,13 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* DTDC Excel Export Dialog */}
+      <DTDCExportDialog
+        open={showDTDCDialog}
+        onClose={() => setShowDTDCDialog(false)}
+        orders={selectedDTDCOrders}
+      />
     </div>
   );
 }
