@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -6,111 +6,61 @@ import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { Download, FileSpreadsheet, X, Info } from "lucide-react";
 
-// ─── Fixed values (always the same) ────────────────────────────────────────
-const FIXED_VALUES = {
-  "Unique_Id": "",
-  "Client Code": "",
-  "Service Type": "",
-  "Courier Type": "",
-  "Number of Pieces (non-document)": "",
-  "Risk Surcharge (YES/NO) (non-document)": "",
-  "Length(cm) (non-document)": "",
-  "Width(cm) (non-document)": "",
-  "Height(cm) (non-document)": "",
-  "Origin Pincode": "",
-  "Origin Name": "",
-  "Origin Address Line 1": "",
-  "Origin City": "",
-  "Origin State": "",
-  "Content Type": "",
+// ─── Default values for fixed columns (from downloadData.xls) ──────────────
+const FIXED_DEFAULTS = {
+  "Unique_Id":                            "RL1386",
+  "Client Code":                          "RL1386",
+  "Service Type":                         "GROUND EXPRESS",
+  "Courier Type":                         "NON-DOCUMENT",
+  "Number of Pieces (non-document)":      "1",
+  "Risk Surcharge (YES/NO) (non-document)":"0",
+  "Length(cm) (non-document)":            "5",
+  "Width(cm) (non-document)":             "5",
+  "Height(cm) (non-document)":            "5",
+  "Origin Pincode":                       "440025",
+  "Origin Name":                          "Nagpur",
+  "Origin Phone":                         "",
+  "Origin Address Line 1":               "Plot No. B 101, Poonam Heights, Kapil Nagar, Pande Layout, Khamla, Nagpur, Maharashtra 440025",
+  "Origin Address Line 2":               "",
+  "Origin City":                          "NAGPUR",
+  "Origin State":                         "MAHARASHTRA",
+  "Content Type":                         "Perfumes",
 };
 
-// ─── All columns in the correct order (matching downloadData.xls) ───────────
+// ─── All DTDC columns in exact order (from the XLS header row) ─────────────
 const ALL_COLUMNS = [
-  "Unique_Id",
-  "Client Code",
-  "Consignment Number",
-  "Customer Reference Number",
-  "Service Type",
-  "Courier Type",
-  "Declared Price (non-document)",
-  "Number of Pieces (non-document)",
-  "Risk Surcharge (YES/NO) (non-document)",
-  "Weight(KG) (non-document)",
-  "Length(cm) (non-document)",
-  "Width(cm) (non-document)",
-  "Height(cm) (non-document)",
-  "Origin Pincode",
-  "Origin Name",
-  "Origin Phone",
-  "Origin Address Line 1",
-  "Origin Address Line 2",
-  "Origin City",
-  "Origin State",
-  "Destination Pincode",
-  "Destination Name",
-  "Destination Phone",
-  "Destination Address Line 1",
-  "Destination Address Line 2",
-  "Destination City",
-  "Destination State",
-  "Product Code",
-  "Eway Bill",
-  "Content Type",
-  "Consignment Type",
-  "Cod Amount",
-  "In Favor Of",
-  "Cod Mode",
-  "Description",
-  "Return Reason",
-  "Origin Country",
-  "Destination Country",
-  "Destination Latitude",
-  "Destination Longitude",
-  "Destination Address Email",
-  "Return Name",
-  "Return Address Line 1",
-  "Return Address Line 2",
-  "Return Pincode",
-  "Return Phone",
-  "Return Alternate Phone",
-  "Return City",
-  "Return State",
-  "Return Country",
-  "Return Email",
-  "Exceptional RTO Name",
-  "Exceptional RTO Address Line 1",
-  "Exceptional RTO Address Line 2",
-  "Exceptional RTO Pincode",
-  "Exceptional RTO Phone",
-  "Exceptional RTO Alternate Phone",
-  "Exceptional RTO City",
-  "Exceptional RTO State",
-  "Exceptional RTO Country",
-  "Type Of Delivery",
-  "Consignor Alternate Phone",
-  "Inco Terms",
-  "Shipment Purpose",
-  "Movement Type",
-  "Pickup Start Time (HH:MM)",
-  "Pickup End Time (HH:MM)",
-  "Pickup Service Time (Mins)",
-  "Delivery Start Time (HH:MM)",
-  "Delivery End Time (HH:MM)",
-  "Delivery Service Time (Mins)",
-  "Origin Address Email",
+  "Unique_Id","Client Code","Consignment Number","Customer Reference Number",
+  "Service Type","Courier Type","Declared Price (non-document)",
+  "Number of Pieces (non-document)","Risk Surcharge (YES/NO) (non-document)",
+  "Weight(KG) (non-document)","Length(cm) (non-document)","Width(cm) (non-document)",
+  "Height(cm) (non-document)","Origin Pincode","Origin Name","Origin Phone",
+  "Origin Address Line 1","Origin Address Line 2","Origin City","Origin State",
+  "Destination Pincode","Destination Name","Destination Phone",
+  "Destination Address Line 1","Destination Address Line 2","Destination City",
+  "Destination State","Product Code","Eway Bill","Content Type",
+  "Consignment Type","Cod Amount","In Favor Of","Cod Mode","Description",
+  "Return Reason","Origin Country","Destination Country","Destination Latitude",
+  "Destination Longitude","Destination Address Email","Return Name",
+  "Return Address Line 1","Return Address Line 2","Return Pincode","Return Phone",
+  "Return Alternate Phone","Return City","Return State","Return Country",
+  "Return Email","Exceptional RTO Name","Exceptional RTO Address Line 1",
+  "Exceptional RTO Address Line 2","Exceptional RTO Pincode","Exceptional RTO Phone",
+  "Exceptional RTO Alternate Phone","Exceptional RTO City","Exceptional RTO State",
+  "Exceptional RTO Country","Type Of Delivery","Consignor Alternate Phone",
+  "Inco Terms","Shipment Purpose","Movement Type","Pickup Start Time (HH:MM)",
+  "Pickup End Time (HH:MM)","Pickup Service Time (Mins)","Delivery Start Time (HH:MM)",
+  "Delivery End Time (HH:MM)","Delivery Service Time (Mins)","Origin Address Email",
 ];
 
-// Columns visible in the preview (editable columns only — the ones we fill)
+// ─── Columns shown in the editable preview (only the ones we fill) ──────────
 const PREVIEW_COLUMNS = [
+  // Fixed
   "Unique_Id",
   "Client Code",
   "Service Type",
   "Courier Type",
-  "Declared Price (non-document)",
   "Number of Pieces (non-document)",
   "Risk Surcharge (YES/NO) (non-document)",
-  "Weight(KG) (non-document)",
   "Length(cm) (non-document)",
   "Width(cm) (non-document)",
   "Height(cm) (non-document)",
@@ -119,6 +69,9 @@ const PREVIEW_COLUMNS = [
   "Origin Address Line 1",
   "Origin City",
   "Origin State",
+  "Content Type",
+  // From order (auto-filled)
+  "Declared Price (non-document)",
   "Destination Pincode",
   "Destination Name",
   "Destination Phone",
@@ -126,92 +79,130 @@ const PREVIEW_COLUMNS = [
   "Destination Address Line 2",
   "Destination City",
   "Destination State",
-  "Content Type",
+  // Manual
+  "Weight(KG) (non-document)",
 ];
 
-// Which columns the user can edit (manually entered + pre-filled but editable)
-const EDITABLE_COLUMNS = new Set(PREVIEW_COLUMNS);
+// Column type classification
+const COL_TYPE = {
+  fixed: new Set([
+    "Unique_Id","Client Code","Service Type","Courier Type",
+    "Number of Pieces (non-document)","Risk Surcharge (YES/NO) (non-document)",
+    "Length(cm) (non-document)","Width(cm) (non-document)","Height(cm) (non-document)",
+    "Origin Pincode","Origin Name","Origin Address Line 1","Origin City","Origin State","Content Type",
+  ]),
+  order: new Set([
+    "Declared Price (non-document)","Destination Pincode","Destination Name",
+    "Destination Phone","Destination Address Line 1","Destination Address Line 2",
+    "Destination City","Destination State",
+  ]),
+  manual: new Set(["Weight(KG) (non-document)"]),
+};
 
-// Which columns come from the order data (pre-filled from order)
-const ORDER_COLUMNS = new Set([
-  "Declared Price (non-document)",
-  "Destination Pincode",
-  "Destination Name",
-  "Destination Phone",
-  "Destination Address Line 1",
-  "Destination Address Line 2",
-  "Destination City",
-  "Destination State",
-]);
+// Readable short labels for header display
+const SHORT_LABEL = {
+  "Number of Pieces (non-document)":       "Pieces",
+  "Risk Surcharge (YES/NO) (non-document)":"Risk",
+  "Length(cm) (non-document)":             "L(cm)",
+  "Width(cm) (non-document)":              "W(cm)",
+  "Height(cm) (non-document)":             "H(cm)",
+  "Weight(KG) (non-document)":             "Wt(KG) ★",
+  "Declared Price (non-document)":         "Decl. Price",
+  "Destination Pincode":                   "Dest. PIN",
+  "Destination Name":                      "Dest. Name",
+  "Destination Phone":                     "Dest. Phone",
+  "Destination Address Line 1":            "Dest. Addr 1",
+  "Destination Address Line 2":            "Dest. Addr 2",
+  "Destination City":                      "Dest. City",
+  "Destination State":                     "Dest. State",
+  "Origin Pincode":                        "Orig. PIN",
+  "Origin Name":                           "Orig. Name",
+  "Origin Address Line 1":                 "Orig. Addr",
+  "Origin City":                           "Orig. City",
+  "Origin State":                          "Orig. State",
+  "Content Type":                          "Content",
+  "Unique_Id":                             "Unique ID",
+  "Client Code":                           "Client Code",
+  "Service Type":                          "Service",
+  "Courier Type":                          "Type",
+};
 
-// Column that requires manual entry
-const MANUAL_COLUMNS = new Set(["Weight(KG) (non-document)"]);
+function getShortLabel(col) {
+  return SHORT_LABEL[col] || col;
+}
 
-// Fixed columns (always the same — pre-filled from FIXED_VALUES, still editable)
-const FIXED_COLUMNS = new Set([
-  "Unique_Id",
-  "Client Code",
-  "Service Type",
-  "Courier Type",
-  "Number of Pieces (non-document)",
-  "Risk Surcharge (YES/NO) (non-document)",
-  "Length(cm) (non-document)",
-  "Width(cm) (non-document)",
-  "Height(cm) (non-document)",
-  "Origin Pincode",
-  "Origin Name",
-  "Origin Address Line 1",
-  "Origin City",
-  "Origin State",
-  "Content Type",
-]);
+// Column min-widths for display
+function getColWidth(col) {
+  if (["Origin Address Line 1","Destination Address Line 1","Destination Address Line 2"].includes(col)) return 220;
+  if (["Destination Name","Destination Phone"].includes(col)) return 140;
+  return 110;
+}
+
+// Cell background & text styles per type
+const COL_STYLES = {
+  fixed: {
+    header: { background: "#1e3a5f", color: "#ffffff" },
+    cell:   { background: "#e8f0fe", color: "#1a1a2e" },
+  },
+  order: {
+    header: { background: "#145a32", color: "#ffffff" },
+    cell:   { background: "#d5f5e3", color: "#0d3b24" },
+  },
+  manual: {
+    header: { background: "#7d5a00", color: "#ffffff" },
+    cell:   { background: "#fff8e1", color: "#3d2c00" },
+  },
+  default: {
+    header: { background: "#374151", color: "#ffffff" },
+    cell:   { background: "#ffffff", color: "#111827" },
+  },
+};
+
+function getColStyle(col) {
+  if (COL_TYPE.fixed.has(col))  return COL_STYLES.fixed;
+  if (COL_TYPE.order.has(col))  return COL_STYLES.order;
+  if (COL_TYPE.manual.has(col)) return COL_STYLES.manual;
+  return COL_STYLES.default;
+}
 
 function buildRowFromOrder(order) {
   const sa = order.shipping_address || {};
-  const phone = (order.customer_phone || []).join(", ");
+  const phones = order.customer_phone || [];
+  const phone = Array.isArray(phones) ? phones.join(", ") : String(phones || "");
 
+  // Start with all columns empty
   const row = {};
+  for (const col of ALL_COLUMNS) row[col] = "";
 
-  // Initialize all preview columns to empty
-  for (const col of ALL_COLUMNS) {
-    row[col] = "";
-  }
+  // Apply fixed defaults
+  Object.assign(row, FIXED_DEFAULTS);
 
-  // Fixed columns — empty by default, user can fill
-  for (const [col, val] of Object.entries(FIXED_VALUES)) {
-    row[col] = val;
-  }
+  // Fill from order data
+  row["Declared Price (non-document)"] = order.grand_total != null ? String(Math.round(order.grand_total)) : "";
+  row["Destination Pincode"]            = sa.pincode       || "";
+  row["Destination Name"]               = sa.address_name  || order.customer_name || "";
+  row["Destination Phone"]              = phone;
+  row["Destination Address Line 1"]     = sa.address_line  || "";
+  row["Destination Address Line 2"]     = sa.address_line2 || "";
+  row["Destination City"]               = sa.city          || "";
+  row["Destination State"]              = sa.state         || "";
 
-  // From order data
-  row["Declared Price (non-document)"] = order.grand_total != null ? String(order.grand_total) : "";
-  row["Destination Pincode"] = sa.pincode || "";
-  row["Destination Name"] = sa.address_name || order.customer_name || "";
-  row["Destination Phone"] = phone;
-  row["Destination Address Line 1"] = sa.address_line || "";
-  row["Destination Address Line 2"] = sa.address_line2 || "";
-  row["Destination City"] = sa.city || "";
-  row["Destination State"] = sa.state || "";
-
-  // Manual entry — blank
+  // Manual entry — empty
   row["Weight(KG) (non-document)"] = "";
 
   return row;
 }
 
-function getCellColor(col) {
-  if (MANUAL_COLUMNS.has(col)) return "#fff3cd"; // yellow — manual entry required
-  if (ORDER_COLUMNS.has(col)) return "#d4edda";   // green — from order
-  if (FIXED_COLUMNS.has(col)) return "#d1ecf1";   // blue — fixed/same for all
-  return "";
-}
-
 export default function DTDCExportDialog({ open, onClose, orders }) {
   const [rows, setRows] = useState([]);
-  const tableRef = useRef(null);
 
   useEffect(() => {
     if (open && orders.length > 0) {
-      setRows(orders.map(o => ({ _orderId: o.id, _orderNum: o.order_number, ...buildRowFromOrder(o) })));
+      setRows(orders.map(o => ({
+        _orderId:  o.id,
+        _orderNum: o.order_number,
+        ...buildRowFromOrder(o),
+      })));
     }
   }, [open, orders]);
 
@@ -228,39 +219,21 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
   };
 
   const handleDownload = () => {
-    if (rows.length === 0) {
-      toast.error("No rows to export");
-      return;
-    }
+    if (rows.length === 0) { toast.error("No rows to export"); return; }
 
-    // Build data with ALL columns (not just preview columns) in correct order
     const exportData = rows.map(row => {
-      const exportRow = {};
-      for (const col of ALL_COLUMNS) {
-        exportRow[col] = row[col] !== undefined ? row[col] : "";
-      }
-      return exportRow;
+      const out = {};
+      for (const col of ALL_COLUMNS) out[col] = row[col] ?? "";
+      return out;
     });
 
     const ws = XLSX.utils.json_to_sheet(exportData, { header: ALL_COLUMNS });
+
+    // Set column widths (all 22 chars wide)
+    ws["!cols"] = ALL_COLUMNS.map(() => ({ wch: 28 }));
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "DTDC Orders");
-
-    // Style header row
-    const headerRange = XLSX.utils.decode_range(ws["!ref"]);
-    for (let C = headerRange.s.c; C <= headerRange.e.c; C++) {
-      const cellAddr = XLSX.utils.encode_cell({ r: 0, c: C });
-      if (ws[cellAddr]) {
-        ws[cellAddr].s = {
-          font: { bold: true },
-          fill: { fgColor: { rgb: "4472C4" }, patternType: "solid" },
-        };
-      }
-    }
-
-    // Set column widths
-    ws["!cols"] = ALL_COLUMNS.map(() => ({ wch: 22 }));
-
     XLSX.writeFile(wb, "DTDC_Orders_Export.xlsx");
     toast.success(`Exported ${rows.length} order(s) to DTDC_Orders_Export.xlsx`);
     onClose();
@@ -271,130 +244,186 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent
-        className="max-w-[98vw] w-full max-h-[95vh] flex flex-col p-0"
-        style={{ borderRadius: "12px", overflow: "hidden" }}
+        className="p-0 flex flex-col"
+        style={{
+          maxWidth: "98vw",
+          width: "98vw",
+          maxHeight: "95vh",
+          borderRadius: 12,
+          overflow: "hidden",
+        }}
       >
-        {/* Header */}
-        <DialogHeader className="px-6 pt-5 pb-3 border-b bg-gradient-to-r from-blue-50 to-indigo-50 flex-shrink-0">
+        {/* ── Header ── */}
+        <DialogHeader
+          className="flex-shrink-0 px-5 pt-4 pb-3 border-b"
+          style={{ background: "linear-gradient(135deg,#0f2044 0%,#1a3a6b 100%)" }}
+        >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-100 rounded-lg">
-              <FileSpreadsheet className="w-5 h-5 text-blue-700" />
+            <div className="p-2 rounded-lg" style={{ background: "rgba(255,255,255,0.15)" }}>
+              <FileSpreadsheet className="w-5 h-5 text-white" />
             </div>
             <div>
-              <DialogTitle className="text-lg font-semibold">DTDC Excel Export — Preview & Edit</DialogTitle>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Review and edit all fields before downloading. All cells are editable.
+              <DialogTitle className="text-base font-semibold text-white">
+                DTDC Excel Export — Preview &amp; Edit
+              </DialogTitle>
+              <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.7)" }}>
+                All cells are editable. Review before downloading.
               </p>
             </div>
           </div>
+
           {/* Legend */}
-          <div className="flex flex-wrap gap-3 mt-3">
-            <div className="flex items-center gap-1.5 text-xs">
-              <span className="w-3 h-3 rounded-sm inline-block border" style={{ background: "#d4edda" }} />
-              <span className="text-muted-foreground">From order data</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-xs">
-              <span className="w-3 h-3 rounded-sm inline-block border" style={{ background: "#fff3cd" }} />
-              <span className="text-muted-foreground">Manual entry required</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-xs">
-              <span className="w-3 h-3 rounded-sm inline-block border" style={{ background: "#d1ecf1" }} />
-              <span className="text-muted-foreground">Fixed / same for all</span>
-            </div>
+          <div className="flex flex-wrap gap-4 mt-3">
+            {[
+              { style: COL_STYLES.fixed,  label: "Fixed defaults" },
+              { style: COL_STYLES.order,  label: "From order data" },
+              { style: COL_STYLES.manual, label: "Manual entry (★)" },
+            ].map(({ style, label }) => (
+              <div key={label} className="flex items-center gap-2 text-xs">
+                <span
+                  className="inline-block rounded px-2 py-0.5 font-medium"
+                  style={{ background: style.cell.background, color: style.cell.color, border: `1px solid ${style.header.background}` }}
+                >
+                  {label}
+                </span>
+              </div>
+            ))}
           </div>
         </DialogHeader>
 
-        {/* Scrollable Table */}
+        {/* ── Table ── */}
         <div className="flex-1 overflow-auto" style={{ minHeight: 0 }}>
           {rows.length === 0 ? (
             <div className="flex items-center justify-center h-40 text-muted-foreground">
               No orders to display.
             </div>
           ) : (
-            <div className="overflow-x-auto overflow-y-auto max-h-[60vh]">
-              <table
-                ref={tableRef}
-                className="border-collapse text-xs"
-                style={{ minWidth: "max-content", tableLayout: "fixed" }}
-              >
-                <thead className="sticky top-0 z-20 bg-white shadow-sm">
+            <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(95vh - 200px)" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "max-content", tableLayout: "fixed" }}>
+                <thead style={{ position: "sticky", top: 0, zIndex: 20 }}>
                   <tr>
-                    {/* Row label column */}
+                    {/* Sticky order# column */}
                     <th
-                      className="border border-gray-200 bg-gray-50 px-2 py-2 text-center font-medium text-gray-600 whitespace-nowrap sticky left-0 z-30"
-                      style={{ minWidth: 90, background: "#f9fafb" }}
+                      style={{
+                        position: "sticky", left: 0, zIndex: 30,
+                        background: "#0f2044", color: "#fff",
+                        padding: "8px 10px", fontSize: "0.7rem", fontWeight: 600,
+                        border: "1px solid #2a4a7f", whiteSpace: "nowrap", minWidth: 90,
+                      }}
                     >
                       Order #
                     </th>
-                    {PREVIEW_COLUMNS.map(col => (
-                      <th
-                        key={col}
-                        className="border border-gray-200 px-2 py-2 text-left font-semibold text-gray-700 whitespace-nowrap"
-                        style={{
-                          minWidth: col.length > 20 ? 170 : 130,
-                          background: getCellColor(col) || "#f0f4ff",
-                          fontSize: "0.68rem",
-                        }}
-                        title={col}
-                      >
-                        {col}
-                        {MANUAL_COLUMNS.has(col) && (
-                          <span className="ml-1 text-amber-600 font-bold">*</span>
-                        )}
-                      </th>
-                    ))}
+
+                    {PREVIEW_COLUMNS.map(col => {
+                      const s = getColStyle(col);
+                      return (
+                        <th
+                          key={col}
+                          title={col}
+                          style={{
+                            ...s.header,
+                            padding: "7px 8px",
+                            fontSize: "0.68rem",
+                            fontWeight: 600,
+                            border: "1px solid rgba(0,0,0,0.15)",
+                            whiteSpace: "nowrap",
+                            minWidth: getColWidth(col),
+                            letterSpacing: "0.01em",
+                          }}
+                        >
+                          {getShortLabel(col)}
+                        </th>
+                      );
+                    })}
+
+                    {/* Remove column */}
                     <th
-                      className="border border-gray-200 bg-gray-50 px-2 py-2 text-center font-medium text-gray-600 sticky right-0 z-30"
-                      style={{ minWidth: 50, background: "#f9fafb" }}
+                      style={{
+                        position: "sticky", right: 0, zIndex: 30,
+                        background: "#0f2044", color: "#fff",
+                        padding: "8px 6px", fontSize: "0.7rem", fontWeight: 600,
+                        border: "1px solid #2a4a7f", minWidth: 44,
+                      }}
                     >
                       ✕
                     </th>
                   </tr>
                 </thead>
+
                 <tbody>
                   {rows.map((row, rowIdx) => (
                     <tr
                       key={row._orderId || rowIdx}
-                      className="hover:bg-blue-50/30 transition-colors"
+                      style={{ background: rowIdx % 2 === 0 ? "#fff" : "#f8fafc" }}
                     >
-                      {/* Order number label */}
+                      {/* Order number */}
                       <td
-                        className="border border-gray-200 px-2 py-1 text-center font-mono font-medium text-primary whitespace-nowrap sticky left-0 z-10 bg-white"
-                        style={{ background: "white", fontSize: "0.7rem" }}
+                        style={{
+                          position: "sticky", left: 0, zIndex: 10,
+                          background: rowIdx % 2 === 0 ? "#f0f4ff" : "#e8eeff",
+                          padding: "4px 8px", fontSize: "0.7rem", fontWeight: 600,
+                          color: "#1e3a8a", border: "1px solid #d1d5db",
+                          whiteSpace: "nowrap", minWidth: 90,
+                        }}
                       >
                         {row._orderNum || `#${rowIdx + 1}`}
                       </td>
 
-                      {PREVIEW_COLUMNS.map(col => (
-                        <td
-                          key={col}
-                          className="border border-gray-200 p-0"
-                          style={{ background: getCellColor(col) || "white" }}
-                        >
-                          <Input
-                            className="border-0 rounded-none h-8 text-xs focus:ring-1 focus:ring-primary focus:z-10 bg-transparent"
+                      {PREVIEW_COLUMNS.map(col => {
+                        const s = getColStyle(col);
+                        return (
+                          <td
+                            key={col}
                             style={{
-                              background: "transparent",
-                              fontSize: "0.7rem",
-                              minWidth: col.length > 20 ? 160 : 120,
+                              background: s.cell.background,
+                              border: "1px solid #d1d5db",
+                              padding: 0,
+                              minWidth: getColWidth(col),
                             }}
-                            value={row[col] ?? ""}
-                            onChange={e => updateCell(rowIdx, col, e.target.value)}
-                            placeholder={MANUAL_COLUMNS.has(col) ? "Enter weight" : ""}
-                          />
-                        </td>
-                      ))}
+                          >
+                            <input
+                              value={row[col] ?? ""}
+                              onChange={e => updateCell(rowIdx, col, e.target.value)}
+                              placeholder={COL_TYPE.manual.has(col) ? "★ Enter weight" : ""}
+                              style={{
+                                width: "100%",
+                                background: "transparent",
+                                border: "none",
+                                outline: "none",
+                                padding: "5px 8px",
+                                fontSize: "0.7rem",
+                                color: s.cell.color,
+                                fontFamily: "inherit",
+                                fontWeight: COL_TYPE.manual.has(col) ? 600 : 400,
+                              }}
+                              onFocus={e => { e.target.style.boxShadow = "inset 0 0 0 2px #3b82f6"; e.target.style.borderRadius = "2px"; }}
+                              onBlur={e => { e.target.style.boxShadow = "none"; }}
+                            />
+                          </td>
+                        );
+                      })}
 
-                      {/* Remove button */}
+                      {/* Remove */}
                       <td
-                        className="border border-gray-200 px-2 py-1 text-center sticky right-0 z-10 bg-white"
+                        style={{
+                          position: "sticky", right: 0, zIndex: 10,
+                          background: rowIdx % 2 === 0 ? "#fff" : "#f8fafc",
+                          border: "1px solid #d1d5db",
+                          padding: "4px 6px", textAlign: "center",
+                        }}
                       >
                         <button
                           onClick={() => removeRow(rowIdx)}
-                          className="text-red-400 hover:text-red-600 transition-colors p-1 rounded hover:bg-red-50"
-                          title="Remove this row"
+                          title="Remove row"
+                          style={{
+                            background: "none", border: "none", cursor: "pointer",
+                            color: "#ef4444", padding: "2px 4px", borderRadius: 4,
+                            fontSize: "0.75rem", lineHeight: 1,
+                          }}
+                          onMouseEnter={e => e.currentTarget.style.background = "#fee2e2"}
+                          onMouseLeave={e => e.currentTarget.style.background = "none"}
                         >
-                          <X className="w-3.5 h-3.5" />
+                          <X style={{ width: 13, height: 13 }} />
                         </button>
                       </td>
                     </tr>
@@ -405,25 +434,29 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
           )}
         </div>
 
-        {/* Footer */}
-        <DialogFooter className="px-6 py-4 border-t bg-gray-50 flex-shrink-0 flex items-center justify-between gap-3">
+        {/* ── Footer ── */}
+        <DialogFooter
+          className="flex-shrink-0 px-5 py-3 border-t flex items-center justify-between gap-3"
+          style={{ background: "#f8fafc" }}
+        >
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Info className="w-3.5 h-3.5" />
             <span>
-              {rows.length} row(s) · The exported file will include all DTDC columns in the correct format
+              {rows.length} row(s) · Exported file includes all DTDC columns in correct format
             </span>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={onClose}>
+            <Button variant="outline" onClick={onClose} className="h-8 text-sm">
               Cancel
             </Button>
             <Button
               onClick={handleDownload}
               disabled={rows.length === 0}
-              className="gap-2 bg-green-600 hover:bg-green-700 text-white"
+              className="h-8 text-sm gap-2"
+              style={{ background: "#16a34a", color: "#fff" }}
             >
               <Download className="w-4 h-4" />
-              Download Excel
+              Download Excel ({rows.length})
             </Button>
           </div>
         </DialogFooter>
