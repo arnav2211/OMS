@@ -210,6 +210,9 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
   const [rowSeries, setRowSeries] = useState({});
   // Debounce timers per row
   const debounceTimers = useRef({});
+  // Ref that mirrors rows so timeouts can read the latest pincode without setState nesting
+  const rowsRef = useRef([]);
+  useEffect(() => { rowsRef.current = rows; }, [rows]);
 
   useEffect(() => {
     if (open && orders.length > 0) {
@@ -272,14 +275,12 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
 
     // Trigger series detection when weight column is edited
     if (col === "Weight(KG) (non-document)") {
-      // Debounce 600ms to avoid spamming API on every keystroke
       if (debounceTimers.current[rowIdx]) clearTimeout(debounceTimers.current[rowIdx]);
       debounceTimers.current[rowIdx] = setTimeout(() => {
-        setRows(current => {
-          const row = current[rowIdx];
-          if (row) detectSeries(rowIdx, value, row["Destination Pincode"]);
-          return current;
-        });
+        // Read pincode from the ref (safe — no setState nesting)
+        const row = rowsRef.current[rowIdx];
+        const pincode = row?.["Destination Pincode"] ?? "";
+        detectSeries(rowIdx, value, pincode);
       }, 600);
     }
   };
