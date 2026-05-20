@@ -288,24 +288,50 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
     setRows(prev => prev.filter((_, i) => i !== rowIdx));
   };
 
-  const handleDownload = () => {
-    if (rows.length === 0) { toast.error("No rows to export"); return; }
-
-    const exportData = rows.map(row => {
+  // Helper: build and trigger download of one xlsx file
+  const downloadSheet = (exportRows, filename, sheetName) => {
+    const data = exportRows.map(row => {
       const out = {};
       for (const col of ALL_COLUMNS) out[col] = row[col] ?? "";
       return out;
     });
-
-    const ws = XLSX.utils.json_to_sheet(exportData, { header: ALL_COLUMNS });
-
-    // Set column widths (all 22 chars wide)
+    const ws = XLSX.utils.json_to_sheet(data, { header: ALL_COLUMNS });
     ws["!cols"] = ALL_COLUMNS.map(() => ({ wch: 28 }));
-
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "DTDC Orders");
-    XLSX.writeFile(wb, "DTDC_Orders_Export.xlsx");
-    toast.success(`Exported ${rows.length} order(s) to DTDC_Orders_Export.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    XLSX.writeFile(wb, filename);
+  };
+
+  const handleDownload = () => {
+    if (rows.length === 0) { toast.error("No rows to export"); return; }
+
+    // Partition rows by detected series
+    const dRows = rows.filter((_, i) => rowSeries[i]?.series === "D-Series" || !rowSeries[i]?.series);
+    const mRows = rows.filter((_, i) => rowSeries[i]?.series === "M-Series");
+
+    // Warn if some rows have no series detected yet
+    const undetected = rows.filter((_, i) => !rowSeries[i]?.series).length;
+    if (undetected > 0) {
+      toast.warning(`${undetected} row(s) have no series detected — they will be included in the D-Series file by default.`);
+    }
+
+    const hasBoth = dRows.length > 0 && mRows.length > 0;
+
+    if (hasBoth) {
+      // Download D-Series first, then M-Series after a short delay
+      downloadSheet(dRows, "DTDC_D-Series_RL1386.xlsx", "D-Series");
+      setTimeout(() => {
+        downloadSheet(mRows, "DTDC_M-Series_RL1423.xlsx", "M-Series");
+      }, 600);
+      toast.success(`Downloaded 2 files: ${dRows.length} D-Series + ${mRows.length} M-Series order(s)`);
+    } else if (mRows.length > 0) {
+      downloadSheet(mRows, "DTDC_M-Series_RL1423.xlsx", "M-Series");
+      toast.success(`Exported ${mRows.length} M-Series order(s) to DTDC_M-Series_RL1423.xlsx`);
+    } else {
+      downloadSheet(dRows, "DTDC_D-Series_RL1386.xlsx", "D-Series");
+      toast.success(`Exported ${dRows.length} D-Series order(s) to DTDC_D-Series_RL1386.xlsx`);
+    }
+
     onClose();
   };
 
@@ -548,7 +574,17 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Info className="w-3.5 h-3.5" />
             <span>
-              {rows.length} row(s) · Exported file includes all DTDC columns in correct format
+              {rows.length} row(s) ·{" "}
+              {(() => {
+                const d = rows.filter((_, i) => rowSeries[i]?.series === "D-Series").length;
+                const m = rows.filter((_, i) => rowSeries[i]?.series === "M-Series").length;
+                const u = rows.filter((_, i) => !rowSeries[i]?.series).length;
+                const parts = [];
+                if (d > 0) parts.push(`${d} D-Series`);
+                if (m > 0) parts.push(`${m} M-Series`);
+                if (u > 0) parts.push(`${u} pending`);
+                return parts.length > 0 ? parts.join(" · ") : "Enter weights to detect series";
+              })()}
             </span>
           </div>
           <div className="flex gap-2">
@@ -562,7 +598,13 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
               style={{ background: "#16a34a", color: "#fff" }}
             >
               <Download className="w-4 h-4" />
-              Download Excel ({rows.length})
+              {(() => {
+                const d = rows.filter((_, i) => rowSeries[i]?.series === "D-Series" || !rowSeries[i]?.series).length;
+                const m = rows.filter((_, i) => rowSeries[i]?.series === "M-Series").length;
+                if (d > 0 && m > 0) return `Download 2 Files (${d}D + ${m}M)`;
+                if (m > 0) return `Download M-Series (${m})`;
+                return `Download D-Series (${d})`;
+              })()}
             </Button>
           </div>
         </DialogFooter>
