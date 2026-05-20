@@ -1,16 +1,27 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
+import api from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Download, FileSpreadsheet, X, Info } from "lucide-react";
+import { Download, FileSpreadsheet, X, Info, Loader2 } from "lucide-react";
+
+// ─── Series configs ──────────────────────────────────────────────────────────
+const D_SERIES = {
+  "Unique_Id":   "RL1386",
+  "Client Code": "RL1386",
+  "Service Type": "GROUND EXPRESS",
+};
+const M_SERIES = {
+  "Unique_Id":   "RL1423",
+  "Client Code": "RL1423",
+  "Service Type": "STD EXP-A",
+};
 
 // ─── Default values for fixed columns (from downloadData.xls) ──────────────
 const FIXED_DEFAULTS = {
-  "Unique_Id":                            "RL1386",
-  "Client Code":                          "RL1386",
-  "Service Type":                         "GROUND EXPRESS",
+  ...D_SERIES, // Default to D-series; overridden once series is detected
   "Courier Type":                         "NON-DOCUMENT",
   "Number of Pieces (non-document)":      "1",
   "Risk Surcharge (YES/NO) (non-document)":"0",
@@ -195,6 +206,10 @@ function buildRowFromOrder(order) {
 
 export default function DTDCExportDialog({ open, onClose, orders }) {
   const [rows, setRows] = useState([]);
+  // Per-row series detection state: { [rowIdx]: { loading, series, error } }
+  const [rowSeries, setRowSeries] = useState({});
+  // Debounce timers per row
+  const debounceTimers = useRef({});
 
   useEffect(() => {
     if (open && orders.length > 0) {
@@ -203,8 +218,50 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
         _orderNum: o.order_number,
         ...buildRowFromOrder(o),
       })));
+      setRowSeries({});
     }
   }, [open, orders]);
+
+  // Detect series for a row using weight + destination pincode
+  const detectSeries = useCallback(async (rowIdx, weightStr, pincode) => {
+    const weight = parseFloat(weightStr);
+    const pin = String(pincode || "").trim();
+
+    // Skip if weight or pincode is missing / invalid
+    if (!pin || pin.length < 6 || isNaN(weight) || weight <= 0) {
+      setRowSeries(prev => ({ ...prev, [rowIdx]: { loading: false, series: null, error: null } }));
+      return;
+    }
+
+    setRowSeries(prev => ({ ...prev, [rowIdx]: { loading: true, series: null, error: null } }));
+
+    try {
+      const res = await api.post("/dtdc/calculate", {
+        pincode: pin,
+        kg: Math.floor(weight),
+        grams: Math.round((weight - Math.floor(weight)) * 1000),
+      });
+      const data = res.data;
+
+      if (!data.serviceable) {
+        setRowSeries(prev => ({ ...prev, [rowIdx]: { loading: false, series: null, error: "Pincode not serviceable" } }));
+        return;
+      }
+
+      const seriesName = data.series; // "D-Series" or "M-Series"
+      const fields = seriesName === "M-Series" ? M_SERIES : D_SERIES;
+
+      // Autofill the series-dependent fields
+      setRows(prev => {
+        const next = [...prev];
+        next[rowIdx] = { ...next[rowIdx], ...fields };
+        return next;
+      });
+      setRowSeries(prev => ({ ...prev, [rowIdx]: { loading: false, series: seriesName, error: null } }));
+    } catch {
+      setRowSeries(prev => ({ ...prev, [rowIdx]: { loading: false, series: null, error: "Lookup failed" } }));
+    }
+  }, []);
 
   const updateCell = (rowIdx, col, value) => {
     setRows(prev => {
@@ -212,6 +269,19 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
       next[rowIdx] = { ...next[rowIdx], [col]: value };
       return next;
     });
+
+    // Trigger series detection when weight column is edited
+    if (col === "Weight(KG) (non-document)") {
+      // Debounce 600ms to avoid spamming API on every keystroke
+      if (debounceTimers.current[rowIdx]) clearTimeout(debounceTimers.current[rowIdx]);
+      debounceTimers.current[rowIdx] = setTimeout(() => {
+        setRows(current => {
+          const row = current[rowIdx];
+          if (row) detectSeries(rowIdx, value, row["Destination Pincode"]);
+          return current;
+        });
+      }, 600);
+    }
   };
 
   const removeRow = (rowIdx) => {
@@ -277,7 +347,7 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
             {[
               { style: COL_STYLES.fixed,  label: "Fixed defaults" },
               { style: COL_STYLES.order,  label: "From order data" },
-              { style: COL_STYLES.manual, label: "Manual entry (★)" },
+              { style: COL_STYLES.manual, label: "Weight ★ → auto-detects series" },
             ].map(({ style, label }) => (
               <div key={label} className="flex items-center gap-2 text-xs">
                 <span
@@ -288,6 +358,10 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
                 </span>
               </div>
             ))}
+            <div className="flex items-center gap-2 text-xs">
+              <span className="inline-block rounded px-2 py-0.5 font-medium" style={{ background: "#7c3aed", color: "#fff" }}>M-Series → RL1423 / STD EXP-A</span>
+              <span className="inline-block rounded px-2 py-0.5 font-medium" style={{ background: "#0369a1", color: "#fff" }}>D-Series → RL1386 / GROUND EXPRESS</span>
+            </div>
           </div>
         </DialogHeader>
 
@@ -351,22 +425,53 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
                 </thead>
 
                 <tbody>
-                  {rows.map((row, rowIdx) => (
+                  {rows.map((row, rowIdx) => {
+                    const rs = rowSeries[rowIdx];
+                    const seriesBadgeStyle = rs?.series === "M-Series"
+                      ? { background: "#7c3aed", color: "#fff" }
+                      : rs?.series === "D-Series"
+                        ? { background: "#0369a1", color: "#fff" }
+                        : rs?.error
+                          ? { background: "#dc2626", color: "#fff" }
+                          : { background: "#e5e7eb", color: "#374151" };
+                    const seriesLabel = rs?.loading
+                      ? "…"
+                      : rs?.series || (rs?.error ? "!": "—");
+                    return (
                     <tr
                       key={row._orderId || rowIdx}
                       style={{ background: rowIdx % 2 === 0 ? "#fff" : "#f8fafc" }}
                     >
-                      {/* Order number */}
+                      {/* Order number + series badge */}
                       <td
                         style={{
                           position: "sticky", left: 0, zIndex: 10,
                           background: rowIdx % 2 === 0 ? "#f0f4ff" : "#e8eeff",
                           padding: "4px 8px", fontSize: "0.7rem", fontWeight: 600,
                           color: "#1e3a8a", border: "1px solid #d1d5db",
-                          whiteSpace: "nowrap", minWidth: 90,
+                          whiteSpace: "nowrap", minWidth: 120,
                         }}
                       >
-                        {row._orderNum || `#${rowIdx + 1}`}
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          <span>{row._orderNum || `#${rowIdx + 1}`}</span>
+                          <span
+                            title={rs?.error || (rs?.series ? `Auto-detected: ${rs.series}` : "Enter weight to auto-detect series")}
+                            style={{
+                              ...seriesBadgeStyle,
+                              fontSize: "0.6rem",
+                              fontWeight: 700,
+                              padding: "1px 5px",
+                              borderRadius: 4,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 3,
+                              letterSpacing: "0.02em",
+                            }}
+                          >
+                            {rs?.loading && <Loader2 style={{ width: 8, height: 8, animation: "spin 1s linear infinite" }} />}
+                            {seriesLabel}
+                          </span>
+                        </div>
                       </td>
 
                       {PREVIEW_COLUMNS.map(col => {
@@ -427,7 +532,8 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
