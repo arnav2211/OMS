@@ -97,6 +97,7 @@ python-dotenv==1.2.1
 python-jose==3.5.0
 python-multipart==0.0.22
 pytokens==0.4.1
+pytz==2024.1
 PyYAML==6.0.3
 qrcode==8.2
 referencing==0.37.0
