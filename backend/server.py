@@ -3844,6 +3844,43 @@ async def create_admin_alert(body: dict, user=Depends(get_current_user)):
         "created_at": now,
     }
     await db.admin_alerts.insert_one(alert_doc)
+
+    # ─── Bidirectional Sync: Forward Alert to CRM ───
+    try:
+        crm_db = client["crm_database"]
+        # Find usernames of the OMS target recipients
+        oms_target_users = await db.users.find({"id": {"$in": list(target_user_ids)}}, {"_id": 0, "username": 1}).to_list(500)
+        oms_usernames = [u["username"] for u in oms_target_users if u.get("username")]
+
+        # Map recipient roles from OMS to CRM
+        crm_recipient_roles = []
+        for r in recipient_roles:
+            if r == "admin":
+                crm_recipient_roles.append("admin")
+            elif r == "telecaller":
+                crm_recipient_roles.append("executive")
+
+        # Find matching users in CRM
+        crm_clauses = []
+        if oms_usernames:
+            crm_clauses.append({"username": {"$in": oms_usernames}})
+        if crm_recipient_roles:
+            crm_clauses.append({"role": {"$in": crm_recipient_roles}})
+
+        crm_target_ids = set()
+        if crm_clauses:
+            crm_users = await crm_db.users.find({"$or": crm_clauses, "active": {"$ne": False}}, {"_id": 0, "id": 1}).to_list(500)
+            for cu in crm_users:
+                crm_target_ids.add(cu["id"])
+
+        if crm_target_ids:
+            crm_alert_doc = alert_doc.copy()
+            crm_alert_doc["recipient_ids"] = list(crm_target_ids)
+            crm_alert_doc["recipient_roles"] = crm_recipient_roles
+            await crm_db.admin_alerts.insert_one(crm_alert_doc)
+    except Exception as e:
+        logging.error(f"Alert sync to CRM failed: {e}")
+
     return {"id": alert_id, "message": f"Alert sent to {len(target_user_ids)} user(s)"}
 
 @api_router.get("/admin/alerts/pending")
@@ -3864,18 +3901,43 @@ async def acknowledge_alert(alert_id: str, user=Depends(get_current_user)):
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Alert not found")
+
+    # ─── Bidirectional Sync: Acknowledge Alert in CRM ───
+    try:
+        crm_db = client["crm_database"]
+        crm_user = await crm_db.users.find_one({"username": user["username"]})
+        if crm_user:
+            await crm_db.admin_alerts.update_one(
+                {"id": alert_id, "recipient_ids": crm_user["id"]},
+                {"$set": {f"acknowledgements.{crm_user['id']}": {"name": crm_user["name"], "at": now}}}
+            )
+    except Exception as e:
+        logging.error(f"Acknowledgement sync to CRM failed: {e}")
+
     return {"message": "Acknowledged"}
 
 @api_router.put("/admin/alerts/{alert_id}/cancel")
 async def cancel_alert(alert_id: str, user=Depends(get_current_user)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Only admin can cancel alerts")
+    now = datetime.now(timezone.utc).isoformat()
     result = await db.admin_alerts.update_one(
         {"id": alert_id},
-        {"$set": {"cancelled": True, "cancelled_at": datetime.now(timezone.utc).isoformat(), "cancelled_by": user["name"]}}
+        {"$set": {"cancelled": True, "cancelled_at": now, "cancelled_by": user["name"]}}
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Alert not found")
+
+    # ─── Bidirectional Sync: Cancel Alert in CRM ───
+    try:
+        crm_db = client["crm_database"]
+        await crm_db.admin_alerts.update_one(
+            {"id": alert_id},
+            {"$set": {"cancelled": True, "cancelled_at": now, "cancelled_by": user["name"]}}
+        )
+    except Exception as e:
+        logging.error(f"Cancellation sync to CRM failed: {e}")
+
     return {"message": "Alert cancelled"}
 
 
