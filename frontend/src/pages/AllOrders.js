@@ -76,7 +76,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
     setSp(p, { replace: true });
   }, [statusFilter, payStatusFilter, checkStatusFilter, periodFilter, dateFrom, dateTo, shippingFilter, courierFilter, viewAll, selectedTelecaller, searchDebounced, currentPage]);
 
-  const canPrintAddresses = user?.role === "admin" || user?.role === "packaging";
+  const canPrintAddresses = user?.role === "admin" || user?.role === "packaging" || user?.role === "accounts";
   const showPaymentCheck = ["admin", "telecaller", "accounts"].includes(user?.role);
   const isAdmin = user?.role === "admin";
 
