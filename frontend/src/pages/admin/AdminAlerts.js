@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Send, Bell, CheckCircle2, Clock, Users, User, Loader2, Search, X, Ban } from "lucide-react";
+import { Send, Bell, CheckCircle2, Clock, Users, User, Loader2, Search, X, Ban, Link2, Save } from "lucide-react";
 
 const ROLES = [
   { value: "telecaller", label: "Telecallers" },
@@ -23,6 +23,64 @@ export default function AdminAlerts() {
   const [selectedRoles, setSelectedRoles] = useState([]);
   const [title, setTitle] = useState("");
   const [message, setMessage] = useState("");
+
+  // User mappings states
+  const [otherUsers, setOtherUsers] = useState([]);
+  const [localMappings, setLocalMappings] = useState({});
+  const [loadingMappings, setLoadingMappings] = useState(false);
+  const [savingMappings, setSavingMappings] = useState(false);
+
+  const loadMappingsData = async () => {
+    setLoadingMappings(true);
+    try {
+      const [usersRes, otherRes, mapRes] = await Promise.all([
+        api.get("/users"),
+        api.get("/admin/alerts/other-users"),
+        api.get("/admin/alerts/mappings")
+      ]);
+      
+      const activeOmsUsers = usersRes.data.filter(u => u.active !== false);
+      setUsers(activeOmsUsers.filter(u => u.role !== "admin"));
+      setOtherUsers(otherRes.data || []);
+      
+      const mapDict = {};
+      mapRes.data.forEach(m => {
+        if (m.oms_user_id && m.crm_user_id) {
+          mapDict[m.oms_user_id] = m.crm_user_id;
+        }
+      });
+      setLocalMappings(mapDict);
+    } catch (err) {
+      toast.error("Failed to load user mappings data");
+    } finally {
+      setLoadingMappings(false);
+    }
+  };
+
+  const handleMappingChange = (omsUserId, crmUserId) => {
+    setLocalMappings(prev => ({
+      ...prev,
+      [omsUserId]: crmUserId
+    }));
+  };
+
+  const saveMappings = async () => {
+    setSavingMappings(true);
+    try {
+      const formatted = Object.entries(localMappings)
+        .filter(([_, crmId]) => crmId !== "")
+        .map(([omsId, crmId]) => ({
+          oms_user_id: omsId,
+          crm_user_id: crmId
+        }));
+      await api.post("/admin/alerts/mappings", { mappings: formatted });
+      toast.success("User mappings saved successfully");
+    } catch (err) {
+      toast.error("Failed to save mappings");
+    } finally {
+      setSavingMappings(false);
+    }
+  };
   const [orderId, setOrderId] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [orderSearch, setOrderSearch] = useState("");
@@ -118,9 +176,10 @@ export default function AdminAlerts() {
         <p className="text-sm text-muted-foreground mt-1">Send urgent popup notifications to users</p>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap">
         <Button variant={tab === "send" ? "default" : "outline"} size="sm" onClick={() => setTab("send")} data-testid="tab-send"><Send className="w-4 h-4 mr-1" /> Send Alert</Button>
         <Button variant={tab === "history" ? "default" : "outline"} size="sm" onClick={() => { setTab("history"); loadHistory(); }} data-testid="tab-history"><Clock className="w-4 h-4 mr-1" /> History</Button>
+        <Button variant={tab === "mappings" ? "default" : "outline"} size="sm" onClick={() => { setTab("mappings"); loadMappingsData(); }} data-testid="tab-mappings"><Link2 className="w-4 h-4 mr-1" /> Map Users</Button>
       </div>
 
       {tab === "send" && (
@@ -259,6 +318,83 @@ export default function AdminAlerts() {
             </Card>
           ))}
         </div>
+      )}
+
+      {tab === "mappings" && (
+        <Card>
+          <CardHeader className="pb-4 flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Link2 className="w-4 h-4" /> Map OMS & CRM Accounts
+            </CardTitle>
+            <Button
+              size="sm"
+              onClick={saveMappings}
+              disabled={savingMappings || loadingMappings}
+              data-testid="save-mappings-btn"
+            >
+              {savingMappings ? (
+                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4 mr-1" />
+              )}
+              Save Mappings
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {loadingMappings ? (
+              <div className="flex justify-center items-center py-12">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+              </div>
+            ) : (
+              <div className="border border-gray-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800">
+                      <th className="px-4 py-3 text-left font-semibold text-gray-700 dark:text-zinc-300">OMS User</th>
+                      <th className="px-4 py-3 text-center w-16"></th>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-700 dark:text-zinc-300">CRM User Target</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-zinc-800">
+                    {users.length === 0 && (
+                      <tr>
+                        <td colSpan="3" className="px-4 py-8 text-center text-gray-400">
+                          No active OMS users found.
+                        </td>
+                      </tr>
+                    )}
+                    {users.map((u) => (
+                      <tr key={u.id} className="hover:bg-gray-50/50 dark:hover:bg-zinc-900/30 transition-colors">
+                        <td className="px-4 py-3 font-medium text-gray-900 dark:text-white">
+                          <div>{u.name}</div>
+                          <div className="text-xs text-gray-400 font-normal">@{u.username} • {u.role}</div>
+                        </td>
+                        <td className="px-4 py-3 text-center text-gray-400">
+                          <Link2 className="w-4 h-4 inline-block opacity-60" />
+                        </td>
+                        <td className="px-4 py-3">
+                          <select
+                            value={localMappings[u.id] || ""}
+                            onChange={(e) => handleMappingChange(u.id, e.target.value)}
+                            className="w-full max-w-xs px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                            data-testid={`select-mapping-for-${u.id}`}
+                          >
+                            <option value="">Select CRM User...</option>
+                            {otherUsers.map((ou) => (
+                              <option key={ou.id} value={ou.id}>
+                                {ou.name} ({ou.role})
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );

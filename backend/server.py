@@ -3804,6 +3804,42 @@ async def anjani_check_pincode(pincode: str):
 
 # ─── Admin Alert / Urgent Notification System ────────────────────────────
 
+@api_router.get("/admin/alerts/other-users")
+async def get_crm_users(user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    try:
+        crm_db = client["crm_database"]
+        crm_users = await crm_db.users.find({"active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1, "username": 1, "role": 1}).to_list(1000)
+        return crm_users
+    except Exception as e:
+        logging.error(f"Failed to fetch CRM users: {e}")
+        return []
+
+@api_router.get("/admin/alerts/mappings")
+async def get_user_mappings(user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    mappings = await db.user_mappings.find({}, {"_id": 0}).to_list(1000)
+    return mappings
+
+@api_router.post("/admin/alerts/mappings")
+async def save_user_mappings(body: dict, user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    mappings = body.get("mappings", [])
+    await db.user_mappings.delete_many({})
+    if mappings:
+        valid_mappings = []
+        for m in mappings:
+            oms_id = m.get("oms_user_id")
+            crm_id = m.get("crm_user_id")
+            if oms_id and crm_id:
+                valid_mappings.append({"oms_user_id": oms_id, "crm_user_id": crm_id})
+        if valid_mappings:
+            await db.user_mappings.insert_many(valid_mappings)
+    return {"status": "success", "message": "Mappings saved successfully"}
+
 @api_router.post("/admin/alerts")
 async def create_admin_alert(body: dict, user=Depends(get_current_user)):
     if user["role"] != "admin":
@@ -3848,11 +3884,32 @@ async def create_admin_alert(body: dict, user=Depends(get_current_user)):
     # ─── Bidirectional Sync: Forward Alert to CRM ───
     try:
         crm_db = client["crm_database"]
-        # Find usernames of the OMS target recipients
-        oms_target_users = await db.users.find({"id": {"$in": list(target_user_ids)}}, {"_id": 0, "username": 1}).to_list(500)
-        oms_usernames = [u["username"] for u in oms_target_users if u.get("username")]
+        # Find detail info of the OMS target recipients
+        oms_target_users = await db.users.find({"id": {"$in": list(target_user_ids)}}, {"_id": 0, "id": 1, "username": 1}).to_list(500)
 
-        # Map recipient roles from OMS to CRM
+        # Get the mappings from the shared user_mappings collection
+        mappings = await db.user_mappings.find({}).to_list(1000)
+        oms_to_crm = {m["oms_user_id"]: m["crm_user_id"] for m in mappings if m.get("oms_user_id") and m.get("crm_user_id")}
+
+        crm_target_ids = set()
+        mapped_oms_ids = set()
+
+        for u in oms_target_users:
+            oms_uid = u["id"]
+            if oms_uid in oms_to_crm:
+                crm_target_ids.add(oms_to_crm[oms_uid])
+                mapped_oms_ids.add(oms_uid)
+
+        # Fallback to username for users that do not have an explicit mapping
+        unmapped_users = [u for u in oms_target_users if u["id"] not in mapped_oms_ids]
+        if unmapped_users:
+            unmapped_usernames = [u["username"] for u in unmapped_users if u.get("username")]
+            if unmapped_usernames:
+                crm_users_fallback = await crm_db.users.find({"username": {"$in": unmapped_usernames}, "active": {"$ne": False}}, {"_id": 0, "id": 1}).to_list(500)
+                for cu in crm_users_fallback:
+                    crm_target_ids.add(cu["id"])
+
+        # Map recipient roles from OMS to CRM as role-based fallback sync
         crm_recipient_roles = []
         for r in recipient_roles:
             if r == "admin":
@@ -3860,17 +3917,9 @@ async def create_admin_alert(body: dict, user=Depends(get_current_user)):
             elif r == "telecaller":
                 crm_recipient_roles.append("executive")
 
-        # Find matching users in CRM
-        crm_clauses = []
-        if oms_usernames:
-            crm_clauses.append({"username": {"$in": oms_usernames}})
         if crm_recipient_roles:
-            crm_clauses.append({"role": {"$in": crm_recipient_roles}})
-
-        crm_target_ids = set()
-        if crm_clauses:
-            crm_users = await crm_db.users.find({"$or": crm_clauses, "active": {"$ne": False}}, {"_id": 0, "id": 1}).to_list(500)
-            for cu in crm_users:
+            crm_users_by_role = await crm_db.users.find({"role": {"$in": crm_recipient_roles}, "active": {"$ne": False}}, {"_id": 0, "id": 1}).to_list(500)
+            for cu in crm_users_by_role:
                 crm_target_ids.add(cu["id"])
 
         if crm_target_ids:
@@ -3905,7 +3954,16 @@ async def acknowledge_alert(alert_id: str, user=Depends(get_current_user)):
     # ─── Bidirectional Sync: Acknowledge Alert in CRM ───
     try:
         crm_db = client["crm_database"]
-        crm_user = await crm_db.users.find_one({"username": user["username"]})
+        # Check explicit mapping first
+        mapping = await db.user_mappings.find_one({"oms_user_id": user["id"]})
+        crm_user = None
+        if mapping and mapping.get("crm_user_id"):
+            crm_user = await crm_db.users.find_one({"id": mapping["crm_user_id"]})
+
+        if not crm_user:
+            # Fallback to username
+            crm_user = await crm_db.users.find_one({"username": user["username"]})
+
         if crm_user:
             await crm_db.admin_alerts.update_one(
                 {"id": alert_id, "recipient_ids": crm_user["id"]},
