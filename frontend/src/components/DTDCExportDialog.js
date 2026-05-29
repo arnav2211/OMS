@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Download, FileSpreadsheet, X, Info, Loader2 } from "lucide-react";
+import { Download, FileSpreadsheet, X, Info, Loader2, Image as ImageIcon } from "lucide-react";
 
 // ─── Series configs ──────────────────────────────────────────────────────────
 const D_SERIES = {
@@ -64,7 +64,21 @@ const ALL_COLUMNS = [
 ];
 
 // ─── Columns shown in the editable preview (only the ones we fill) ──────────
+// NOTE: Order here controls the preview column order.
+// Weight is moved right after the box image button (which is a special UI column).
+// Order # and Customer Name are sticky-left columns, not in PREVIEW_COLUMNS.
 const PREVIEW_COLUMNS = [
+  // Manual — weight first (the important one to enter)
+  "Weight(KG) (non-document)",
+  // From order (auto-filled)
+  "Declared Price (non-document)",
+  "Destination Pincode",
+  "Destination Name",
+  "Destination Phone",
+  "Destination Address Line 1",
+  "Destination Address Line 2",
+  "Destination City",
+  "Destination State",
   // Fixed
   "Unique_Id",
   "Client Code",
@@ -81,17 +95,6 @@ const PREVIEW_COLUMNS = [
   "Origin City",
   "Origin State",
   "Content Type",
-  // From order (auto-filled)
-  "Declared Price (non-document)",
-  "Destination Pincode",
-  "Destination Name",
-  "Destination Phone",
-  "Destination Address Line 1",
-  "Destination Address Line 2",
-  "Destination City",
-  "Destination State",
-  // Manual
-  "Weight(KG) (non-document)",
 ];
 
 // Column type classification
@@ -144,6 +147,7 @@ function getShortLabel(col) {
 
 // Column min-widths for display
 function getColWidth(col) {
+  if (["Weight(KG) (non-document)"].includes(col)) return 100;
   if (["Origin Address Line 1","Destination Address Line 1","Destination Address Line 2"].includes(col)) return 220;
   if (["Destination Name","Destination Phone"].includes(col)) return 140;
   return 110;
@@ -176,10 +180,19 @@ function getColStyle(col) {
   return COL_STYLES.default;
 }
 
+// Extract only the primary (first) phone number
+function extractPrimaryPhone(phones) {
+  if (!phones) return "";
+  const arr = Array.isArray(phones) ? phones : [String(phones)];
+  // The first non-empty entry is the primary number
+  const primary = arr.find(p => String(p).trim() !== "");
+  return primary ? String(primary).trim() : "";
+}
+
 function buildRowFromOrder(order) {
   const sa = order.shipping_address || {};
-  const phones = order.customer_phone || [];
-  const phone = Array.isArray(phones) ? phones.join(", ") : String(phones || "");
+  // Only use primary phone number
+  const phone = extractPrimaryPhone(order.customer_phone);
 
   // Start with all columns empty
   const row = {};
@@ -204,8 +217,112 @@ function buildRowFromOrder(order) {
   return row;
 }
 
+// ─── Box Image Viewer Modal ───────────────────────────────────────────────────
+function BoxImageModal({ open, onClose, orderId, orderNum, backendUrl }) {
+  const [images, setImages] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+
+  useEffect(() => {
+    if (!open || !orderId) return;
+    setLoading(true);
+    setImages([]);
+    setActiveIdx(0);
+    api.get(`/orders/${orderId}`)
+      .then(res => {
+        const imgs = res.data?.packaging?.packed_box_images || [];
+        setImages(imgs);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [open, orderId]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, zIndex: 9999,
+        background: "rgba(0,0,0,0.75)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: "#fff", borderRadius: 12, padding: 20,
+          maxWidth: 520, width: "95vw", maxHeight: "90vh",
+          overflow: "auto", position: "relative",
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div>
+            <p style={{ fontWeight: 700, fontSize: "0.9rem" }}>Packed Box Images</p>
+            <p style={{ fontSize: "0.75rem", color: "#6b7280" }}>Order {orderNum}</p>
+          </div>
+          <button
+            onClick={onClose}
+            style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#6b7280" }}
+          >
+            <X style={{ width: 18, height: 18 }} />
+          </button>
+        </div>
+
+        {loading ? (
+          <div style={{ display: "flex", justifyContent: "center", padding: "40px 0" }}>
+            <Loader2 style={{ width: 24, height: 24, animation: "spin 1s linear infinite", color: "#6b7280" }} />
+          </div>
+        ) : images.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af" }}>
+            <ImageIcon style={{ width: 36, height: 36, margin: "0 auto 8px", opacity: 0.4 }} />
+            <p style={{ fontSize: "0.8rem" }}>No packed box images uploaded</p>
+          </div>
+        ) : (
+          <>
+            {/* Main image */}
+            <div style={{ borderRadius: 8, overflow: "hidden", background: "#f3f4f6", marginBottom: 10, textAlign: "center" }}>
+              <img
+                src={`${backendUrl}${images[activeIdx]}`}
+                alt={`Box ${activeIdx + 1}`}
+                style={{ maxHeight: 340, maxWidth: "100%", objectFit: "contain" }}
+              />
+            </div>
+            {/* Thumbnails */}
+            {images.length > 1 && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                {images.map((url, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setActiveIdx(i)}
+                    style={{
+                      width: 56, height: 56, borderRadius: 6, overflow: "hidden",
+                      border: i === activeIdx ? "2px solid #3b82f6" : "2px solid #e5e7eb",
+                      cursor: "pointer", padding: 0, background: "none",
+                    }}
+                  >
+                    <img
+                      src={`${backendUrl}${url}`}
+                      alt={`thumb ${i + 1}`}
+                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    />
+                  </button>
+                ))}
+              </div>
+            )}
+            <p style={{ fontSize: "0.7rem", color: "#9ca3af", textAlign: "center", marginTop: 8 }}>
+              {images.length} image{images.length !== 1 ? "s" : ""}
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function DTDCExportDialog({ open, onClose, orders }) {
   const [rows, setRows] = useState([]);
+  const [orderMeta, setOrderMeta] = useState([]); // {id, orderNum, customerName} per row
   // Per-row series detection state: { [rowIdx]: { loading, series, error } }
   const [rowSeries, setRowSeries] = useState({});
   // Debounce timers per row
@@ -214,12 +331,21 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
   const rowsRef = useRef([]);
   useEffect(() => { rowsRef.current = rows; }, [rows]);
 
+  // Box image modal state
+  const [boxModal, setBoxModal] = useState({ open: false, orderId: null, orderNum: "" });
+  const backendUrl = process.env.REACT_APP_BACKEND_URL || "";
+
   useEffect(() => {
     if (open && orders.length > 0) {
       setRows(orders.map(o => ({
         _orderId:  o.id,
         _orderNum: o.order_number,
         ...buildRowFromOrder(o),
+      })));
+      setOrderMeta(orders.map(o => ({
+        id: o.id,
+        orderNum: o.order_number,
+        customerName: o.customer_name || "",
       })));
       setRowSeries({});
     }
@@ -287,6 +413,7 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
 
   const removeRow = (rowIdx) => {
     setRows(prev => prev.filter((_, i) => i !== rowIdx));
+    setOrderMeta(prev => prev.filter((_, i) => i !== rowIdx));
   };
 
   // Helper: build and trigger download of one xlsx file
@@ -339,277 +466,365 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
   if (!open) return null;
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent
-        className="p-0 flex flex-col"
-        style={{
-          maxWidth: "98vw",
-          width: "98vw",
-          maxHeight: "95vh",
-          borderRadius: 12,
-          overflow: "hidden",
-        }}
-      >
-        {/* ── Header ── */}
-        <DialogHeader
-          className="flex-shrink-0 px-5 pt-4 pb-3 border-b"
-          style={{ background: "linear-gradient(135deg,#0f2044 0%,#1a3a6b 100%)" }}
+    <>
+      {/* Box image modal rendered outside Dialog to avoid z-index issues */}
+      <BoxImageModal
+        open={boxModal.open}
+        onClose={() => setBoxModal({ open: false, orderId: null, orderNum: "" })}
+        orderId={boxModal.orderId}
+        orderNum={boxModal.orderNum}
+        backendUrl={backendUrl}
+      />
+
+      <Dialog open={open} onOpenChange={onClose}>
+        <DialogContent
+          className="p-0 flex flex-col"
+          style={{
+            maxWidth: "98vw",
+            width: "98vw",
+            maxHeight: "95vh",
+            borderRadius: 12,
+            overflow: "hidden",
+          }}
         >
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg" style={{ background: "rgba(255,255,255,0.15)" }}>
-              <FileSpreadsheet className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <DialogTitle className="text-base font-semibold text-white">
-                DTDC Excel Export — Preview &amp; Edit
-              </DialogTitle>
-              <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.7)" }}>
-                All cells are editable. Review before downloading.
-              </p>
-            </div>
-          </div>
-
-          {/* Legend */}
-          <div className="flex flex-wrap gap-4 mt-3">
-            {[
-              { style: COL_STYLES.fixed,  label: "Fixed defaults" },
-              { style: COL_STYLES.order,  label: "From order data" },
-              { style: COL_STYLES.manual, label: "Weight ★ → auto-detects series" },
-            ].map(({ style, label }) => (
-              <div key={label} className="flex items-center gap-2 text-xs">
-                <span
-                  className="inline-block rounded px-2 py-0.5 font-medium"
-                  style={{ background: style.cell.background, color: style.cell.color, border: `1px solid ${style.header.background}` }}
-                >
-                  {label}
-                </span>
+          {/* ── Header ── */}
+          <DialogHeader
+            className="flex-shrink-0 px-5 pt-4 pb-3 border-b"
+            style={{ background: "linear-gradient(135deg,#0f2044 0%,#1a3a6b 100%)" }}
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg" style={{ background: "rgba(255,255,255,0.15)" }}>
+                <FileSpreadsheet className="w-5 h-5 text-white" />
               </div>
-            ))}
-            <div className="flex items-center gap-2 text-xs">
-              <span className="inline-block rounded px-2 py-0.5 font-medium" style={{ background: "#7c3aed", color: "#fff" }}>M-Series → RL1423 / STD EXP-A</span>
-              <span className="inline-block rounded px-2 py-0.5 font-medium" style={{ background: "#0369a1", color: "#fff" }}>D-Series → RL1386 / GROUND EXPRESS</span>
+              <div>
+                <DialogTitle className="text-base font-semibold text-white">
+                  DTDC Excel Export — Preview &amp; Edit
+                </DialogTitle>
+                <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.7)" }}>
+                  All cells are editable. Review before downloading.
+                </p>
+              </div>
             </div>
-          </div>
-        </DialogHeader>
 
-        {/* ── Table ── */}
-        <div className="flex-1 overflow-auto" style={{ minHeight: 0 }}>
-          {rows.length === 0 ? (
-            <div className="flex items-center justify-center h-40 text-muted-foreground">
-              No orders to display.
+            {/* Legend */}
+            <div className="flex flex-wrap gap-4 mt-3">
+              {[
+                { style: COL_STYLES.fixed,  label: "Fixed defaults" },
+                { style: COL_STYLES.order,  label: "From order data" },
+                { style: COL_STYLES.manual, label: "Weight ★ → auto-detects series" },
+              ].map(({ style, label }) => (
+                <div key={label} className="flex items-center gap-2 text-xs">
+                  <span
+                    className="inline-block rounded px-2 py-0.5 font-medium"
+                    style={{ background: style.cell.background, color: style.cell.color, border: `1px solid ${style.header.background}` }}
+                  >
+                    {label}
+                  </span>
+                </div>
+              ))}
+              <div className="flex items-center gap-2 text-xs">
+                <span className="inline-block rounded px-2 py-0.5 font-medium" style={{ background: "#7c3aed", color: "#fff" }}>M-Series → RL1423 / STD EXP-A</span>
+                <span className="inline-block rounded px-2 py-0.5 font-medium" style={{ background: "#0369a1", color: "#fff" }}>D-Series → RL1386 / GROUND EXPRESS</span>
+              </div>
             </div>
-          ) : (
-            <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(95vh - 200px)" }}>
-              <table style={{ borderCollapse: "collapse", minWidth: "max-content", tableLayout: "fixed" }}>
-                <thead style={{ position: "sticky", top: 0, zIndex: 20 }}>
-                  <tr>
-                    {/* Sticky order# column */}
-                    <th
-                      style={{
-                        position: "sticky", left: 0, zIndex: 30,
-                        background: "#0f2044", color: "#fff",
-                        padding: "8px 10px", fontSize: "0.7rem", fontWeight: 600,
-                        border: "1px solid #2a4a7f", whiteSpace: "nowrap", minWidth: 90,
-                      }}
-                    >
-                      Order #
-                    </th>
+          </DialogHeader>
 
-                    {PREVIEW_COLUMNS.map(col => {
-                      const s = getColStyle(col);
-                      return (
-                        <th
-                          key={col}
-                          title={col}
-                          style={{
-                            ...s.header,
-                            padding: "7px 8px",
-                            fontSize: "0.68rem",
-                            fontWeight: 600,
-                            border: "1px solid rgba(0,0,0,0.15)",
-                            whiteSpace: "nowrap",
-                            minWidth: getColWidth(col),
-                            letterSpacing: "0.01em",
-                          }}
-                        >
-                          {getShortLabel(col)}
-                        </th>
-                      );
-                    })}
-
-                    {/* Remove column */}
-                    <th
-                      style={{
-                        position: "sticky", right: 0, zIndex: 30,
-                        background: "#0f2044", color: "#fff",
-                        padding: "8px 6px", fontSize: "0.7rem", fontWeight: 600,
-                        border: "1px solid #2a4a7f", minWidth: 44,
-                      }}
-                    >
-                      ✕
-                    </th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {rows.map((row, rowIdx) => {
-                    const rs = rowSeries[rowIdx];
-                    const seriesBadgeStyle = rs?.series === "M-Series"
-                      ? { background: "#7c3aed", color: "#fff" }
-                      : rs?.series === "D-Series"
-                        ? { background: "#0369a1", color: "#fff" }
-                        : rs?.error
-                          ? { background: "#dc2626", color: "#fff" }
-                          : { background: "#e5e7eb", color: "#374151" };
-                    const seriesLabel = rs?.loading
-                      ? "…"
-                      : rs?.series || (rs?.error ? "!": "—");
-                    return (
-                    <tr
-                      key={row._orderId || rowIdx}
-                      style={{ background: rowIdx % 2 === 0 ? "#fff" : "#f8fafc" }}
-                    >
-                      {/* Order number + series badge */}
-                      <td
+          {/* ── Table ── */}
+          <div className="flex-1 overflow-auto" style={{ minHeight: 0 }}>
+            {rows.length === 0 ? (
+              <div className="flex items-center justify-center h-40 text-muted-foreground">
+                No orders to display.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(95vh - 200px)" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "max-content", tableLayout: "fixed" }}>
+                  <thead style={{ position: "sticky", top: 0, zIndex: 20 }}>
+                    <tr>
+                      {/* Sticky Order # column */}
+                      <th
                         style={{
-                          position: "sticky", left: 0, zIndex: 10,
-                          background: rowIdx % 2 === 0 ? "#f0f4ff" : "#e8eeff",
-                          padding: "4px 8px", fontSize: "0.7rem", fontWeight: 600,
-                          color: "#1e3a8a", border: "1px solid #d1d5db",
-                          whiteSpace: "nowrap", minWidth: 120,
+                          position: "sticky", left: 0, zIndex: 30,
+                          background: "#0f2044", color: "#fff",
+                          padding: "8px 10px", fontSize: "0.7rem", fontWeight: 600,
+                          border: "1px solid #2a4a7f", whiteSpace: "nowrap", minWidth: 90,
                         }}
                       >
-                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                          <span>{row._orderNum || `#${rowIdx + 1}`}</span>
-                          <span
-                            title={rs?.error || (rs?.series ? `Auto-detected: ${rs.series}` : "Enter weight to auto-detect series")}
-                            style={{
-                              ...seriesBadgeStyle,
-                              fontSize: "0.6rem",
-                              fontWeight: 700,
-                              padding: "1px 5px",
-                              borderRadius: 4,
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 3,
-                              letterSpacing: "0.02em",
-                            }}
-                          >
-                            {rs?.loading && <Loader2 style={{ width: 8, height: 8, animation: "spin 1s linear infinite" }} />}
-                            {seriesLabel}
-                          </span>
-                        </div>
-                      </td>
+                        Order #
+                      </th>
+
+                      {/* Sticky Customer Name column */}
+                      <th
+                        style={{
+                          position: "sticky", left: 90, zIndex: 30,
+                          background: "#0f2044", color: "#fff",
+                          padding: "8px 10px", fontSize: "0.7rem", fontWeight: 600,
+                          border: "1px solid #2a4a7f", whiteSpace: "nowrap", minWidth: 130,
+                        }}
+                      >
+                        Customer
+                      </th>
+
+                      {/* Box Image button column header */}
+                      <th
+                        style={{
+                          background: "#1e293b", color: "#cbd5e1",
+                          padding: "8px 10px", fontSize: "0.7rem", fontWeight: 600,
+                          border: "1px solid #334155", whiteSpace: "nowrap", minWidth: 80,
+                        }}
+                      >
+                        Box Img
+                      </th>
 
                       {PREVIEW_COLUMNS.map(col => {
                         const s = getColStyle(col);
                         return (
-                          <td
+                          <th
                             key={col}
+                            title={col}
                             style={{
-                              background: s.cell.background,
-                              border: "1px solid #d1d5db",
-                              padding: 0,
+                              ...s.header,
+                              padding: "7px 8px",
+                              fontSize: "0.68rem",
+                              fontWeight: 600,
+                              border: "1px solid rgba(0,0,0,0.15)",
+                              whiteSpace: "nowrap",
                               minWidth: getColWidth(col),
+                              letterSpacing: "0.01em",
                             }}
                           >
-                            <input
-                              value={row[col] ?? ""}
-                              onChange={e => updateCell(rowIdx, col, e.target.value)}
-                              placeholder={COL_TYPE.manual.has(col) ? "★ Enter weight" : ""}
-                              style={{
-                                width: "100%",
-                                background: "transparent",
-                                border: "none",
-                                outline: "none",
-                                padding: "5px 8px",
-                                fontSize: "0.7rem",
-                                color: s.cell.color,
-                                fontFamily: "inherit",
-                                fontWeight: COL_TYPE.manual.has(col) ? 600 : 400,
-                              }}
-                              onFocus={e => { e.target.style.boxShadow = "inset 0 0 0 2px #3b82f6"; e.target.style.borderRadius = "2px"; }}
-                              onBlur={e => { e.target.style.boxShadow = "none"; }}
-                            />
-                          </td>
+                            {getShortLabel(col)}
+                          </th>
                         );
                       })}
 
-                      {/* Remove */}
-                      <td
+                      {/* Remove column */}
+                      <th
                         style={{
-                          position: "sticky", right: 0, zIndex: 10,
-                          background: rowIdx % 2 === 0 ? "#fff" : "#f8fafc",
-                          border: "1px solid #d1d5db",
-                          padding: "4px 6px", textAlign: "center",
+                          position: "sticky", right: 0, zIndex: 30,
+                          background: "#0f2044", color: "#fff",
+                          padding: "8px 6px", fontSize: "0.7rem", fontWeight: 600,
+                          border: "1px solid #2a4a7f", minWidth: 44,
                         }}
                       >
-                        <button
-                          onClick={() => removeRow(rowIdx)}
-                          title="Remove row"
-                          style={{
-                            background: "none", border: "none", cursor: "pointer",
-                            color: "#ef4444", padding: "2px 4px", borderRadius: 4,
-                            fontSize: "0.75rem", lineHeight: 1,
-                          }}
-                          onMouseEnter={e => e.currentTarget.style.background = "#fee2e2"}
-                          onMouseLeave={e => e.currentTarget.style.background = "none"}
-                        >
-                          <X style={{ width: 13, height: 13 }} />
-                        </button>
-                      </td>
+                        ✕
+                      </th>
                     </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+                  </thead>
 
-        {/* ── Footer ── */}
-        <DialogFooter
-          className="flex-shrink-0 px-5 py-3 border-t flex items-center justify-between gap-3"
-          style={{ background: "#f8fafc" }}
-        >
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Info className="w-3.5 h-3.5" />
-            <span>
-              {rows.length} row(s) ·{" "}
-              {(() => {
-                const d = rows.filter((_, i) => rowSeries[i]?.series === "D-Series").length;
-                const m = rows.filter((_, i) => rowSeries[i]?.series === "M-Series").length;
-                const u = rows.filter((_, i) => !rowSeries[i]?.series).length;
-                const parts = [];
-                if (d > 0) parts.push(`${d} D-Series`);
-                if (m > 0) parts.push(`${m} M-Series`);
-                if (u > 0) parts.push(`${u} pending`);
-                return parts.length > 0 ? parts.join(" · ") : "Enter weights to detect series";
-              })()}
-            </span>
+                  <tbody>
+                    {rows.map((row, rowIdx) => {
+                      const rs = rowSeries[rowIdx];
+                      const meta = orderMeta[rowIdx] || {};
+                      const seriesBadgeStyle = rs?.series === "M-Series"
+                        ? { background: "#7c3aed", color: "#fff" }
+                        : rs?.series === "D-Series"
+                          ? { background: "#0369a1", color: "#fff" }
+                          : rs?.error
+                            ? { background: "#dc2626", color: "#fff" }
+                            : { background: "#e5e7eb", color: "#374151" };
+                      const seriesLabel = rs?.loading
+                        ? "…"
+                        : rs?.series || (rs?.error ? "!": "—");
+                      return (
+                      <tr
+                        key={row._orderId || rowIdx}
+                        style={{ background: rowIdx % 2 === 0 ? "#fff" : "#f8fafc" }}
+                      >
+                        {/* Order number + series badge */}
+                        <td
+                          style={{
+                            position: "sticky", left: 0, zIndex: 10,
+                            background: rowIdx % 2 === 0 ? "#f0f4ff" : "#e8eeff",
+                            padding: "4px 8px", fontSize: "0.7rem", fontWeight: 600,
+                            color: "#1e3a8a", border: "1px solid #d1d5db",
+                            whiteSpace: "nowrap", minWidth: 90,
+                          }}
+                        >
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            <span>{row._orderNum || `#${rowIdx + 1}`}</span>
+                            <span
+                              title={rs?.error || (rs?.series ? `Auto-detected: ${rs.series}` : "Enter weight to auto-detect series")}
+                              style={{
+                                ...seriesBadgeStyle,
+                                fontSize: "0.6rem",
+                                fontWeight: 700,
+                                padding: "1px 5px",
+                                borderRadius: 4,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 3,
+                                letterSpacing: "0.02em",
+                              }}
+                            >
+                              {rs?.loading && <Loader2 style={{ width: 8, height: 8, animation: "spin 1s linear infinite" }} />}
+                              {seriesLabel}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* Customer Name */}
+                        <td
+                          style={{
+                            position: "sticky", left: 90, zIndex: 10,
+                            background: rowIdx % 2 === 0 ? "#f0f4ff" : "#e8eeff",
+                            padding: "4px 8px", fontSize: "0.7rem",
+                            color: "#374151", border: "1px solid #d1d5db",
+                            whiteSpace: "nowrap", minWidth: 130,
+                            fontWeight: 500,
+                          }}
+                        >
+                          {meta.customerName || "—"}
+                        </td>
+
+                        {/* Box Image button */}
+                        <td
+                          style={{
+                            background: rowIdx % 2 === 0 ? "#f8fafc" : "#f1f5f9",
+                            border: "1px solid #d1d5db",
+                            padding: "4px 8px",
+                            textAlign: "center",
+                            minWidth: 80,
+                          }}
+                        >
+                          <button
+                            onClick={() => setBoxModal({
+                              open: true,
+                              orderId: meta.id || row._orderId,
+                              orderNum: meta.orderNum || row._orderNum,
+                            })}
+                            title="View packed box images"
+                            style={{
+                              background: "#1e293b",
+                              border: "none",
+                              cursor: "pointer",
+                              color: "#e2e8f0",
+                              padding: "3px 7px",
+                              borderRadius: 5,
+                              fontSize: "0.62rem",
+                              fontWeight: 600,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 3,
+                              letterSpacing: "0.01em",
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = "#334155"}
+                            onMouseLeave={e => e.currentTarget.style.background = "#1e293b"}
+                          >
+                            <ImageIcon style={{ width: 10, height: 10 }} />
+                            Box
+                          </button>
+                        </td>
+
+                        {PREVIEW_COLUMNS.map(col => {
+                          const s = getColStyle(col);
+                          return (
+                            <td
+                              key={col}
+                              style={{
+                                background: s.cell.background,
+                                border: "1px solid #d1d5db",
+                                padding: 0,
+                                minWidth: getColWidth(col),
+                              }}
+                            >
+                              <input
+                                value={row[col] ?? ""}
+                                onChange={e => updateCell(rowIdx, col, e.target.value)}
+                                placeholder={COL_TYPE.manual.has(col) ? "★ Enter weight" : ""}
+                                style={{
+                                  width: "100%",
+                                  background: "transparent",
+                                  border: "none",
+                                  outline: "none",
+                                  padding: "5px 8px",
+                                  fontSize: "0.7rem",
+                                  color: s.cell.color,
+                                  fontFamily: "inherit",
+                                  fontWeight: COL_TYPE.manual.has(col) ? 600 : 400,
+                                }}
+                                onFocus={e => { e.target.style.boxShadow = "inset 0 0 0 2px #3b82f6"; e.target.style.borderRadius = "2px"; }}
+                                onBlur={e => { e.target.style.boxShadow = "none"; }}
+                              />
+                            </td>
+                          );
+                        })}
+
+                        {/* Remove */}
+                        <td
+                          style={{
+                            position: "sticky", right: 0, zIndex: 10,
+                            background: rowIdx % 2 === 0 ? "#fff" : "#f8fafc",
+                            border: "1px solid #d1d5db",
+                            padding: "4px 6px", textAlign: "center",
+                          }}
+                        >
+                          <button
+                            onClick={() => removeRow(rowIdx)}
+                            title="Remove row"
+                            style={{
+                              background: "none", border: "none", cursor: "pointer",
+                              color: "#ef4444", padding: "2px 4px", borderRadius: 4,
+                              fontSize: "0.75rem", lineHeight: 1,
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = "#fee2e2"}
+                            onMouseLeave={e => e.currentTarget.style.background = "none"}
+                          >
+                            <X style={{ width: 13, height: 13 }} />
+                          </button>
+                        </td>
+                      </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={onClose} className="h-8 text-sm">
-              Cancel
-            </Button>
-            <Button
-              onClick={handleDownload}
-              disabled={rows.length === 0}
-              className="h-8 text-sm gap-2"
-              style={{ background: "#16a34a", color: "#fff" }}
-            >
-              <Download className="w-4 h-4" />
-              {(() => {
-                const d = rows.filter((_, i) => rowSeries[i]?.series === "D-Series" || !rowSeries[i]?.series).length;
-                const m = rows.filter((_, i) => rowSeries[i]?.series === "M-Series").length;
-                if (d > 0 && m > 0) return `Download 2 Files (${d}D + ${m}M)`;
-                if (m > 0) return `Download M-Series (${m})`;
-                return `Download D-Series (${d})`;
-              })()}
-            </Button>
-          </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+
+          {/* ── Footer ── */}
+          <DialogFooter
+            className="flex-shrink-0 px-5 py-3 border-t flex items-center justify-between gap-3"
+            style={{ background: "#f8fafc" }}
+          >
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Info className="w-3.5 h-3.5" />
+              <span>
+                {rows.length} row(s) ·{" "}
+                {(() => {
+                  const d = rows.filter((_, i) => rowSeries[i]?.series === "D-Series").length;
+                  const m = rows.filter((_, i) => rowSeries[i]?.series === "M-Series").length;
+                  const u = rows.filter((_, i) => !rowSeries[i]?.series).length;
+                  const parts = [];
+                  if (d > 0) parts.push(`${d} D-Series`);
+                  if (m > 0) parts.push(`${m} M-Series`);
+                  if (u > 0) parts.push(`${u} pending`);
+                  return parts.length > 0 ? parts.join(" · ") : "Enter weights to detect series";
+                })()}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={onClose} className="h-8 text-sm">
+                Cancel
+              </Button>
+              <Button
+                onClick={handleDownload}
+                disabled={rows.length === 0}
+                className="h-8 text-sm gap-2"
+                style={{ background: "#16a34a", color: "#fff" }}
+              >
+                <Download className="w-4 h-4" />
+                {(() => {
+                  const d = rows.filter((_, i) => rowSeries[i]?.series === "D-Series" || !rowSeries[i]?.series).length;
+                  const m = rows.filter((_, i) => rowSeries[i]?.series === "M-Series").length;
+                  if (d > 0 && m > 0) return `Download 2 Files (${d}D + ${m}M)`;
+                  if (m > 0) return `Download M-Series (${m})`;
+                  return `Download D-Series (${d})`;
+                })()}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
