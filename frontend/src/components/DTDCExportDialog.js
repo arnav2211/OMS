@@ -554,21 +554,6 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
 
   return (
     <>
-      {/* Box image modal rendered outside Dialog to avoid z-index issues */}
-      <BoxImageModal
-        open={boxModal.open}
-        onClose={() => setBoxModal({ open: false, orderId: null, orderNum: "" })}
-        orderId={boxModal.orderId}
-        orderNum={boxModal.orderNum}
-        backendUrl={backendUrl}
-        onWeightUpdate={(weight) => {
-          const rowIdx = rows.findIndex(r => r._orderId === boxModal.orderId);
-          if (rowIdx !== -1) {
-            updateCell(rowIdx, "Weight(KG) (non-document)", weight);
-          }
-        }}
-      />
-
       <Dialog open={open} onOpenChange={onClose}>
         <DialogContent
           className="p-0 flex flex-col"
@@ -588,6 +573,20 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
             overflow: "hidden",
           }}
         >
+          {/* Box image modal rendered inside DialogContent to avoid Radix UI blocking pointer events */}
+          <BoxImageModal
+            open={boxModal.open}
+            onClose={() => setBoxModal({ open: false, orderId: null, orderNum: "" })}
+            orderId={boxModal.orderId}
+            orderNum={boxModal.orderNum}
+            backendUrl={backendUrl}
+            onWeightUpdate={(weight) => {
+              const rowIdx = rows.findIndex(r => r._orderId === boxModal.orderId);
+              if (rowIdx !== -1) {
+                updateCell(rowIdx, "Weight(KG) (non-document)", weight);
+              }
+            }}
+          />
           {/* ── Header ── */}
           <DialogHeader
             className="flex-shrink-0 px-5 pt-4 pb-3 border-b"
