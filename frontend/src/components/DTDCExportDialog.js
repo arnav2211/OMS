@@ -211,31 +211,54 @@ function buildRowFromOrder(order) {
   row["Destination City"]               = sa.city          || "";
   row["Destination State"]              = sa.state         || "";
 
-  // Manual entry — empty
-  row["Weight(KG) (non-document)"] = "";
+  // Manual entry — prefill if packaging weight is already saved on the order
+  row["Weight(KG) (non-document)"] = order.packaging?.weight_kg || "";
 
   return row;
 }
 
 // ─── Box Image Viewer Modal ───────────────────────────────────────────────────
-function BoxImageModal({ open, onClose, orderId, orderNum, backendUrl }) {
+function BoxImageModal({ open, onClose, orderId, orderNum, backendUrl, onWeightUpdate }) {
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
+  const [weight, setWeight] = useState("");
+  const [savingWeight, setSavingWeight] = useState(false);
 
   useEffect(() => {
     if (!open || !orderId) return;
     setLoading(true);
     setImages([]);
     setActiveIdx(0);
+    setWeight("");
     api.get(`/orders/${orderId}`)
       .then(res => {
         const imgs = res.data?.packaging?.packed_box_images || [];
         setImages(imgs);
+        setWeight(res.data?.packaging?.weight_kg || "");
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [open, orderId]);
+
+  const handleSaveWeight = async () => {
+    if (!orderId) return;
+    setSavingWeight(true);
+    try {
+      // Attempt to save to backend (will succeed if user has packaging/admin edit permission)
+      await api.put(`/orders/${orderId}/packaging`, { weight_kg: weight });
+      toast.success("Order weight saved successfully!");
+    } catch (err) {
+      console.warn("Could not persist weight to database, using local update", err);
+    } finally {
+      setSavingWeight(false);
+      // Callback to update parent spreadsheet row immediately
+      if (onWeightUpdate) {
+        onWeightUpdate(weight);
+      }
+      onClose();
+    }
+  };
 
   if (!open) return null;
 
@@ -315,6 +338,51 @@ function BoxImageModal({ open, onClose, orderId, orderNum, backendUrl }) {
             </p>
           </>
         )}
+
+        {/* Weight entry block */}
+        <div style={{ marginTop: 16, borderTop: "1px solid #e5e7eb", paddingTop: 16 }}>
+          <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "#374151", marginBottom: 6 }}>
+            Package Weight (KG)
+          </label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              type="number"
+              step="0.001"
+              min="0"
+              value={weight}
+              onChange={e => setWeight(e.target.value)}
+              placeholder="Enter weight in KG (e.g. 1.5)"
+              disabled={loading}
+              style={{
+                flex: 1,
+                padding: "6px 10px",
+                fontSize: "0.8rem",
+                border: "1px solid #d1d5db",
+                borderRadius: 6,
+                outline: "none",
+                background: loading ? "#f3f4f6" : "#fff",
+              }}
+              onKeyDown={e => {
+                if (e.key === "Enter" && !savingWeight) {
+                  handleSaveWeight();
+                }
+              }}
+            />
+            <Button
+              onClick={handleSaveWeight}
+              disabled={loading || savingWeight}
+              className="h-8 text-xs font-semibold"
+              style={{ background: "#2563eb", color: "#fff", padding: "0 14px", borderRadius: 6 }}
+            >
+              {savingWeight ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <Loader2 style={{ width: 12, height: 12, animation: "spin 1s linear infinite" }} />
+                  Saving...
+                </div>
+              ) : "Save & Update"}
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -334,22 +402,6 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
   // Box image modal state
   const [boxModal, setBoxModal] = useState({ open: false, orderId: null, orderNum: "" });
   const backendUrl = process.env.REACT_APP_BACKEND_URL || "";
-
-  useEffect(() => {
-    if (open && orders.length > 0) {
-      setRows(orders.map(o => ({
-        _orderId:  o.id,
-        _orderNum: o.order_number,
-        ...buildRowFromOrder(o),
-      })));
-      setOrderMeta(orders.map(o => ({
-        id: o.id,
-        orderNum: o.order_number,
-        customerName: o.customer_name || "",
-      })));
-      setRowSeries({});
-    }
-  }, [open, orders]);
 
   // Detect series for a row using weight + destination pincode
   const detectSeries = useCallback(async (rowIdx, weightStr, pincode) => {
@@ -407,6 +459,12 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
         const row = rowsRef.current[rowIdx];
         const pincode = row?.["Destination Pincode"] ?? "";
         detectSeries(rowIdx, value, pincode);
+
+        // Auto-save to backend in background
+        const orderId = row?._orderId;
+        if (orderId) {
+          api.put(`/orders/${orderId}/packaging`, { weight_kg: value }).catch(() => {});
+        }
       }, 600);
     }
   };
@@ -415,6 +473,35 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
     setRows(prev => prev.filter((_, i) => i !== rowIdx));
     setOrderMeta(prev => prev.filter((_, i) => i !== rowIdx));
   };
+
+  useEffect(() => {
+    if (open && orders.length > 0) {
+      const initialRows = orders.map(o => ({
+        _orderId:  o.id,
+        _orderNum: o.order_number,
+        ...buildRowFromOrder(o),
+      }));
+      setRows(initialRows);
+      setOrderMeta(orders.map(o => ({
+        id: o.id,
+        orderNum: o.order_number,
+        customerName: o.customer_name || "",
+      })));
+      setRowSeries({});
+      setBoxModal({ open: false, orderId: null, orderNum: "" });
+
+      // Run detectSeries for any row with prefilled weight!
+      initialRows.forEach((row, idx) => {
+        const wt = row["Weight(KG) (non-document)"];
+        const pin = row["Destination Pincode"];
+        if (wt && pin) {
+          detectSeries(idx, wt, pin);
+        }
+      });
+    } else if (!open) {
+      setBoxModal({ open: false, orderId: null, orderNum: "" });
+    }
+  }, [open, orders, detectSeries]);
 
   // Helper: build and trigger download of one xlsx file
   const downloadSheet = (exportRows, filename, sheetName) => {
@@ -474,11 +561,25 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
         orderId={boxModal.orderId}
         orderNum={boxModal.orderNum}
         backendUrl={backendUrl}
+        onWeightUpdate={(weight) => {
+          const rowIdx = rows.findIndex(r => r._orderId === boxModal.orderId);
+          if (rowIdx !== -1) {
+            updateCell(rowIdx, "Weight(KG) (non-document)", weight);
+          }
+        }}
       />
 
       <Dialog open={open} onOpenChange={onClose}>
         <DialogContent
           className="p-0 flex flex-col"
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => {
+            if (boxModal.open) {
+              e.preventDefault();
+              setBoxModal({ open: false, orderId: null, orderNum: "" });
+            }
+          }}
           style={{
             maxWidth: "98vw",
             width: "98vw",
