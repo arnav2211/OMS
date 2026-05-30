@@ -218,7 +218,7 @@ function buildRowFromOrder(order) {
 }
 
 // ─── Box Image Viewer Modal ───────────────────────────────────────────────────
-function BoxImageModal({ open, onClose, orderId, orderNum, backendUrl, onWeightUpdate }) {
+function BoxImageViewer({ open, onClose, orderId, orderNum, backendUrl, onWeightUpdate }) {
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -245,14 +245,12 @@ function BoxImageModal({ open, onClose, orderId, orderNum, backendUrl, onWeightU
     if (!orderId) return;
     setSavingWeight(true);
     try {
-      // Attempt to save to backend (will succeed if user has packaging/admin edit permission)
       await api.put(`/orders/${orderId}/packaging`, { weight_kg: weight });
       toast.success("Order weight saved successfully!");
     } catch (err) {
       console.warn("Could not persist weight to database, using local update", err);
     } finally {
       setSavingWeight(false);
-      // Callback to update parent spreadsheet row immediately
       if (onWeightUpdate) {
         onWeightUpdate(weight);
       }
@@ -265,124 +263,170 @@ function BoxImageModal({ open, onClose, orderId, orderNum, backendUrl, onWeightU
   return (
     <div
       style={{
-        position: "fixed", inset: 0, zIndex: 9999,
-        background: "rgba(0,0,0,0.75)",
-        display: "flex", alignItems: "center", justifyContent: "center",
+        position: "absolute",
+        inset: 0,
+        zIndex: 50,
+        background: "#ffffff",
+        display: "flex",
+        flexDirection: "column",
+        borderRadius: 12,
+        overflow: "hidden",
       }}
-      onClick={onClose}
     >
+      {/* Header */}
       <div
         style={{
-          background: "#fff", borderRadius: 12, padding: 20,
-          maxWidth: 520, width: "95vw", maxHeight: "90vh",
-          overflow: "auto", position: "relative",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "12px 20px",
+          borderBottom: "1px solid #e2e8f0",
+          background: "#f8fafc",
+          flexShrink: 0,
         }}
-        onClick={e => e.stopPropagation()}
       >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-          <div>
-            <p style={{ fontWeight: 700, fontSize: "0.9rem" }}>Packed Box Images</p>
-            <p style={{ fontSize: "0.75rem", color: "#6b7280" }}>Order {orderNum}</p>
-          </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <button
             onClick={onClose}
-            style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#6b7280" }}
+            style={{
+              background: "#2563eb",
+              color: "#fff",
+              border: "none",
+              cursor: "pointer",
+              padding: "6px 12px",
+              borderRadius: 6,
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = "#1d4ed8"}
+            onMouseLeave={e => e.currentTarget.style.background = "#2563eb"}
           >
-            <X style={{ width: 18, height: 18 }} />
+            ← Back to Excel Preview
           </button>
-        </div>
-
-        {loading ? (
-          <div style={{ display: "flex", justifyContent: "center", padding: "40px 0" }}>
-            <Loader2 style={{ width: 24, height: 24, animation: "spin 1s linear infinite", color: "#6b7280" }} />
+          <div>
+            <span style={{ fontWeight: 700, fontSize: "0.9rem", color: "#1e293b" }}>Packed Box Images</span>
+            <span style={{ fontSize: "0.75rem", color: "#64748b", marginLeft: 8 }}>Order {orderNum}</span>
           </div>
-        ) : images.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af" }}>
-            <ImageIcon style={{ width: 36, height: 36, margin: "0 auto 8px", opacity: 0.4 }} />
-            <p style={{ fontSize: "0.8rem" }}>No packed box images uploaded</p>
+        </div>
+        <button
+          onClick={onClose}
+          style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#64748b" }}
+        >
+          <X style={{ width: 20, height: 20 }} />
+        </button>
+      </div>
+
+      {/* Main Content (Scrollable Split Layout: Left = Images, Right = Weight Entry) */}
+      <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+        {loading ? (
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", minHeight: 200 }}>
+            <Loader2 style={{ width: 32, height: 32, animation: "spin 1s linear infinite", color: "#3b82f6" }} />
           </div>
         ) : (
-          <>
-            {/* Main image */}
-            <div style={{ borderRadius: 8, overflow: "hidden", background: "#f3f4f6", marginBottom: 10, textAlign: "center" }}>
-              <img
-                src={`${backendUrl}${images[activeIdx]}`}
-                alt={`Box ${activeIdx + 1}`}
-                style={{ maxHeight: 340, maxWidth: "100%", objectFit: "contain" }}
-              />
-            </div>
-            {/* Thumbnails */}
-            {images.length > 1 && (
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-                {images.map((url, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setActiveIdx(i)}
-                    style={{
-                      width: 56, height: 56, borderRadius: 6, overflow: "hidden",
-                      border: i === activeIdx ? "2px solid #3b82f6" : "2px solid #e5e7eb",
-                      cursor: "pointer", padding: 0, background: "none",
-                    }}
-                  >
-                    <img
-                      src={`${backendUrl}${url}`}
-                      alt={`thumb ${i + 1}`}
-                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                    />
-                  </button>
-                ))}
-              </div>
-            )}
-            <p style={{ fontSize: "0.7rem", color: "#9ca3af", textAlign: "center", marginTop: 8 }}>
-              {images.length} image{images.length !== 1 ? "s" : ""}
-            </p>
-          </>
-        )}
-
-        {/* Weight entry block */}
-        <div style={{ marginTop: 16, borderTop: "1px solid #e5e7eb", paddingTop: 16 }}>
-          <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "#374151", marginBottom: 6 }}>
-            Package Weight (KG)
-          </label>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input
-              type="number"
-              step="0.001"
-              min="0"
-              value={weight}
-              onChange={e => setWeight(e.target.value)}
-              placeholder="Enter weight in KG (e.g. 1.5)"
-              disabled={loading}
-              style={{
-                flex: 1,
-                padding: "6px 10px",
-                fontSize: "0.8rem",
-                border: "1px solid #d1d5db",
-                borderRadius: 6,
-                outline: "none",
-                background: loading ? "#f3f4f6" : "#fff",
-              }}
-              onKeyDown={e => {
-                if (e.key === "Enter" && !savingWeight) {
-                  handleSaveWeight();
-                }
-              }}
-            />
-            <Button
-              onClick={handleSaveWeight}
-              disabled={loading || savingWeight}
-              className="h-8 text-xs font-semibold"
-              style={{ background: "#2563eb", color: "#fff", padding: "0 14px", borderRadius: 6 }}
-            >
-              {savingWeight ? (
-                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <Loader2 style={{ width: 12, height: 12, animation: "spin 1s linear infinite" }} />
-                  Saving...
+          <div style={{ display: "flex", flexDirection: "row", gap: 24, flexWrap: "wrap" }}>
+            
+            {/* Left side: Images gallery */}
+            <div style={{ flex: "1 1 300px", display: "flex", flexDirection: "column", gap: 12 }}>
+              {images.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af", border: "2px dashed #e2e8f0", borderRadius: 8 }}>
+                  <ImageIcon style={{ width: 48, height: 48, margin: "0 auto 12px", opacity: 0.4 }} />
+                  <p style={{ fontSize: "0.85rem" }}>No packed box images uploaded for this order</p>
                 </div>
-              ) : "Save & Update"}
-            </Button>
+              ) : (
+                <>
+                  <div style={{ borderRadius: 8, overflow: "hidden", background: "#f1f5f9", textAlign: "center", padding: 10, border: "1px solid #e2e8f0" }}>
+                    <img
+                      src={`${backendUrl}${images[activeIdx]}`}
+                      alt={`Box ${activeIdx + 1}`}
+                      style={{ maxHeight: 360, maxWidth: "100%", width: "auto", height: "auto", objectFit: "contain", margin: "0 auto" }}
+                    />
+                  </div>
+                  {images.length > 1 && (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                      {images.map((url, i) => (
+                        <button
+                          key={i}
+                          onClick={() => setActiveIdx(i)}
+                          style={{
+                            width: 56, height: 56, borderRadius: 6, overflow: "hidden",
+                            border: i === activeIdx ? "2px solid #3b82f6" : "2px solid #e2e8f0",
+                            cursor: "pointer", padding: 0, background: "none",
+                          }}
+                        >
+                          <img
+                            src={`${backendUrl}${url}`}
+                            alt={`thumb ${i + 1}`}
+                            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Right side: Weight input & order details */}
+            <div style={{ flex: "1 1 200px", minWidth: 200, display: "flex", flexDirection: "column", gap: 16 }}>
+              <div style={{ background: "#f8fafc", padding: 16, borderRadius: 8, border: "1px solid #e2e8f0" }}>
+                <h4 style={{ fontWeight: 600, fontSize: "0.85rem", color: "#334155", marginBottom: 12 }}>Update Weight for this Order</h4>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <label style={{ fontSize: "0.78rem", fontWeight: 600, color: "#64748b" }}>
+                    Package Weight (KG)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    value={weight}
+                    onChange={e => setWeight(e.target.value)}
+                    placeholder="Enter weight in KG (e.g. 1.5)"
+                    disabled={loading}
+                    style={{
+                      width: "100%",
+                      padding: "8px 12px",
+                      fontSize: "0.85rem",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: 6,
+                      outline: "none",
+                      background: "#fff",
+                      boxShadow: "inset 0 1px 2px rgba(0,0,0,0.05)",
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === "Enter" && !savingWeight) {
+                        handleSaveWeight();
+                      }
+                    }}
+                  />
+                  <Button
+                    onClick={handleSaveWeight}
+                    disabled={loading || savingWeight}
+                    className="w-full text-xs font-semibold h-9"
+                    style={{ background: "#2563eb", color: "#fff", borderRadius: 6, marginTop: 4 }}
+                  >
+                    {savingWeight ? (
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                        <Loader2 style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
+                        Saving Weight...
+                      </div>
+                    ) : "✓ Save Weight & Close"}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Tips / Instructions */}
+              <div style={{ padding: 12, border: "1px solid #fef08a", borderRadius: 6, background: "#fef9c3" }}>
+                <p style={{ fontSize: "0.72rem", color: "#854d0e", lineHeight: "1.4", margin: 0 }}>
+                  💡 <b>Auto-detect Logic:</b> After saving, this weight will automatically trigger DTDC series calculation and standard defaults (RL1386 or RL1423) in the main table.
+                </p>
+              </div>
+            </div>
+
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -574,7 +618,7 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
           }}
         >
           {/* Box image modal rendered inside DialogContent to avoid Radix UI blocking pointer events */}
-          <BoxImageModal
+          <BoxImageViewer
             open={boxModal.open}
             onClose={() => setBoxModal({ open: false, orderId: null, orderNum: "" })}
             orderId={boxModal.orderId}
