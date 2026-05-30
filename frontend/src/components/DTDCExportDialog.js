@@ -333,7 +333,7 @@ function BoxImageViewer({ open, onClose, orderId, orderNum, backendUrl, onWeight
               {images.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af", border: "2px dashed #e2e8f0", borderRadius: 8 }}>
                   <ImageIcon style={{ width: 48, height: 48, margin: "0 auto 12px", opacity: 0.4 }} />
-                  <p style={{ fontSize: "0.85rem" }}>No packed box images uploaded for this order</p>
+                  <p style={{ fontSize: "0.85rem", color: "#475569" }}>No packed box images uploaded for this order</p>
                 </div>
               ) : (
                 <>
@@ -392,7 +392,8 @@ function BoxImageViewer({ open, onClose, orderId, orderNum, backendUrl, onWeight
                       border: "1px solid #cbd5e1",
                       borderRadius: 6,
                       outline: "none",
-                      background: "#fff",
+                      background: "#ffffff",
+                      color: "#0f172a", // Explicitly dark text color (slate-900)
                       boxShadow: "inset 0 1px 2px rgba(0,0,0,0.05)",
                     }}
                     onKeyDown={e => {
