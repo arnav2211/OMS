@@ -77,6 +77,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
   }, [statusFilter, payStatusFilter, checkStatusFilter, periodFilter, dateFrom, dateTo, shippingFilter, courierFilter, viewAll, selectedTelecaller, searchDebounced, currentPage]);
 
   const canPrintAddresses = user?.role === "admin" || user?.role === "packaging" || user?.role === "accounts";
+  const canPrintPackingSheets = user?.role === "admin" || user?.role === "packaging" || user?.role === "accounts";
   const showPaymentCheck = ["admin", "telecaller", "accounts"].includes(user?.role);
   const isAdmin = user?.role === "admin";
 
@@ -173,6 +174,29 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
     finally { setPrintLoading(false); }
   };
 
+  const handlePrintPackingSheets = async () => {
+    setPrintLoading(true);
+    try {
+      const res = await api.post("/orders/print-packing-sheets", { order_ids: [...selectedOrders] }, { responseType: "blob" });
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobile) {
+        mobilePrintPdf(new Blob([res.data], { type: "application/pdf" }), "bulk_packing_sheets.pdf");
+      } else {
+        const blobUrl = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
+        const iframe = document.createElement("iframe");
+        iframe.style.position = "fixed";
+        iframe.style.top = "-10000px";
+        iframe.style.left = "-10000px";
+        iframe.style.width = "0";
+        iframe.style.height = "0";
+        iframe.src = blobUrl;
+        document.body.appendChild(iframe);
+        iframe.onload = () => { setTimeout(() => { iframe.contentWindow.print(); }, 500); };
+      }
+    } catch { toast.error("Failed to generate packing sheets PDF"); }
+    finally { setPrintLoading(false); }
+  };
+
   const openPrintDialog = () => {
     if (selectedOrders.size === 0) return toast.error("Select at least one order");
     // Initialize quantities to 1 for all selected
@@ -204,6 +228,12 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
             <Button variant="default" size="sm" onClick={openPrintDialog} disabled={printLoading} data-testid="print-addresses-btn">
               <Printer className="w-4 h-4 mr-1" />
               {printLoading ? "Generating..." : `Print Addresses (${selectedOrders.size})`}
+            </Button>
+          )}
+          {canPrintPackingSheets && selectedOrders.size > 0 && (
+            <Button variant="default" size="sm" onClick={handlePrintPackingSheets} disabled={printLoading} data-testid="print-packing-sheets-btn" className="bg-indigo-600 hover:bg-indigo-700 text-white gap-1.5">
+              <Printer className="w-4 h-4" />
+              {printLoading ? "Generating..." : `Print Packing Sheets (${selectedOrders.size})`}
             </Button>
           )}
           {selectedOrders.size > 0 && (
