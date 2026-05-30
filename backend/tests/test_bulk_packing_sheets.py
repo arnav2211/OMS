@@ -15,7 +15,7 @@ ADMIN_CREDS = {"username": "admin", "password": "admin123"}
 
 
 class TestBulkPackingSheets:
-    """Test /orders/print-packaging-sheets endpoint"""
+    """Test /orders/print-packing-sheets endpoint"""
 
     @pytest.fixture(autouse=True)
     def setup(self):
@@ -72,7 +72,7 @@ class TestBulkPackingSheets:
 
         # Request bulk print PDF
         response = requests.post(
-            f"{BASE_URL}/api/orders/print-packaging-sheets",
+            f"{BASE_URL}/api/orders/print-packing-sheets",
             headers=self.admin_headers,
             json={"order_ids": order_ids}
         )
@@ -93,7 +93,7 @@ class TestBulkPackingSheets:
 
         # Request bulk print PDF
         response = requests.post(
-            f"{BASE_URL}/api/orders/print-packaging-sheets",
+            f"{BASE_URL}/api/orders/print-packing-sheets",
             headers=self.pkg_headers,
             json={"order_ids": order_ids}
         )
@@ -113,7 +113,7 @@ class TestBulkPackingSheets:
 
         # Request bulk print PDF (should return 403 Forbidden)
         response = requests.post(
-            f"{BASE_URL}/api/orders/print-packaging-sheets",
+            f"{BASE_URL}/api/orders/print-packing-sheets",
             headers=self.tc_headers,
             json={"order_ids": order_ids}
         )
@@ -123,7 +123,7 @@ class TestBulkPackingSheets:
     def test_print_bulk_packing_sheets_empty_ids(self):
         """Test requesting bulk print with an empty selection returns 400"""
         response = requests.post(
-            f"{BASE_URL}/api/orders/print-packaging-sheets",
+            f"{BASE_URL}/api/orders/print-packing-sheets",
             headers=self.admin_headers,
             json={"order_ids": []}
         )

@@ -1763,7 +1763,7 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
     )
 
 # Bulk Order Print (Packaging Sheets)
-@api_router.post("/orders/print-packaging-sheets")
+@api_router.post("/orders/print-packing-sheets")
 async def print_bulk_packaging_sheets(body: dict, user=Depends(get_current_user)):
     if user["role"] not in ["admin", "packaging", "accounts"]:
         raise HTTPException(status_code=403, detail="Admin, packaging, or accounts only")
