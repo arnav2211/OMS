@@ -3991,21 +3991,21 @@ except Exception as e:
     logging.error(f"DTDC pincode load error: {e}")
 
 GROUND_EXPRESS_RATES = {
-    "Within City": {"base": 77, "per_kg": 20},
-    "Within State": {"base": 93, "per_kg": 24},
-    "Within Zone": {"base": 111, "per_kg": 30},
-    "Metros": {"base": 141, "per_kg": 37},
-    "Rest of India": {"base": 152, "per_kg": 41},
-    "Special destination": {"base": 215, "per_kg": 58},
+    "Within City": {"base": 81, "per_kg": 21},
+    "Within State": {"base": 97, "per_kg": 25},
+    "Within Zone": {"base": 116, "per_kg": 32},
+    "Metros": {"base": 147, "per_kg": 38},
+    "Rest of India": {"base": 159, "per_kg": 43},
+    "Special destination": {"base": 224, "per_kg": 60},
 }
 
 STANDARD_RATES = {
-    "Within City": {"base": 24, "per_500g": 16},
-    "Within State": {"base": 34, "per_500g": 20},
-    "Within Zone": {"base": 37, "per_500g": 29},
-    "Metros": {"base": 63, "per_500g": 56},
-    "Rest of India": {"base": 69, "per_500g": 58},
-    "Special destination": {"base": 98, "per_500g": 89},
+    "Within City": {"base": 25, "per_500g": 17},
+    "Within State": {"base": 36, "per_500g": 21},
+    "Within Zone": {"base": 38, "per_500g": 30},
+    "Metros": {"base": 66, "per_500g": 59},
+    "Rest of India": {"base": 72, "per_500g": 60},
+    "Special destination": {"base": 102, "per_500g": 93},
 }
 
 import math

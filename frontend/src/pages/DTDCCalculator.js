@@ -179,7 +179,7 @@ export default function DTDCCalculator() {
               <table className="w-full">
                 <thead><tr className="border-b"><th className="text-left py-1">Category</th><th className="text-right py-1">Upto 3kg</th><th className="text-right py-1">/kg &gt;3</th></tr></thead>
                 <tbody>
-                  {[["Within City",77,20],["Within State",93,24],["Within Zone",111,30],["Metros",141,37],["Rest of India",152,41],["Special destination",215,58]].map(([cat,base,per]) => (
+                  {[["Within City",81,21],["Within State",97,25],["Within Zone",116,32],["Metros",147,38],["Rest of India",159,43],["Special destination",224,60]].map(([cat,base,per]) => (
                     <tr key={cat} className="border-b border-muted"><td className="py-1">{cat}</td><td className="text-right">{"\u20B9"}{base}</td><td className="text-right">{"\u20B9"}{per}</td></tr>
                   ))}
                 </tbody>
@@ -190,7 +190,7 @@ export default function DTDCCalculator() {
               <table className="w-full">
                 <thead><tr className="border-b"><th className="text-left py-1">Category</th><th className="text-right py-1">Upto 500g</th><th className="text-right py-1">+500g</th></tr></thead>
                 <tbody>
-                  {[["Within City",24,16],["Within State",34,20],["Within Zone",37,29],["Metros",63,56],["Rest of India",69,58],["Special destination",98,89]].map(([cat,base,per]) => (
+                  {[["Within City",25,17],["Within State",36,21],["Within Zone",38,30],["Metros",66,59],["Rest of India",72,60],["Special destination",102,93]].map(([cat,base,per]) => (
                     <tr key={cat} className="border-b border-muted"><td className="py-1">{cat}</td><td className="text-right">{"\u20B9"}{base}</td><td className="text-right">{"\u20B9"}{per}</td></tr>
                   ))}
                 </tbody>
