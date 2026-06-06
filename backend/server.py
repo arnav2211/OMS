@@ -882,6 +882,11 @@ async def list_orders(
         or_conditions = [
             {"order_number": {"$regex": search, "$options": "i"}},
             {"customer_name": {"$regex": search, "$options": "i"}},
+            {"shipping_address.city": {"$regex": search, "$options": "i"}},
+            {"shipping_address.state": {"$regex": search, "$options": "i"}},
+            {"billing_address.city": {"$regex": search, "$options": "i"}},
+            {"billing_address.state": {"$regex": search, "$options": "i"}},
+            {"dispatch.lr_no": {"$regex": search, "$options": "i"}},
         ]
         if phone_gst_alias_cust_ids:
             or_conditions.append({"customer_id": {"$in": list(phone_gst_alias_cust_ids)}})

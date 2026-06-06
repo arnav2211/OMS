@@ -264,7 +264,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
           <div className="flex flex-wrap gap-2 items-end">
             <div className="relative flex-1 min-w-[140px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input placeholder="Search by order #, customer, alias, phone, GST..." className="pl-9 h-8 text-sm" value={search} onChange={e => setSearch(e.target.value)} data-testid="orders-search-input" />
+              <Input placeholder="Search by order #, customer, alias, phone, GST, city, state, LR..." className="pl-9 h-8 text-sm" value={search} onChange={e => setSearch(e.target.value)} data-testid="orders-search-input" />
             </div>
             {/* Period */}
             <Select value={periodFilter} onValueChange={(v) => { setPeriodFilter(v); setCurrentPage(1); }}>
