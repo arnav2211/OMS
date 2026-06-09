@@ -448,7 +448,7 @@ export default function EditOrder() {
       setTransporterName(o.transporter_name || "");
       setShippingCharge(o.shipping_charge || 0);
       const allCharges = o.additional_charges || [];
-      setAdditionalCharges(allCharges.filter(c => c.name !== "Local Charges"));
+      setAdditionalCharges(allCharges);
       setRemark(o.remark || "");
       setPaymentStatus(o.payment_status || "unpaid");
       setAmountPaid(o.amount_paid || 0);

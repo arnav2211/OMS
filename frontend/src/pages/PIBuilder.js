@@ -254,7 +254,7 @@ export default function PIBuilder() {
       setGstApplicable(fullPi.gst_applicable); setShowRate(fullPi.show_rate !== false);
       setShippingCharge(fullPi.shipping_charge || 0);
       const allCharges = fullPi.additional_charges || [];
-      setAdditionalCharges(allCharges.filter(c => c.name !== "Local Charges"));
+      setAdditionalCharges(allCharges);
       setRemark(fullPi.remark || "");
       setTermsAndConditions(fullPi.terms_and_conditions || "");
       setBillingAddress(fullPi.billing_address || null); setShippingAddress(fullPi.shipping_address || null);
@@ -414,7 +414,7 @@ export default function PIBuilder() {
                               setGstApplicable(d.gst_applicable); setShowRate(d.show_rate !== false);
                               setShippingCharge(d.shipping_charge || 0);
                               const dupCharges = d.additional_charges || [];
-                              setAdditionalCharges(dupCharges.filter(c => c.name !== "Local Charges"));
+                              setAdditionalCharges(dupCharges);
                               setRemark(d.remark || "");
                               setTermsAndConditions(d.terms_and_conditions || "");
                               setBillingAddress(d.billing_address || null);

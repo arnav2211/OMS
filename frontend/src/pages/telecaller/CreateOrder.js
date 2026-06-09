@@ -167,7 +167,7 @@ export default function CreateOrder() {
       setTransporterName(pi.transporter_name || "");
       setShippingCharge(pi.shipping_charge || 0);
       const allCharges = pi.additional_charges || [];
-      setAdditionalCharges(allCharges.filter(c => c.name !== "Local Charges"));
+      setAdditionalCharges(allCharges);
       setRemark(pi.remark || "");
       setFreeSamples(pi.free_samples || []);
       // Pre-select customer
@@ -206,7 +206,7 @@ export default function CreateOrder() {
       setTransporterName(d.transporter_name || "");
       setShippingCharge(d.shipping_charge || 0);
       const allCharges2 = d.additional_charges || [];
-      setAdditionalCharges(allCharges2.filter(c => c.name !== "Local Charges"));
+      setAdditionalCharges(allCharges2);
       setRemark(d.remark || "");
       setFreeSamples(d.free_samples || []);
       setModeOfPayment(d.mode_of_payment || "");
