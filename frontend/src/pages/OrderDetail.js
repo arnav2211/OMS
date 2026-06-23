@@ -7,6 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -56,6 +57,11 @@ export default function OrderDetail() {
   const [customerGst, setCustomerGst] = useState("");
   const [customerAlias, setCustomerAlias] = useState("");
   const [statusUpdating, setStatusUpdating] = useState(false);
+  const [showMakePiDialog, setShowMakePiDialog] = useState(false);
+  const [piGstApplicable, setPiGstApplicable] = useState(false);
+  const [piShowRate, setPiShowRate] = useState(true);
+  const [piDate, setPiDate] = useState("");
+  const [generatingPi, setGeneratingPi] = useState(false);
 
   useEffect(() => { loadOrder(); }, [id]);
 
@@ -76,7 +82,16 @@ export default function OrderDetail() {
   }, [order?.customer_id, order?.customer_phone, order?.customer_gst_no, order?.customer_alias]);
 
   const loadOrder = async () => {
-    try { const res = await api.get(`/orders/${id}`); setOrder(res.data); }
+    try {
+      const res = await api.get(`/orders/${id}`);
+      setOrder(res.data);
+      setPiGstApplicable(res.data.gst_applicable || false);
+      const d = new Date();
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      setPiDate(`${year}-${month}-${day}`);
+    }
     catch { toast.error("Order not found"); navigate("/"); }
     finally { setLoading(false); }
   };
@@ -223,6 +238,8 @@ export default function OrderDetail() {
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div></div>;
   if (!order) return <p className="text-center py-8 text-muted-foreground">Order not found.</p>;
+
+  const activeShippingMethod = order.dispatch?.dispatch_type || order.shipping_method || "";
 
   // Collect all packing image URLs
   const allPackingImageUrls = [];
@@ -376,6 +393,70 @@ export default function OrderDetail() {
     }
   };
 
+  const handleMakePiDownload = async () => {
+    setGeneratingPi(true);
+    try {
+      const res = await api.post(`/orders/${id}/make-pi`, {
+        gst_applicable: piGstApplicable,
+        show_rate: piShowRate,
+        pi_date: piDate
+      });
+      const pi = res.data;
+      const token = localStorage.getItem("token");
+      window.open(`${process.env.REACT_APP_BACKEND_URL}/api/proforma-invoices/${pi.id}/pdf?token=${token}`, "_blank");
+      toast.success("PI generated and downloaded successfully");
+      setShowMakePiDialog(false);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to generate PI");
+    } finally {
+      setGeneratingPi(false);
+    }
+  };
+
+  const handleMakePiShare = async () => {
+    setGeneratingPi(true);
+    try {
+      const res = await api.post(`/orders/${id}/make-pi`, {
+        gst_applicable: piGstApplicable,
+        show_rate: piShowRate,
+        pi_date: piDate
+      });
+      const pi = res.data;
+      const token = localStorage.getItem("token");
+      const pdfUrl = `${process.env.REACT_APP_BACKEND_URL}/api/proforma-invoices/${pi.id}/pdf?token=${token}`;
+      const response = await fetch(pdfUrl);
+      if (!response.ok) throw new Error("Failed to fetch PDF");
+      const blob = await response.blob();
+      const fileName = `${pi.pi_number}.pdf`;
+      const file = new File([blob], fileName, { type: "application/pdf" });
+
+      const phone = customerPhone?.replace(/[^0-9]/g, "") || "";
+      const waPhone = phone.startsWith("91") ? phone : `91${phone}`;
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: `Proforma Invoice - ${pi.pi_number}` });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast.success("PDF downloaded. Opening WhatsApp...");
+        if (phone) {
+          setTimeout(() => window.open(`https://wa.me/${waPhone}`, "_blank"), 500);
+        }
+      }
+      setShowMakePiDialog(false);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to share PI");
+    } finally {
+      setGeneratingPi(false);
+    }
+  };
+
   const markPacked = async () => {
     setStatusUpdating(true);
     try {
@@ -409,6 +490,11 @@ export default function OrderDetail() {
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={handlePrint} data-testid="print-order-btn"><Printer className="w-4 h-4 mr-1" /> Print</Button>
           {order.formulation_locked && <Badge variant="outline" className="text-amber-600 border-amber-300 text-xs"><Lock className="w-3 h-3 mr-1" />Formulation Locked</Badge>}
+          {canSharePI && (
+            <Button variant="outline" size="sm" onClick={() => setShowMakePiDialog(true)} data-testid="make-pi-btn">
+              <FileText className="w-4 h-4 mr-1" /> Make PI/Quotation
+            </Button>
+          )}
           {(user?.role === "admin" || user?.role === "telecaller") && (
             <Button variant="outline" size="sm" onClick={() => navigate(`/create-order?duplicate=${id}`)} data-testid="duplicate-order-btn"><Copy className="w-4 h-4 mr-1" /> Duplicate</Button>
           )}
@@ -500,13 +586,13 @@ export default function OrderDetail() {
               <span className="text-sm text-muted-foreground">Shipping Method</span>
               <span className="text-sm font-medium capitalize" data-testid="order-shipping-method">{(order.dispatch?.dispatch_type || order.shipping_method || "")?.replace(/_/g, " ")}</span>
             </div>
-            {(order.dispatch?.courier_name || order.courier_name) && (
+            {activeShippingMethod === "courier" && (order.dispatch?.courier_name || order.courier_name) && (
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Courier Name</span>
                 <span className="text-sm" data-testid="order-courier-name">{order.dispatch?.courier_name || order.courier_name}</span>
               </div>
             )}
-            {(order.dispatch?.transporter_name || order.transporter_name) && (
+            {activeShippingMethod === "transport" && (order.dispatch?.transporter_name || order.transporter_name) && (
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Transporter Name</span>
                 <span className="text-sm" data-testid="order-transporter-name">{order.dispatch?.transporter_name || order.transporter_name}</span>
@@ -848,8 +934,8 @@ export default function OrderDetail() {
                     className="text-muted-foreground hover:text-primary transition-colors"
                     onClick={() => {
                       const parts = [];
-                      if (order.dispatch.courier_name) parts.push(`Courier: ${order.dispatch.courier_name}`);
-                      if (order.dispatch.transporter_name) parts.push(`Transporter: ${order.dispatch.transporter_name}`);
+                      if (activeShippingMethod === "courier" && order.dispatch.courier_name) parts.push(`Courier: ${order.dispatch.courier_name}`);
+                      if (activeShippingMethod === "transport" && order.dispatch.transporter_name) parts.push(`Transporter: ${order.dispatch.transporter_name}`);
                       if (order.dispatch.lr_no) parts.push(`LR No: ${order.dispatch.lr_no}`);
                       copyToClipboard(parts.join("\n"), "Dispatch details");
                     }}
@@ -870,8 +956,8 @@ export default function OrderDetail() {
             {order.dispatch?.dispatched_at ? (
               <>
                 <div><span className="text-muted-foreground">Dispatched:</span> {new Date(order.dispatch.dispatched_at).toLocaleString("en-IN")}</div>
-                {order.dispatch.courier_name && <div><span className="text-muted-foreground">Courier:</span> {order.dispatch.courier_name}</div>}
-                {order.dispatch.transporter_name && <div><span className="text-muted-foreground">Transporter:</span> {order.dispatch.transporter_name}</div>}
+                {activeShippingMethod === "courier" && order.dispatch.courier_name && <div><span className="text-muted-foreground">Courier:</span> {order.dispatch.courier_name}</div>}
+                {activeShippingMethod === "transport" && order.dispatch.transporter_name && <div><span className="text-muted-foreground">Transporter:</span> {order.dispatch.transporter_name}</div>}
                 {order.dispatch.lr_no && (
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-muted-foreground">LR No:</span>
@@ -1094,6 +1180,64 @@ export default function OrderDetail() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDispatch(false)}>Cancel</Button>
             <Button onClick={saveDispatch} disabled={saving} data-testid="confirm-dispatch-btn">{saving ? "Dispatching..." : "Dispatch"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Make PI/Quotation Dialog */}
+      <Dialog open={showMakePiDialog} onOpenChange={setShowMakePiDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Make PI / Quotation</DialogTitle>
+            <DialogDescription>
+              Create a Proforma Invoice or Quotation copy of this order. Chemical formulation columns will not be included.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label>Document Type</Label>
+              <Select value={piGstApplicable ? "gst" : "nongst"} onValueChange={(v) => setPiGstApplicable(v === "gst")}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="gst">GST (Proforma Invoice)</SelectItem>
+                  <SelectItem value="nongst">Non-GST (Quotation)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-1">
+              <Label>PI / Quotation Date</Label>
+              <Input
+                type="date"
+                value={piDate}
+                onChange={(e) => setPiDate(e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">This sets the date printed on the PI, with no impact on the original order details.</p>
+            </div>
+
+            <div className="flex items-center gap-2 py-1">
+              <Checkbox
+                id="makePiShowRate"
+                checked={piShowRate}
+                onCheckedChange={setPiShowRate}
+              />
+              <Label htmlFor="makePiShowRate" className="cursor-pointer text-sm font-medium">
+                Show Rate in PDF
+              </Label>
+            </div>
+          </div>
+          <DialogFooter className="flex gap-2 sm:justify-end">
+            <Button variant="outline" onClick={() => setShowMakePiDialog(false)} disabled={generatingPi}>
+              Cancel
+            </Button>
+            <Button variant="outline" className="border-green-600 text-green-600 hover:bg-green-50 hover:text-green-700" onClick={handleMakePiShare} disabled={generatingPi}>
+              {generatingPi ? "Generating..." : "Share via WhatsApp"}
+            </Button>
+            <Button onClick={handleMakePiDownload} disabled={generatingPi}>
+              {generatingPi ? "Generating..." : "Download PDF"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

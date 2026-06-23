@@ -715,6 +715,17 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
     raw_total = subtotal + total_gst + req.shipping_charge + shipping_gst + total_additional + total_additional_gst
     grand_total = math.ceil(raw_total)
 
+    shipping_method = req.shipping_method
+    courier_name = req.courier_name
+    transporter_name = req.transporter_name
+    if shipping_method == "courier":
+        transporter_name = ""
+    elif shipping_method == "transport":
+        courier_name = ""
+    else:
+        courier_name = ""
+        transporter_name = ""
+
     order_doc = {
         "id": str(uuid.uuid4()),
         "order_number": order_number,
@@ -723,9 +734,9 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "purpose": req.purpose,
         "items": items,
         "gst_applicable": req.gst_applicable,
-        "shipping_method": req.shipping_method,
-        "courier_name": req.courier_name,
-        "transporter_name": req.transporter_name,
+        "shipping_method": shipping_method,
+        "courier_name": courier_name,
+        "transporter_name": transporter_name,
         "shipping_charge": req.shipping_charge,
         "shipping_gst": shipping_gst,
         "additional_charges": additional_charges,
@@ -1162,6 +1173,41 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
         )
         if payment_changed:
             updates["payment_check_status"] = "pending_recheck"
+    # Clean up shipping method specific fields in updates and dispatch nested object
+    active_method = updates.get("shipping_method", order.get("shipping_method", ""))
+    if active_method == "courier":
+        updates["transporter_name"] = ""
+    elif active_method == "transport":
+        updates["courier_name"] = ""
+    else:
+        updates["courier_name"] = ""
+        updates["transporter_name"] = ""
+
+    dispatch_source = updates.get("dispatch") or order.get("dispatch")
+    if dispatch_source and isinstance(dispatch_source, dict):
+        dispatch = dispatch_source.copy()
+        dispatch["dispatch_type"] = active_method
+        if active_method == "courier":
+            dispatch["courier_name"] = updates.get("courier_name", dispatch.get("courier_name", ""))
+            dispatch["transporter_name"] = ""
+            dispatch["porter_link"] = ""
+        elif active_method == "transport":
+            dispatch["transporter_name"] = updates.get("transporter_name", dispatch.get("transporter_name", ""))
+            dispatch["courier_name"] = ""
+            dispatch["porter_link"] = ""
+        elif active_method == "porter":
+            dispatch["courier_name"] = ""
+            dispatch["transporter_name"] = ""
+            dispatch["lr_no"] = ""
+            dispatch["dispatch_slip_images"] = []
+        else:
+            dispatch["courier_name"] = ""
+            dispatch["transporter_name"] = ""
+            dispatch["lr_no"] = ""
+            dispatch["dispatch_slip_images"] = []
+            dispatch["porter_link"] = ""
+        updates["dispatch"] = dispatch
+
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.orders.update_one({"id": order_id}, {"$set": updates})
     if result.matched_count == 0:
@@ -1453,6 +1499,31 @@ async def update_shipping_method(order_id: str, body: dict, user=Depends(get_cur
     else:
         update_fields["courier_name"] = ""
         update_fields["transporter_name"] = ""
+
+    if "dispatch" in order and isinstance(order["dispatch"], dict):
+        dispatch = order["dispatch"].copy()
+        dispatch["dispatch_type"] = new_method
+        if new_method == "courier":
+            dispatch["courier_name"] = update_fields["courier_name"]
+            dispatch["transporter_name"] = ""
+            dispatch["porter_link"] = ""
+        elif new_method == "transport":
+            dispatch["transporter_name"] = update_fields["transporter_name"]
+            dispatch["courier_name"] = ""
+            dispatch["porter_link"] = ""
+        elif new_method == "porter":
+            dispatch["courier_name"] = ""
+            dispatch["transporter_name"] = ""
+            dispatch["lr_no"] = ""
+            dispatch["dispatch_slip_images"] = []
+        else:
+            dispatch["courier_name"] = ""
+            dispatch["transporter_name"] = ""
+            dispatch["lr_no"] = ""
+            dispatch["dispatch_slip_images"] = []
+            dispatch["porter_link"] = ""
+        update_fields["dispatch"] = dispatch
+
     await db.orders.update_one({"id": order_id}, {"$set": update_fields})
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated
@@ -3141,6 +3212,110 @@ async def duplicate_pi(pi_id: str, user=Depends(get_current_user)):
     }
 
 
+class MakePIRequest(BaseModel):
+    gst_applicable: bool
+    show_rate: bool
+    pi_date: str
+
+@api_router.post("/orders/{order_id}/make-pi")
+async def make_pi_from_order(order_id: str, req: MakePIRequest, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "telecaller"]:
+        raise HTTPException(status_code=403, detail="Admin or telecaller only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    counter = await db.counters.find_one_and_update(
+        {"_id": "pi_number"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True
+    )
+    pi_number = f"PI-{counter['seq']:04d}"
+    
+    # Process items and strip formulations
+    items = []
+    subtotal = 0
+    total_gst = 0
+    for item in order.get("items", []):
+        d = dict(item)
+        d["formulation"] = ""
+        # Recalculate GST based on the new gst_applicable
+        if req.gst_applicable and d.get("gst_rate", 0) > 0:
+            d["gst_amount"] = round(d["amount"] * d.get("gst_rate", 0) / 100, 2)
+        else:
+            d["gst_amount"] = 0
+        d["total"] = round(d["amount"] + d["gst_amount"], 2)
+        subtotal += d["amount"]
+        total_gst += d["gst_amount"]
+        items.append(d)
+        
+    shipping_charge = order.get("shipping_charge", 0)
+    shipping_gst = round(shipping_charge * 0.18, 2) if req.gst_applicable and shipping_charge > 0 else 0
+
+    additional_charges = []
+    total_additional = 0
+    total_additional_gst = 0
+    for charge in order.get("additional_charges", []):
+        c = dict(charge)
+        c["amount"] = max(0, c.get("amount", 0))
+        if req.gst_applicable and c.get("gst_percent", 0) > 0:
+            c["gst_amount"] = round(c["amount"] * c.get("gst_percent", 0) / 100, 2)
+        else:
+            c["gst_amount"] = 0
+        total_additional += c["amount"]
+        total_additional_gst += c["gst_amount"]
+        additional_charges.append(c)
+
+    grand_total = math.ceil(subtotal + total_gst + shipping_charge + shipping_gst + total_additional + total_additional_gst)
+
+    # Process free samples and strip formulations
+    free_samples = []
+    for s in order.get("free_samples", []):
+        fs = dict(s)
+        fs["formulation"] = ""
+        free_samples.append(fs)
+
+    # Parse user-defined PI date
+    try:
+        custom_date = datetime.strptime(req.pi_date, "%Y-%m-%d")
+        now = datetime.now(timezone.utc)
+        created_at_dt = custom_date.replace(hour=now.hour, minute=now.minute, second=now.second, microsecond=now.microsecond, tzinfo=timezone.utc)
+        created_at_str = created_at_dt.isoformat()
+    except Exception:
+        created_at_str = datetime.now(timezone.utc).isoformat()
+
+    terms_and_conditions = "\n".join(DEFAULT_PI_TERMS)
+
+    pi_doc = {
+        "id": str(uuid.uuid4()),
+        "pi_number": pi_number,
+        "customer_id": order.get("customer_id", ""),
+        "customer_name": order.get("customer_name", ""),
+        "items": items,
+        "gst_applicable": req.gst_applicable,
+        "show_rate": req.show_rate,
+        "shipping_charge": shipping_charge,
+        "shipping_gst": shipping_gst,
+        "additional_charges": additional_charges,
+        "subtotal": round(subtotal, 2),
+        "total_gst": round(total_gst + shipping_gst + total_additional_gst, 2),
+        "grand_total": grand_total,
+        "remark": order.get("remark", ""),
+        "status": "draft",
+        "converted_order_id": order.get("id", ""),
+        "billing_address_id": order.get("billing_address_id", ""),
+        "shipping_address_id": order.get("shipping_address_id", ""),
+        "billing_address": order.get("billing_address"),
+        "shipping_address": order.get("shipping_address"),
+        "free_samples": free_samples,
+        "terms_and_conditions": terms_and_conditions,
+        "created_by": user["id"],
+        "created_by_name": user["name"],
+        "created_at": created_at_str,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+
+    await db.proforma_invoices.insert_one(pi_doc)
+    created = await db.proforma_invoices.find_one({"id": pi_doc["id"]}, {"_id": 0})
+    return created
 
 
 @api_router.post("/proforma-invoices/{pi_id}/convert")

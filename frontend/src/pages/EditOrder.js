@@ -310,8 +310,8 @@ function DispatchEditSection({ order, onSaved }) {
             <div className="space-y-2 text-sm">
               <p className="text-green-600 font-medium">This order has already been dispatched.</p>
               {order.dispatch?.dispatched_at && <p className="text-muted-foreground">Dispatched: {new Date(order.dispatch.dispatched_at).toLocaleString("en-IN")}</p>}
-              {order.dispatch?.courier_name && <p>Courier: {order.dispatch.courier_name}</p>}
-              {order.dispatch?.transporter_name && <p>Transporter: {order.dispatch.transporter_name}</p>}
+              {(order.dispatch?.dispatch_type || order.shipping_method) === "courier" && order.dispatch?.courier_name && <p>Courier: {order.dispatch.courier_name}</p>}
+              {(order.dispatch?.dispatch_type || order.shipping_method) === "transport" && order.dispatch?.transporter_name && <p>Transporter: {order.dispatch.transporter_name}</p>}
               {order.dispatch?.lr_no && <p>LR No: {order.dispatch.lr_no}</p>}
             </div>
             <Separator />
