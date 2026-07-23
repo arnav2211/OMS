@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { UserPlus, Edit, Trash2, Shield, Phone, Package, Truck } from "lucide-react";
+import { UserPlus, Edit, Trash2, Shield, Phone, Package, Truck, MapPin } from "lucide-react";
 
 const ROLE_ICONS = {
   admin: Shield,
@@ -18,6 +18,7 @@ const ROLE_ICONS = {
   packaging: Package,
   dispatch: Truck,
   accounts: Shield,
+  field_executive: MapPin,
 };
 
 const ROLE_COLORS = {
@@ -26,6 +27,7 @@ const ROLE_COLORS = {
   packaging: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
   dispatch: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
   accounts: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
+  field_executive: "bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-400",
 };
 
 export default function UserManagement() {
@@ -193,6 +195,7 @@ export default function UserManagement() {
                   <SelectItem value="packaging">Packaging</SelectItem>
                   <SelectItem value="dispatch">Dispatch</SelectItem>
                   <SelectItem value="accounts">Accounts</SelectItem>
+                  <SelectItem value="field_executive">Field Executive (Location only)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

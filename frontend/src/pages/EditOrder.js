@@ -16,6 +16,10 @@ import { toast } from "sonner";
 import { Plus, Trash2, MapPin, ArrowLeft, Upload, X, Edit, Lock, ShieldAlert } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { INDIAN_STATES } from "@/lib/indianStates";
+import {
+  calcCarrierRisk, formatCarrierRisk, stripCarrierRisk, resolveCarrierRiskFlag,
+  CARRIER_RISK_GST_PERCENT, CARRIER_RISK_COURIER,
+} from "@/lib/carrierRisk";
 
 const UNITS = ["mL", "L", "g", "Kg", "pcs", ""];
 const SHIPPING_METHODS = [
@@ -409,6 +413,7 @@ export default function EditOrder() {
   const [transporterName, setTransporterName] = useState("");
   const [shippingCharge, setShippingCharge] = useState(0);
   const [additionalCharges, setAdditionalCharges] = useState([]);
+  const [carrierRiskApplicable, setCarrierRiskApplicable] = useState(false);
   const [remark, setRemark] = useState("");
   const [paymentStatus, setPaymentStatus] = useState("unpaid");
   const [amountPaid, setAmountPaid] = useState(0);
@@ -447,8 +452,9 @@ export default function EditOrder() {
       setCourierName(o.courier_name || "");
       setTransporterName(o.transporter_name || "");
       setShippingCharge(o.shipping_charge || 0);
-      const allCharges = o.additional_charges || [];
-      setAdditionalCharges(allCharges);
+      // Carrier risk is a derived row, so it is kept out of the editable list.
+      setAdditionalCharges(stripCarrierRisk(o.additional_charges));
+      setCarrierRiskApplicable(resolveCarrierRiskFlag(o));
       setRemark(o.remark || "");
       setPaymentStatus(o.payment_status || "unpaid");
       setAmountPaid(o.amount_paid || 0);
@@ -499,8 +505,27 @@ export default function EditOrder() {
     if (gstApplicable && c.gst_percent > 0) return s + +((c.amount || 0) * c.gst_percent / 100).toFixed(2);
     return s;
   }, 0);
-  const grandTotal = Math.ceil(subtotal + totalItemGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst);
+  // Carrier risk is levied on the rest of the invoice, so it is derived last.
+  const carrierRiskBase = subtotal + totalItemGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst;
+  const carrierRisk = carrierRiskApplicable
+    ? calcCarrierRisk(carrierRiskBase, gstApplicable ? CARRIER_RISK_GST_PERCENT : 0)
+    : null;
+  const grandTotal = Math.ceil(carrierRiskBase + (carrierRisk ? carrierRisk.total : 0));
   const balanceAmount = paymentStatus === "full" ? 0 : paymentStatus === "partial" ? Math.max(0, grandTotal - amountPaid) : grandTotal;
+
+  // Carrier risk is a DTDC charge, so selecting DTDC turns it on by default.
+  // Set here rather than in an effect so it never fights hydration or a manual
+  // override — it only moves when the courier itself changes.
+  const handleCourierChange = (value) => {
+    setCourierName(value);
+    setCarrierRiskApplicable(value === CARRIER_RISK_COURIER);
+  };
+
+  const handleShippingMethodChange = (value) => {
+    setShippingMethod(value);
+    if (value !== "courier") setCarrierRiskApplicable(false);
+    else setCarrierRiskApplicable(courierName === CARRIER_RISK_COURIER);
+  };
 
   // State search for address
   const saveNewAddress = async () => {
@@ -595,14 +620,22 @@ export default function EditOrder() {
         transporter_name: transporterName,
         shipping_charge: shippingCharge,
         shipping_gst: shippingGst,
+        // Unlike create, PUT /orders stores what it is given without recomputing,
+        // so the derived carrier risk row and the totals are sent explicitly.
         additional_charges: [
-          ...additionalCharges.filter(c => c.name).map(c => ({
+          ...stripCarrierRisk(additionalCharges).filter(c => c.name).map(c => ({
             name: c.name, amount: Math.max(0, c.amount || 0), gst_percent: c.gst_percent || 0,
             gst_amount: gstApplicable && c.gst_percent > 0 ? +((c.amount || 0) * c.gst_percent / 100).toFixed(2) : 0,
           })),
+          ...(carrierRisk ? [{
+            name: carrierRisk.name, amount: carrierRisk.amount,
+            gst_percent: carrierRisk.gst_percent, gst_amount: carrierRisk.gst_amount,
+          }] : []),
         ],
+        carrier_risk_applicable: carrierRiskApplicable,
         subtotal: +subtotal.toFixed(2),
-        total_gst: +(totalItemGst + shippingGst).toFixed(2),
+        // total_gst is the rollup the backend stores: items + shipping + all charges
+        total_gst: +(totalItemGst + shippingGst + totalAdditionalGst + (carrierRisk ? carrierRisk.gst_amount : 0)).toFixed(2),
         grand_total: grandTotal,
         remark,
         payment_status: paymentStatus,
@@ -858,14 +891,14 @@ export default function EditOrder() {
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div><Label>Shipping Method</Label>
-                  <Select value={shippingMethod} onValueChange={setShippingMethod}>
+                  <Select value={shippingMethod} onValueChange={handleShippingMethodChange}>
                     <SelectTrigger data-testid="edit-shipping-method"><SelectValue placeholder="Select" /></SelectTrigger>
                     <SelectContent>{SHIPPING_METHODS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 {shippingMethod === "courier" && (
                   <div><Label>Courier</Label>
-                    <Select value={courierName} onValueChange={setCourierName}>
+                    <Select value={courierName} onValueChange={handleCourierChange}>
                       <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
                       <SelectContent>{COURIER_OPTIONS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
                     </Select>
@@ -918,6 +951,28 @@ export default function EditOrder() {
                   <Button variant="ghost" size="icon" onClick={() => setAdditionalCharges(p => p.filter((_, i) => i !== idx))}><Trash2 className="w-4 h-4 text-destructive" /></Button>
                 </div>
               ))}
+              <Separator />
+              <div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="editCarrierRisk"
+                    checked={carrierRiskApplicable}
+                    onCheckedChange={setCarrierRiskApplicable}
+                    data-testid="edit-carrier-risk-checkbox"
+                  />
+                  <Label htmlFor="editCarrierRisk" className="cursor-pointer">
+                    Carrier Risk ({CARRIER_RISK_COURIER})
+                  </Label>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  ₹100 or 2% of the invoice value, whichever is higher{gstApplicable ? `, plus ${CARRIER_RISK_GST_PERCENT}% GST` : ""}. Calculated automatically.
+                </p>
+                {carrierRisk && (
+                  <p className="text-sm font-mono mt-2" data-testid="edit-carrier-risk-formula">
+                    {formatCarrierRisk(carrierRisk)}
+                  </p>
+                )}
+              </div>
             </CardContent>
           </Card>
 
@@ -993,6 +1048,12 @@ export default function EditOrder() {
                     {gstApplicable && c.gst_percent > 0 && <div className="flex justify-between"><span className="text-muted-foreground">{c.name || "Charge"} GST ({c.gst_percent}%)</span><span className="font-mono">₹{((c.amount || 0) * c.gst_percent / 100).toFixed(2)}</span></div>}
                   </div>
                 ))}
+                {carrierRisk && (
+                  <div data-testid="edit-carrier-risk-summary">
+                    <div className="flex justify-between"><span className="text-muted-foreground">Carrier Risk</span><span className="font-mono">₹{carrierRisk.amount.toFixed(2)}</span></div>
+                    {carrierRisk.gst_amount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Carrier Risk GST ({carrierRisk.gst_percent}%)</span><span className="font-mono">₹{carrierRisk.gst_amount.toFixed(2)}</span></div>}
+                  </div>
+                )}
                 <Separator />
                 <div className="flex justify-between text-base font-bold"><span>Grand Total (Rounded Up)</span><span className="font-mono">₹{grandTotal}</span></div>
               </div>

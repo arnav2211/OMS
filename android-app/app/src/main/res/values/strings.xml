@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">CitSpray OMS</string>
+    <string name="tracking_channel">Location Service</string>
+    <string name="tracking_notice">CitSpray OMS is running</string>
+</resources>

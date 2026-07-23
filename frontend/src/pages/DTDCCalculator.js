@@ -4,8 +4,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Search, Package, Truck, MapPin, Scale, IndianRupee, ArrowRight, Loader2 } from "lucide-react";
+import { Search, Package, Truck, MapPin, Scale, IndianRupee, ArrowRight, Loader2, ShieldCheck } from "lucide-react";
+import {
+  calcCarrierRisk,
+  formatCarrierRisk,
+  CARRIER_RISK_GST_PERCENT,
+  CARRIER_RISK_MIN_AMOUNT,
+} from "@/lib/carrierRisk";
 
 export default function DTDCCalculator() {
   const [pincode, setPincode] = useState("");
@@ -13,6 +22,14 @@ export default function DTDCCalculator() {
   const [grams, setGrams] = useState("");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  // Carrier risk calculator
+  const [invoiceValue, setInvoiceValue] = useState("");
+  const [riskGstApplicable, setRiskGstApplicable] = useState(true);
+  const parsedInvoiceValue = parseFloat(invoiceValue);
+  const carrierRisk = Number.isFinite(parsedInvoiceValue) && parsedInvoiceValue > 0
+    ? calcCarrierRisk(parsedInvoiceValue, riskGstApplicable ? CARRIER_RISK_GST_PERCENT : 0)
+    : null;
 
   const handleCalculate = async () => {
     if (!pincode || pincode.length !== 6) return toast.error("Enter a valid 6-digit pincode");
@@ -39,9 +56,21 @@ export default function DTDCCalculator() {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight" data-testid="dtdc-page-title">DTDC Rate Calculator</h1>
-        <p className="text-sm text-muted-foreground mt-1">Check serviceability & calculate shipping cost</p>
+        <h1 className="text-2xl font-bold tracking-tight" data-testid="dtdc-page-title">DTDC Calculator</h1>
+        <p className="text-sm text-muted-foreground mt-1">Shipping rates and carrier risk</p>
       </div>
+
+      <Tabs defaultValue="shipping" className="space-y-6">
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="shipping" data-testid="dtdc-tab-shipping">
+            <Truck className="w-4 h-4 mr-2" /> Shipping Rate
+          </TabsTrigger>
+          <TabsTrigger value="carrier-risk" data-testid="dtdc-tab-carrier-risk">
+            <ShieldCheck className="w-4 h-4 mr-2" /> Carrier Risk
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="shipping" className="space-y-6 mt-0">
 
       {/* Input Card */}
       <Card>
@@ -198,7 +227,98 @@ export default function DTDCCalculator() {
             </div>
           </div>
         </CardContent>
-      </Card>
+        </Card>
+        </TabsContent>
+
+        <TabsContent value="carrier-risk" className="space-y-6 mt-0">
+        <Card data-testid="carrier-risk-card">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4" /> Carrier Risk Calculator
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              DTDC charges {"₹"}{CARRIER_RISK_MIN_AMOUNT} or 2% of the invoice value, whichever is higher, plus GST.
+              The charge is part of the invoice, so it is included in the value the 2% is taken on.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <Label>Invoice Value (before carrier risk)</Label>
+              <div className="relative mt-1">
+                <IndianRupee className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  value={invoiceValue}
+                  onChange={(e) => setInvoiceValue(e.target.value.replace(/[^\d.]/g, ""))}
+                  placeholder="0"
+                  className="pl-9"
+                  inputMode="decimal"
+                  data-testid="carrier-risk-invoice-input"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="carrierRiskGst"
+                checked={riskGstApplicable}
+                onCheckedChange={setRiskGstApplicable}
+                data-testid="carrier-risk-gst-checkbox"
+              />
+              <Label htmlFor="carrierRiskGst" className="cursor-pointer text-sm">
+                Add {CARRIER_RISK_GST_PERCENT}% GST
+              </Label>
+            </div>
+
+            {carrierRisk && (
+              <>
+                <Separator />
+                <div className="rounded-md bg-muted/50 p-4 text-center">
+                  <p className="text-xs text-muted-foreground uppercase font-medium">Carrier Risk</p>
+                  <p className="text-2xl font-bold text-primary mt-1 font-mono" data-testid="carrier-risk-formula">
+                    {formatCarrierRisk(carrierRisk)}
+                  </p>
+                  {carrierRisk.minimum_applied && (
+                    <p className="text-xs text-muted-foreground mt-1" data-testid="carrier-risk-minimum-note">
+                      Minimum {"₹"}{CARRIER_RISK_MIN_AMOUNT} applied (2% is lower)
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Carrier Risk</span>
+                    <span className="font-mono" data-testid="carrier-risk-amount">
+                      {"₹"}{carrierRisk.amount.toFixed(2)}
+                    </span>
+                  </div>
+                  {carrierRisk.gst_amount > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">GST ({carrierRisk.gst_percent}%)</span>
+                      <span className="font-mono" data-testid="carrier-risk-gst-amount">
+                        {"₹"}{carrierRisk.gst_amount.toFixed(2)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-medium">
+                    <span>Added to Invoice</span>
+                    <span className="font-mono" data-testid="carrier-risk-total">
+                      {"₹"}{carrierRisk.total.toFixed(2)}
+                    </span>
+                  </div>
+                  <Separator />
+                  <div className="flex justify-between text-base font-bold">
+                    <span>Invoice Value with Carrier Risk</span>
+                    <span className="font-mono" data-testid="carrier-risk-declared-value">
+                      {"₹"}{(parsedInvoiceValue + carrierRisk.total).toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

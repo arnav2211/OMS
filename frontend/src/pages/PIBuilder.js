@@ -17,6 +17,10 @@ import {
 } from "@/components/ui/dialog";
 import { Link } from "react-router-dom";
 import { INDIAN_STATES } from "@/lib/indianStates";
+import {
+  calcCarrierRisk, formatCarrierRisk, stripCarrierRisk, resolveCarrierRiskFlag,
+  CARRIER_RISK_GST_PERCENT, CARRIER_RISK_COURIER,
+} from "@/lib/carrierRisk";
 import { useAuth } from "@/contexts/AuthContext";
 
 const UNITS = ["mL", "L", "g", "Kg", "pcs", ""];
@@ -101,6 +105,7 @@ export default function PIBuilder() {
   const [showRate, setShowRate] = useState(true);
   const [shippingCharge, setShippingCharge] = useState(0);
   const [additionalCharges, setAdditionalCharges] = useState([]);
+  const [carrierRiskApplicable, setCarrierRiskApplicable] = useState(false);
   const [remark, setRemark] = useState("");
   const [termsAndConditions, setTermsAndConditions] = useState("");
   const [editingTerms, setEditingTerms] = useState(false);
@@ -124,16 +129,26 @@ export default function PIBuilder() {
 
   const canShare = ["admin", "telecaller"].includes(user?.role);
 
-  useEffect(() => { loadPIs(); loadCustomers(); }, []);
+  useEffect(() => { loadPIs(); }, []);
 
   const loadPIs = async () => {
     try { const res = await api.get("/proforma-invoices?page_size=200"); setPiList(res.data.pis || res.data); }
     catch { } finally { setLoading(false); }
   };
 
-  const loadCustomers = async () => {
-    try { const res = await api.get("/customers"); setCustomers(res.data); } catch { }
-  };
+  useEffect(() => {
+    if (!customerSearch.trim()) {
+      setCustomers([]);
+      return;
+    }
+    const delayDebounceFn = setTimeout(() => {
+      api.get(`/customers?search=${encodeURIComponent(customerSearch)}`)
+        .then((r) => setCustomers(r.data))
+        .catch(() => {});
+    }, 300);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [customerSearch]);
 
   const filteredCustomers = customers.filter(c =>
     c.name?.toLowerCase().includes(customerSearch.toLowerCase()) ||
@@ -207,7 +222,12 @@ export default function PIBuilder() {
     if (gstApplicable && c.gst_percent > 0) return s + +((c.amount || 0) * c.gst_percent / 100).toFixed(2);
     return s;
   }, 0);
-  const grandTotal = Math.ceil(subtotal + totalGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst);
+  // Carrier risk is levied on the rest of the invoice, so it is derived last.
+  const carrierRiskBase = subtotal + totalGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst;
+  const carrierRisk = carrierRiskApplicable
+    ? calcCarrierRisk(carrierRiskBase, gstApplicable ? CARRIER_RISK_GST_PERCENT : 0)
+    : null;
+  const grandTotal = Math.ceil(carrierRiskBase + (carrierRisk ? carrierRisk.total : 0));
 
   const saveNewAddress = async () => {
     if (!newAddr.address_line || !newAddr.city || !newAddr.state || !newAddr.pincode) return toast.error("All address fields required");
@@ -238,7 +258,8 @@ export default function PIBuilder() {
 
   const openNewPI = () => {
     setEditingPi(null); setSelectedCustomer(null); setCustomerSearch(""); setItems([emptyItem()]);
-    setGstApplicable(false); setShowRate(true); setShippingCharge(0); setAdditionalCharges([]); setRemark("");
+    setGstApplicable(false); setShowRate(true); setShippingCharge(0); setAdditionalCharges([]);
+    setCarrierRiskApplicable(false); setRemark("");
     setBillingAddress(null); setShippingAddress(null); setSameAsBilling(true); setFreeSamples([]);
     setShowBuilder(true);
   };
@@ -253,8 +274,9 @@ export default function PIBuilder() {
       setItems(fullPi.items?.length ? fullPi.items.map(i => ({ ...i })) : [emptyItem()]);
       setGstApplicable(fullPi.gst_applicable); setShowRate(fullPi.show_rate !== false);
       setShippingCharge(fullPi.shipping_charge || 0);
-      const allCharges = fullPi.additional_charges || [];
-      setAdditionalCharges(allCharges);
+      // Carrier risk is a derived row, so it is kept out of the editable list.
+      setAdditionalCharges(stripCarrierRisk(fullPi.additional_charges));
+      setCarrierRiskApplicable(resolveCarrierRiskFlag(fullPi));
       setRemark(fullPi.remark || "");
       setTermsAndConditions(fullPi.terms_and_conditions || "");
       setBillingAddress(fullPi.billing_address || null); setShippingAddress(fullPi.shipping_address || null);
@@ -277,12 +299,14 @@ export default function PIBuilder() {
           product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description
         })),
         gst_applicable: gstApplicable, show_rate: showRate, shipping_charge: shippingCharge,
+        // The carrier risk row itself is derived server-side from this flag.
         additional_charges: [
-          ...additionalCharges.filter(c => c.name).map(c => ({
+          ...stripCarrierRisk(additionalCharges).filter(c => c.name).map(c => ({
             name: c.name, amount: Math.max(0, c.amount || 0), gst_percent: c.gst_percent || 0,
             gst_amount: gstApplicable && c.gst_percent > 0 ? +((c.amount || 0) * c.gst_percent / 100).toFixed(2) : 0,
           })),
         ],
+        carrier_risk_applicable: carrierRiskApplicable,
         remark,
         terms_and_conditions: termsAndConditions,
         free_samples: freeSamples.filter(s => s.item_name),
@@ -413,8 +437,8 @@ export default function PIBuilder() {
                               setItems(d.items?.length ? d.items.map(i => ({ ...i })) : [emptyItem()]);
                               setGstApplicable(d.gst_applicable); setShowRate(d.show_rate !== false);
                               setShippingCharge(d.shipping_charge || 0);
-                              const dupCharges = d.additional_charges || [];
-                              setAdditionalCharges(dupCharges);
+                              setAdditionalCharges(stripCarrierRisk(d.additional_charges));
+                              setCarrierRiskApplicable(resolveCarrierRiskFlag(d));
                               setRemark(d.remark || "");
                               setTermsAndConditions(d.terms_and_conditions || "");
                               setBillingAddress(d.billing_address || null);
@@ -629,6 +653,28 @@ export default function PIBuilder() {
                   <Button variant="ghost" size="icon" onClick={() => setAdditionalCharges(p => p.filter((_, i) => i !== idx))}><Trash2 className="w-4 h-4 text-destructive" /></Button>
                 </div>
               ))}
+              <Separator />
+              <div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="piCarrierRisk"
+                    checked={carrierRiskApplicable}
+                    onCheckedChange={setCarrierRiskApplicable}
+                    data-testid="pi-carrier-risk-checkbox"
+                  />
+                  <Label htmlFor="piCarrierRisk" className="cursor-pointer">
+                    Carrier Risk ({CARRIER_RISK_COURIER})
+                  </Label>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {"₹"}100 or 2% of the invoice value, whichever is higher{gstApplicable ? `, plus ${CARRIER_RISK_GST_PERCENT}% GST` : ""}. Calculated automatically.
+                </p>
+                {carrierRisk && (
+                  <p className="text-sm font-mono mt-2" data-testid="pi-carrier-risk-formula">
+                    {formatCarrierRisk(carrierRisk)}
+                  </p>
+                )}
+              </div>
             </CardContent>
           </Card>
 
@@ -691,6 +737,12 @@ export default function PIBuilder() {
                     {gstApplicable && c.gst_percent > 0 && <div className="flex justify-between"><span className="text-muted-foreground">{c.name || "Charge"} GST ({c.gst_percent}%)</span><span className="font-mono">{"\u20B9"}{((c.amount || 0) * c.gst_percent / 100).toFixed(2)}</span></div>}
                   </div>
                 ))}
+                {carrierRisk && (
+                  <div data-testid="pi-carrier-risk-summary">
+                    <div className="flex justify-between"><span className="text-muted-foreground">Carrier Risk</span><span className="font-mono">{"\u20B9"}{carrierRisk.amount.toFixed(2)}</span></div>
+                    {carrierRisk.gst_amount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Carrier Risk GST ({carrierRisk.gst_percent}%)</span><span className="font-mono">{"\u20B9"}{carrierRisk.gst_amount.toFixed(2)}</span></div>}
+                  </div>
+                )}
                 <Separator />
                 <div className="flex justify-between text-base font-bold"><span>Grand Total (Rounded Up)</span><span className="font-mono">{"\u20B9"}{grandTotal}</span></div>
               </div>

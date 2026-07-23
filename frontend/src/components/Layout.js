@@ -11,7 +11,7 @@ import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
   FileText, TrendingUp, Bell, ShoppingBag, Calculator, MapPinCheck, Megaphone,
-  ChevronDown, Layers,
+  ChevronDown, Layers, Navigation,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -65,6 +65,7 @@ const NAV_ITEMS = {
     { label: "Accounts", icon: BarChart3, path: "/accounts" },
     { label: "Item Analytics", icon: TrendingUp, path: "/item-analytics" },
     { label: "Users", icon: Settings, path: "/users" },
+    { label: "Field Tracking", icon: Navigation, path: "/tracking" },
     { label: "Alerts", icon: Megaphone, path: "/admin-alerts" },
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },

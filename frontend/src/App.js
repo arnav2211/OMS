@@ -26,11 +26,15 @@ import AdminAccounts from "@/pages/admin/AdminAccounts";
 import AdminAlerts from "@/pages/admin/AdminAlerts";
 import DTDCCalculator from "@/pages/DTDCCalculator";
 import AnjaniChecker from "@/pages/AnjaniChecker";
+import FieldTracking from "@/pages/admin/FieldTracking";
+import FieldHome from "@/pages/field/FieldHome";
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="flex items-center justify-center h-screen text-muted-foreground">Loading...</div>;
   if (!user) return <Navigate to="/login" replace />;
+  // Field executives are location-only: they never see the OMS, on any route.
+  if (user.role === "field_executive") return <FieldHome />;
   if (allowedRoles && !allowedRoles.includes(user.role)) return <Navigate to="/" replace />;
   return <Layout>{children}</Layout>;
 }
@@ -68,6 +72,7 @@ function AppRoutes() {
       <Route path="/proforma" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><PIBuilder /></ProtectedRoute>} />
       <Route path="/item-analytics" element={<ProtectedRoute allowedRoles={["admin"]}><ItemAnalytics /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute allowedRoles={["admin"]}><UserManagement /></ProtectedRoute>} />
+      <Route path="/tracking" element={<ProtectedRoute allowedRoles={["admin"]}><FieldTracking /></ProtectedRoute>} />
       <Route path="/amazon-orders" element={<ProtectedRoute allowedRoles={["admin", "packaging"]}><AmazonOrders /></ProtectedRoute>} />
       <Route path="/amazon-orders/:id" element={<ProtectedRoute allowedRoles={["admin", "packaging", "dispatch"]}><AmazonOrderDetail /></ProtectedRoute>} />
       <Route path="/amazon-packing" element={<ProtectedRoute allowedRoles={["admin", "packaging"]}><AmazonPacking /></ProtectedRoute>} />

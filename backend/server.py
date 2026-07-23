@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, HTMLResponse
@@ -115,6 +115,20 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     active: Optional[bool] = None
 
+class LocationPing(BaseModel):
+    lat: float
+    lng: float
+    accuracy: Optional[float] = None      # metres
+    altitude: Optional[float] = None
+    speed: Optional[float] = None         # m/s
+    heading: Optional[float] = None
+    battery: Optional[int] = None         # 0-100
+    is_moving: Optional[bool] = None
+    ts: Optional[str] = None              # ISO8601; server fills if absent
+
+class LocationBatch(BaseModel):
+    pings: List[LocationPing] = []
+
 class AddressCreate(BaseModel):
     address_line: str
     city: str
@@ -153,6 +167,76 @@ class AdditionalChargeModel(BaseModel):
     gst_percent: int = 0
     gst_amount: float = 0
 
+# ─── DTDC Carrier Risk ────────────────────────────────────────────────────
+# DTDC levies carrier risk (transit insurance) at 2% of the declared invoice
+# value or a flat minimum, whichever is higher, plus GST. The charge appears on
+# the invoice, so it raises the value the 2% is levied on. The amount is
+# therefore the fixed point of
+#     C = 0.02 * (base + C + C * gst)
+#   =>  C = 0.02 * base / (1 - 0.02 * (1 + gst))
+# where base is everything else on the invoice. Worked example: base 4882 with
+# 18% GST gives C = 100, an invoice value of 4882 + 100 + 18 = 5000, and 2% of
+# 5000 is exactly the 100 charged.
+CARRIER_RISK_LABEL = "Carrier Risk"
+CARRIER_RISK_MIN_AMOUNT = 100
+CARRIER_RISK_RATE = 0.02
+CARRIER_RISK_GST_PERCENT = 18
+CARRIER_RISK_COURIER = "DTDC"
+
+
+def calc_carrier_risk(base_value: float, gst_percent: int = CARRIER_RISK_GST_PERCENT) -> dict:
+    """Carrier risk row for an invoice worth base_value before the charge is added."""
+    base_value = max(0.0, float(base_value or 0))
+    gst_percent = max(0, int(gst_percent or 0))
+    gst_fraction = gst_percent / 100
+    divisor = 1 - CARRIER_RISK_RATE * (1 + gst_fraction)
+    raw = (CARRIER_RISK_RATE * base_value / divisor) if divisor > 0 else float(CARRIER_RISK_MIN_AMOUNT)
+    # Round before the ceiling so float noise at an exact boundary (base 4882
+    # lands on precisely 100) cannot push the charge a whole rupee higher.
+    amount = max(CARRIER_RISK_MIN_AMOUNT, math.ceil(round(raw, 6)))
+    return {
+        "name": CARRIER_RISK_LABEL,
+        "amount": float(amount),
+        "gst_percent": gst_percent,
+        "gst_amount": round(amount * gst_fraction, 2),
+    }
+
+
+def build_additional_charges(raw_charges, gst_applicable: bool, carrier_risk_applicable: bool, base_value: float):
+    """Normalise additional charges, appending the derived carrier risk row when applicable.
+
+    base_value is the rest of the invoice: items + item GST + shipping + shipping GST.
+    Returns (charges, total_amount, total_gst).
+    """
+    charges = []
+    total_amount = 0.0
+    total_gst = 0.0
+    for charge in raw_charges or []:
+        c = charge.model_dump() if hasattr(charge, "model_dump") else dict(charge)
+        # Carrier risk is always re-derived here, never trusted from the caller.
+        if str(c.get("name", "")).strip().lower() == CARRIER_RISK_LABEL.lower():
+            continue
+        c["amount"] = max(0, c.get("amount", 0) or 0)
+        c["gst_percent"] = c.get("gst_percent", 0) or 0
+        if gst_applicable and c["gst_percent"] > 0:
+            c["gst_amount"] = round(c["amount"] * c["gst_percent"] / 100, 2)
+        else:
+            c["gst_amount"] = 0
+        total_amount += c["amount"]
+        total_gst += c["gst_amount"]
+        charges.append(c)
+
+    if carrier_risk_applicable:
+        carrier_risk = calc_carrier_risk(
+            base_value + total_amount + total_gst,
+            CARRIER_RISK_GST_PERCENT if gst_applicable else 0,
+        )
+        charges.append(carrier_risk)
+        total_amount += carrier_risk["amount"]
+        total_gst += carrier_risk["gst_amount"]
+
+    return charges, total_amount, total_gst
+
 class OrderCreate(BaseModel):
     customer_id: str
     purpose: str = ""
@@ -165,6 +249,7 @@ class OrderCreate(BaseModel):
     shipping_charge: float = 0
     shipping_gst: float = 0
     additional_charges: List[AdditionalChargeModel] = []
+    carrier_risk_applicable: bool = False
     remark: str = ""
     payment_status: str = "unpaid"
     amount_paid: float = 0
@@ -195,6 +280,7 @@ class PICreate(BaseModel):
     show_rate: bool = True
     shipping_charge: float = 0
     additional_charges: List[AdditionalChargeModel] = []
+    carrier_risk_applicable: bool = False
     remark: str = ""
     billing_address_id: str = ""
     shipping_address_id: str = ""
@@ -223,15 +309,28 @@ def create_token(user_id: str, role: str, name: str, username: str) -> str:
         JWT_SECRET, algorithm=JWT_ALGORITHM
     )
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+# Paths a field_executive account is permitted to reach. Everything else in the
+# OMS (orders, customers, PIs, analytics, ...) is blocked for this role at the
+# API layer so the account can only be used for location reporting.
+FIELD_EXECUTIVE_ALLOWED_PREFIXES = (
+    "/api/auth/",
+    "/api/location/",
+)
+
+async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
         if not user or not user.get("active", True):
             raise HTTPException(status_code=401, detail="User not found or inactive")
-        return user
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+    if user.get("role") == "field_executive":
+        path = request.url.path
+        if not any(path.startswith(p) for p in FIELD_EXECUTIVE_ALLOWED_PREFIXES):
+            raise HTTPException(status_code=403, detail="Not authorized for this resource")
+    return user
 
 async def get_user_from_token_param(token: str):
     """Authenticate user from a query parameter token (for endpoints opened in new tabs like PDF print)."""
@@ -305,6 +404,8 @@ async def startup():
     await db.addresses.create_index("customer_id")
     await db.edit_permissions.create_index("order_id")
     await db.edit_permissions.create_index("user_id")
+    await db.locations.create_index([("user_id", 1), ("ts", 1)])
+    await db.locations.create_index("ts")
 
     existing = await db.users.find_one({"username": "admin"})
     if not existing:
@@ -364,7 +465,7 @@ async def get_me(user=Depends(get_current_user)):
 # User Management (Admin)
 @api_router.post("/users")
 async def create_user(req: UserCreate, admin=Depends(require_admin)):
-    if req.role not in ["admin", "telecaller", "packaging", "dispatch", "accounts"]:
+    if req.role not in ["admin", "telecaller", "packaging", "dispatch", "accounts", "field_executive"]:
         raise HTTPException(status_code=400, detail="Invalid role")
     existing = await db.users.find_one({"username": req.username})
     if existing:
@@ -473,6 +574,11 @@ async def list_customers(search: Optional[str] = None, user=Depends(get_current_
         ]}
     customers = await db.customers.find(query, {"_id": 0}).sort("name", 1).to_list(500)
     return customers
+
+@api_router.get("/customers/count")
+async def get_customers_count(user=Depends(get_current_user)):
+    count = await db.customers.count_documents({})
+    return {"count": count}
 
 @api_router.get("/customers/{customer_id}")
 async def get_customer(customer_id: str, user=Depends(get_current_user)):
@@ -693,24 +799,17 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         total_gst += item_dict["gst_amount"]
         items.append(item_dict)
 
-    # Process additional charges
-    additional_charges = []
-    total_additional = 0
-    total_additional_gst = 0
-    for charge in req.additional_charges:
-        c = charge.model_dump()
-        c["amount"] = max(0, c["amount"])
-        if req.gst_applicable and c["gst_percent"] > 0:
-            c["gst_amount"] = round(c["amount"] * c["gst_percent"] / 100, 2)
-        else:
-            c["gst_amount"] = 0
-        total_additional += c["amount"]
-        total_additional_gst += c["gst_amount"]
-        additional_charges.append(c)
-
     shipping_gst = 0
     if req.gst_applicable and req.shipping_charge > 0:
         shipping_gst = round(req.shipping_charge * 0.18, 2)
+
+    # Process additional charges (carrier risk, if applicable, is appended here)
+    additional_charges, total_additional, total_additional_gst = build_additional_charges(
+        req.additional_charges,
+        req.gst_applicable,
+        req.carrier_risk_applicable,
+        subtotal + total_gst + req.shipping_charge + shipping_gst,
+    )
 
     raw_total = subtotal + total_gst + req.shipping_charge + shipping_gst + total_additional + total_additional_gst
     grand_total = math.ceil(raw_total)
@@ -740,6 +839,7 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "shipping_charge": req.shipping_charge,
         "shipping_gst": shipping_gst,
         "additional_charges": additional_charges,
+        "carrier_risk_applicable": req.carrier_risk_applicable,
         "subtotal": round(subtotal, 2),
         "total_gst": round(total_gst + shipping_gst + total_additional_gst, 2),
         "grand_total": grand_total,
@@ -2962,20 +3062,13 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
         items.append(d)
     shipping_gst = round(req.shipping_charge * 0.18, 2) if req.gst_applicable and req.shipping_charge > 0 else 0
 
-    # Process additional charges for PI
-    additional_charges = []
-    total_additional = 0
-    total_additional_gst = 0
-    for charge in req.additional_charges:
-        c = charge.model_dump()
-        c["amount"] = max(0, c["amount"])
-        if req.gst_applicable and c["gst_percent"] > 0:
-            c["gst_amount"] = round(c["amount"] * c["gst_percent"] / 100, 2)
-        else:
-            c["gst_amount"] = 0
-        total_additional += c["amount"]
-        total_additional_gst += c["gst_amount"]
-        additional_charges.append(c)
+    # Process additional charges for PI (carrier risk, if applicable, is appended here)
+    additional_charges, total_additional, total_additional_gst = build_additional_charges(
+        req.additional_charges,
+        req.gst_applicable,
+        req.carrier_risk_applicable,
+        subtotal + total_gst + req.shipping_charge + shipping_gst,
+    )
 
     grand_total = math.ceil(subtotal + total_gst + req.shipping_charge + shipping_gst + total_additional + total_additional_gst)
 
@@ -2998,6 +3091,7 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
         "shipping_charge": req.shipping_charge,
         "shipping_gst": shipping_gst,
         "additional_charges": additional_charges,
+        "carrier_risk_applicable": req.carrier_risk_applicable,
         "subtotal": round(subtotal, 2),
         "total_gst": round(total_gst + shipping_gst + total_additional_gst, 2),
         "grand_total": grand_total,
@@ -3093,20 +3187,13 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
         items.append(d)
     shipping_gst = round(req.shipping_charge * 0.18, 2) if req.gst_applicable and req.shipping_charge > 0 else 0
 
-    # Process additional charges for PI update
-    additional_charges = []
-    total_additional = 0
-    total_additional_gst = 0
-    for charge in req.additional_charges:
-        c = charge.model_dump()
-        c["amount"] = max(0, c["amount"])
-        if req.gst_applicable and c["gst_percent"] > 0:
-            c["gst_amount"] = round(c["amount"] * c["gst_percent"] / 100, 2)
-        else:
-            c["gst_amount"] = 0
-        total_additional += c["amount"]
-        total_additional_gst += c["gst_amount"]
-        additional_charges.append(c)
+    # Process additional charges for PI update (carrier risk, if applicable, is appended here)
+    additional_charges, total_additional, total_additional_gst = build_additional_charges(
+        req.additional_charges,
+        req.gst_applicable,
+        req.carrier_risk_applicable,
+        subtotal + total_gst + req.shipping_charge + shipping_gst,
+    )
 
     grand_total = math.ceil(subtotal + total_gst + req.shipping_charge + shipping_gst + total_additional + total_additional_gst)
 
@@ -3126,6 +3213,7 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
         "shipping_charge": req.shipping_charge,
         "shipping_gst": shipping_gst,
         "additional_charges": additional_charges,
+        "carrier_risk_applicable": req.carrier_risk_applicable,
         "subtotal": round(subtotal, 2),
         "total_gst": round(total_gst + shipping_gst + total_additional_gst, 2),
         "grand_total": grand_total,
@@ -3175,6 +3263,7 @@ async def duplicate_order(order_id: str, user=Depends(get_current_user)):
         "transporter_name": order.get("transporter_name", ""),
         "shipping_charge": order.get("shipping_charge", 0),
         "additional_charges": order.get("additional_charges", []),
+        "carrier_risk_applicable": order.get("carrier_risk_applicable", False),
         "remark": order.get("remark", ""),
         "free_samples": order.get("free_samples", []),
         "billing_address_id": order.get("billing_address_id", ""),
@@ -3203,6 +3292,7 @@ async def duplicate_pi(pi_id: str, user=Depends(get_current_user)):
         "show_rate": pi.get("show_rate", True),
         "shipping_charge": pi.get("shipping_charge", 0),
         "additional_charges": pi.get("additional_charges", []),
+        "carrier_risk_applicable": pi.get("carrier_risk_applicable", False),
         "remark": pi.get("remark", ""),
         "free_samples": pi.get("free_samples", []),
         "billing_address_id": pi.get("billing_address_id", ""),
@@ -3250,19 +3340,18 @@ async def make_pi_from_order(order_id: str, req: MakePIRequest, user=Depends(get
     shipping_charge = order.get("shipping_charge", 0)
     shipping_gst = round(shipping_charge * 0.18, 2) if req.gst_applicable and shipping_charge > 0 else 0
 
-    additional_charges = []
-    total_additional = 0
-    total_additional_gst = 0
-    for charge in order.get("additional_charges", []):
-        c = dict(charge)
-        c["amount"] = max(0, c.get("amount", 0))
-        if req.gst_applicable and c.get("gst_percent", 0) > 0:
-            c["gst_amount"] = round(c["amount"] * c.get("gst_percent", 0) / 100, 2)
-        else:
-            c["gst_amount"] = 0
-        total_additional += c["amount"]
-        total_additional_gst += c["gst_amount"]
-        additional_charges.append(c)
+    # Carrier risk is re-derived so it tracks the PI's own gst_applicable choice
+    carrier_risk_applicable = order.get(
+        "carrier_risk_applicable",
+        any(str(c.get("name", "")).strip().lower() == CARRIER_RISK_LABEL.lower()
+            for c in order.get("additional_charges", [])),
+    )
+    additional_charges, total_additional, total_additional_gst = build_additional_charges(
+        order.get("additional_charges", []),
+        req.gst_applicable,
+        carrier_risk_applicable,
+        subtotal + total_gst + shipping_charge + shipping_gst,
+    )
 
     grand_total = math.ceil(subtotal + total_gst + shipping_charge + shipping_gst + total_additional + total_additional_gst)
 
@@ -3295,6 +3384,7 @@ async def make_pi_from_order(order_id: str, req: MakePIRequest, user=Depends(get
         "shipping_charge": shipping_charge,
         "shipping_gst": shipping_gst,
         "additional_charges": additional_charges,
+        "carrier_risk_applicable": carrier_risk_applicable,
         "subtotal": round(subtotal, 2),
         "total_gst": round(total_gst + shipping_gst + total_additional_gst, 2),
         "grand_total": grand_total,
@@ -3346,6 +3436,7 @@ async def convert_pi_to_order(pi_id: str, body: dict, user=Depends(get_current_u
         "shipping_charge": pi["shipping_charge"],
         "shipping_gst": pi["shipping_gst"],
         "additional_charges": pi.get("additional_charges", []),
+        "carrier_risk_applicable": pi.get("carrier_risk_applicable", False),
         "subtotal": pi["subtotal"],
         "total_gst": pi["total_gst"],
         "grand_total": pi["grand_total"],
@@ -4250,6 +4341,28 @@ async def dtdc_calculate(body: dict):
         "final_charge": final_cost,
     }
 
+@api_router.post("/dtdc/carrier-risk")
+async def dtdc_carrier_risk(body: dict):
+    """Carrier risk on a given invoice value. See calc_carrier_risk for the arithmetic."""
+    try:
+        invoice_value = float(body.get("invoice_value", 0) or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="invoice_value must be a number")
+    gst_applicable = body.get("gst_applicable", True)
+    result = calc_carrier_risk(invoice_value, CARRIER_RISK_GST_PERCENT if gst_applicable else 0)
+    total = round(result["amount"] + result["gst_amount"], 2)
+    return {
+        "invoice_value": round(max(0.0, invoice_value), 2),
+        "carrier_risk": result["amount"],
+        "gst_percent": result["gst_percent"],
+        "gst_amount": result["gst_amount"],
+        "total": total,
+        "declared_value": round(max(0.0, invoice_value) + total, 2),
+        "minimum_applied": result["amount"] <= CARRIER_RISK_MIN_AMOUNT,
+        "rate_percent": CARRIER_RISK_RATE * 100,
+        "min_amount": CARRIER_RISK_MIN_AMOUNT,
+    }
+
 @api_router.get("/dtdc/check/{pincode}")
 async def dtdc_check_pincode(pincode: str):
     pincode = pincode.strip()
@@ -4499,6 +4612,183 @@ async def get_alert_history(user=Depends(get_current_user)):
     return alerts
 
 
+
+
+# ============================================================
+# Field-Executive Location Tracking
+# ============================================================
+IST = pytz.timezone("Asia/Kolkata")
+
+
+def _parse_iso(value: str) -> datetime:
+    """Parse an ISO8601 string (accepts a trailing 'Z') into an aware UTC datetime."""
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance between two points in metres."""
+    r = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _ist_day_bounds(date_str: Optional[str]) -> tuple:
+    """Return (start_utc_iso, end_utc_iso) for an IST calendar day. Defaults to today (IST)."""
+    if date_str:
+        y, m, d = (int(x) for x in date_str.split("-"))
+        day = IST.localize(datetime(y, m, d, 0, 0, 0))
+    else:
+        now_ist = datetime.now(timezone.utc).astimezone(IST)
+        day = IST.localize(datetime(now_ist.year, now_ist.month, now_ist.day, 0, 0, 0))
+    start = day.astimezone(timezone.utc).isoformat()
+    end = (day + timedelta(days=1)).astimezone(timezone.utc).isoformat()
+    return start, end
+
+
+async def _store_pings(user: dict, pings: List[LocationPing]) -> int:
+    docs = []
+    for p in pings:
+        try:
+            ts = _parse_iso(p.ts).isoformat() if p.ts else datetime.now(timezone.utc).isoformat()
+        except (ValueError, TypeError):
+            ts = datetime.now(timezone.utc).isoformat()
+        docs.append({
+            "id": str(uuid.uuid4()),
+            "user_id": user["id"],
+            "user_name": user.get("name", ""),
+            "lat": p.lat,
+            "lng": p.lng,
+            "accuracy": p.accuracy,
+            "altitude": p.altitude,
+            "speed": p.speed,
+            "heading": p.heading,
+            "battery": p.battery,
+            "is_moving": p.is_moving,
+            "ts": ts,
+            "server_ts": datetime.now(timezone.utc).isoformat(),
+        })
+    if docs:
+        await db.locations.insert_many(docs)
+    return len(docs)
+
+
+@api_router.post("/location/ping")
+async def location_ping(ping: LocationPing, user=Depends(get_current_user)):
+    if user["role"] not in ("field_executive", "admin"):
+        raise HTTPException(status_code=403, detail="Not a tracking account")
+    count = await _store_pings(user, [ping])
+    return {"stored": count}
+
+
+@api_router.post("/location/batch")
+async def location_batch(batch: LocationBatch, user=Depends(get_current_user)):
+    if user["role"] not in ("field_executive", "admin"):
+        raise HTTPException(status_code=403, detail="Not a tracking account")
+    count = await _store_pings(user, batch.pings)
+    return {"stored": count}
+
+
+@api_router.get("/location/executives")
+async def list_tracked_executives(admin=Depends(require_admin)):
+    """All field-executive accounts with their most recent fix."""
+    users = await db.users.find(
+        {"role": "field_executive"}, {"_id": 0, "password_hash": 0}
+    ).to_list(500)
+    result = []
+    for u in users:
+        last = await db.locations.find(
+            {"user_id": u["id"]}, {"_id": 0}
+        ).sort("ts", -1).limit(1).to_list(1)
+        last_fix = last[0] if last else None
+        result.append({
+            "id": u["id"],
+            "name": u["name"],
+            "username": u["username"],
+            "active": u.get("active", True),
+            "last_fix": last_fix,
+        })
+    return result
+
+
+@api_router.get("/location/history/{user_id}")
+async def location_history(user_id: str, date: Optional[str] = None, admin=Depends(require_admin)):
+    """Full ordered track for one executive on an IST calendar day + total distance."""
+    start, end = _ist_day_bounds(date)
+    pings = await db.locations.find(
+        {"user_id": user_id, "ts": {"$gte": start, "$lt": end}}, {"_id": 0}
+    ).sort("ts", 1).to_list(20000)
+
+    total_m = 0.0
+    prev = None
+    for p in pings:
+        if prev is not None:
+            # skip obviously bad jumps from low-accuracy fixes
+            if (p.get("accuracy") or 0) <= 100:
+                total_m += _haversine_m(prev["lat"], prev["lng"], p["lat"], p["lng"])
+        prev = p
+    return {
+        "user_id": user_id,
+        "date": date or datetime.now(timezone.utc).astimezone(IST).strftime("%Y-%m-%d"),
+        "count": len(pings),
+        "distance_km": round(total_m / 1000.0, 2),
+        "points": pings,
+    }
+
+
+@api_router.get("/location/staypoints/{user_id}")
+async def location_staypoints(
+    user_id: str,
+    date: Optional[str] = None,
+    radius_m: float = 60.0,
+    min_minutes: float = 5.0,
+    admin=Depends(require_admin),
+):
+    """Cluster consecutive fixes into 'stay points' (where the person lingered)."""
+    start, end = _ist_day_bounds(date)
+    pings = await db.locations.find(
+        {"user_id": user_id, "ts": {"$gte": start, "$lt": end}}, {"_id": 0}
+    ).sort("ts", 1).to_list(20000)
+
+    stays = []
+    i = 0
+    n = len(pings)
+    while i < n:
+        anchor = pings[i]
+        j = i + 1
+        sum_lat, sum_lng, cnt = anchor["lat"], anchor["lng"], 1
+        while j < n:
+            c_lat, c_lng = sum_lat / cnt, sum_lng / cnt
+            if _haversine_m(c_lat, c_lng, pings[j]["lat"], pings[j]["lng"]) <= radius_m:
+                sum_lat += pings[j]["lat"]
+                sum_lng += pings[j]["lng"]
+                cnt += 1
+                j += 1
+            else:
+                break
+        arrival = _parse_iso(pings[i]["ts"])
+        departure = _parse_iso(pings[j - 1]["ts"])
+        dur_min = (departure - arrival).total_seconds() / 60.0
+        if dur_min >= min_minutes:
+            stays.append({
+                "lat": sum_lat / cnt,
+                "lng": sum_lng / cnt,
+                "arrival": arrival.astimezone(IST).isoformat(),
+                "departure": departure.astimezone(IST).isoformat(),
+                "duration_min": round(dur_min, 1),
+                "fixes": cnt,
+            })
+        i = j if j > i + 1 else i + 1
+
+    stays.sort(key=lambda s: s["duration_min"], reverse=True)
+    return {"user_id": user_id, "date": date, "stay_points": stays}
 
 
 app.include_router(api_router)
