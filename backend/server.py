@@ -63,7 +63,7 @@ COMPANY = {
 LOGO_PATH = ROOT_DIR / "logo.png"
 LOGO_PDF_PATH = ROOT_DIR / "logo_pdf.png"
 
-COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"]
+COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"]
 
 # Bank details for PI PDFs
 BANK_GST = {
@@ -1537,8 +1537,9 @@ async def update_dispatch(order_id: str, req: DispatchUpdate, user=Depends(get_c
         raise HTTPException(status_code=404, detail="Order not found")
 
     shipping_method = req.shipping_method or order.get("shipping_method", "")
-    # Mandatory LR for courier and transport
-    if shipping_method in ["courier", "transport"] and not req.lr_no:
+    courier_partner = req.courier_name or order.get("courier_name", "")
+    # Mandatory LR for transport, and for courier unless courier_name is "Others"
+    if (shipping_method == "transport" or (shipping_method == "courier" and courier_partner != "Others")) and not req.lr_no:
         raise HTTPException(status_code=400, detail="LR / Tracking Number is mandatory for courier and transport dispatch")
 
     dispatch = {

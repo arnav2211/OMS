@@ -23,7 +23,7 @@ import { SlipScanner } from "@/components/SlipScanner";
 import { validateLrNumber, getTrackingUrl, extractPorterLink, isLrMandatory, COURIER_LR_PATTERNS } from "@/lib/courierTracking";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
-const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
+const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"];
 
 export default function OrderDetail() {
   const { orderId: id } = useParams();
@@ -175,8 +175,8 @@ export default function OrderDetail() {
 
   const saveDispatch = async () => {
     const dtype = dispatchData.dispatch_type;
-    // Mandatory LR for courier and transport
-    if (isLrMandatory(dtype) && !dispatchData.lr_no.trim()) {
+    // Mandatory LR for courier (except Others) and transport
+    if (isLrMandatory(dtype, dispatchData.courier_name) && !dispatchData.lr_no.trim()) {
       return toast.error("LR / Tracking Number is mandatory for " + (dtype === "courier" ? "Courier" : "Transport") + " dispatch");
     }
     // Courier-specific regex validation

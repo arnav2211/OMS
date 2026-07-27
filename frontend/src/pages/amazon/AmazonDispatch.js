@@ -16,7 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RefreshCw, Truck, Edit2 } from "lucide-react";
 import { validateLrNumber, COURIER_LR_PATTERNS } from "@/lib/courierTracking";
 
-const COURIERS = ["DTDC", "Anjani", "Professional", "India Post"];
+const COURIERS = ["DTDC", "Anjani", "India Post", "Others"];
 
 export default function AmazonDispatch() {
   const { user } = useAuth();
@@ -71,9 +71,9 @@ export default function AmazonDispatch() {
   // Self Ship - individual dispatch with mandatory LR
   const openSelfDispatch = (order) => { setDispatchSelf(order); setLrNumber(""); setLrValidationError(""); };
   const dispatchSelfShip = async () => {
-    if (!lrNumber.trim()) return toast.error("LR number is mandatory for self ship");
+    if (dispatchSelf?.courier_name !== "Others" && !lrNumber.trim()) return toast.error("LR number is mandatory for self ship");
     // Regex validation based on courier
-    if (dispatchSelf?.courier_name) {
+    if (dispatchSelf?.courier_name && dispatchSelf.courier_name !== "Others" && lrNumber.trim()) {
       const validation = validateLrNumber(dispatchSelf.courier_name, lrNumber);
       if (!validation.valid) {
         setLrValidationError(validation.message);
@@ -221,7 +221,7 @@ export default function AmazonDispatch() {
             <div className="text-sm"><span className="text-muted-foreground">Order:</span> <span className="font-mono font-bold">{dispatchSelf?.am_order_number}</span></div>
             <div className="text-sm"><span className="text-muted-foreground">Courier:</span> <span className="font-medium">{dispatchSelf?.courier_name}</span></div>
             <div>
-              <Label className="text-sm">LR Number <span className="text-red-500">*</span></Label>
+              <Label className="text-sm">LR Number {dispatchSelf?.courier_name === "Others" ? null : <span className="text-red-500">*</span>}</Label>
               <Input
                 value={lrNumber}
                 onChange={e => { setLrNumber(e.target.value); setLrValidationError(""); }}
@@ -234,7 +234,7 @@ export default function AmazonDispatch() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDispatchSelf(null)}>Cancel</Button>
-            <Button onClick={dispatchSelfShip} disabled={selfDispatching || !lrNumber.trim()} data-testid="confirm-self-dispatch">
+            <Button onClick={dispatchSelfShip} disabled={selfDispatching || (dispatchSelf?.courier_name !== "Others" && !lrNumber.trim())} data-testid="confirm-self-dispatch">
               {selfDispatching ? "Dispatching..." : "Dispatch"}
             </Button>
           </DialogFooter>

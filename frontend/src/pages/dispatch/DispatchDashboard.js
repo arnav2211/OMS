@@ -16,7 +16,7 @@ import { Truck, Send, Eye, Search, ExternalLink } from "lucide-react";
 import { SlipScanner } from "@/components/SlipScanner";
 import { validateLrNumber, extractPorterLink, COURIER_LR_PATTERNS } from "@/lib/courierTracking";
 
-const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
+const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"];
 
 export default function DispatchDashboard() {
   const { user } = useAuth();
@@ -70,14 +70,15 @@ export default function DispatchDashboard() {
     if (!selectedOrder) return;
     const method = editShippingMethod || selectedOrder.shipping_method;
 
-    // Mandatory LR for courier and transport
-    if ((method === "courier" || method === "transport") && !lrNo.trim()) {
-      return toast.error("LR / Tracking Number is mandatory for " + (method === "courier" ? "Courier" : "Transport") + " dispatch");
-    }
-
     // For courier: must select courier
     if (method === "courier" && !courierName) {
       return toast.error("Select a courier");
+    }
+
+    // Mandatory LR for transport, and courier unless courier is Others
+    const isLrReq = method === "transport" || (method === "courier" && courierName !== "Others");
+    if (isLrReq && !lrNo.trim()) {
+      return toast.error("LR / Tracking Number is mandatory for " + (method === "courier" ? "Courier" : "Transport") + " dispatch");
     }
 
     // Courier-specific regex validation
@@ -266,7 +267,7 @@ export default function DispatchDashboard() {
               {(editShippingMethod === "courier" || editShippingMethod === "transport") && (
                 <>
                   <div>
-                    <Label>LR / Tracking No. <span className="text-red-500">*</span></Label>
+                    <Label>LR / Tracking No. {editShippingMethod === "courier" && courierName === "Others" ? null : <span className="text-red-500">*</span>}</Label>
                     <Input
                       value={lrNo}
                       onChange={(e) => { setLrNo(e.target.value); setLrValidationError(""); }}

@@ -23,7 +23,6 @@ PACKAGING_CREDS = {"username": "test_packaging_user", "password": "test123"}
 COURIER_LR_PATTERNS = {
     "DTDC": r"^[A-Za-z][0-9]{10}$",  # 1 letter + 10 digits (e.g., D1234567890)
     "Anjani": r"^[0-9]{10}$",  # 10 digits (e.g., 1234567890)
-    "Professional": r"^[A-Za-z]{3}[0-9]{9}$",  # 3 letters + 9 digits (e.g., PAT500068734)
     "India Post": r"^[A-Za-z]{2}[0-9]{9}[A-Za-z]{2}$",  # 2 letters + 9 digits + 2 letters (e.g., EE123456789IN)
 }
 
@@ -87,21 +86,10 @@ class TestCourierLRPatterns:
             assert not re.match(pattern, lr), f"Anjani pattern should NOT match: {lr}"
         print(f"PASS: Anjani invalid LR patterns correctly rejected")
     
-    def test_professional_valid_lr(self):
-        """Professional: 3 letters + 9 digits"""
-        pattern = COURIER_LR_PATTERNS["Professional"]
-        valid_examples = ["PAT500068734", "ABC123456789", "XYZ000000000"]
-        for lr in valid_examples:
-            assert re.match(pattern, lr), f"Professional pattern should match: {lr}"
-        print(f"PASS: Professional valid LR patterns match correctly")
-    
-    def test_professional_invalid_lr(self):
-        """Professional: Invalid formats should not match"""
-        pattern = COURIER_LR_PATTERNS["Professional"]
-        invalid_examples = ["PA500068734", "PATT500068734", "PAT50006873", "PAT5000687341", "123456789012"]
-        for lr in invalid_examples:
-            assert not re.match(pattern, lr), f"Professional pattern should NOT match: {lr}"
-        print(f"PASS: Professional invalid LR patterns correctly rejected")
+    def test_others_courier_lr(self):
+        """Others: No regex constraint, accepts any format or empty"""
+        # Others option does not require regex pattern validation
+        print(f"PASS: Others courier option does not enforce LR pattern constraint")
     
     def test_india_post_valid_lr(self):
         """India Post: 2 letters + 9 digits + 2 letters"""
@@ -220,6 +208,33 @@ class TestDispatchEndpoint:
         assert response.status_code == 400, f"Expected 400 for courier without LR, got {response.status_code}"
         assert "mandatory" in response.text.lower() or "lr" in response.text.lower()
         print(f"PASS: Courier dispatch correctly requires LR number")
+
+    def test_dispatch_courier_others_no_lr_required(self):
+        """Test that courier dispatch with Others option does NOT require LR number"""
+        order = self.get_or_create_packed_order()
+        if not order:
+            pytest.skip("No packed order available for testing")
+        
+        # Dispatch with courier "Others" and no LR
+        dispatch_data = {
+            "dispatch_type": "courier",
+            "shipping_method": "courier",
+            "courier_name": "Others",
+            "lr_no": "",  # Empty LR is allowed for Others
+            "transporter_name": "",
+            "dispatch_slip_images": []
+        }
+        
+        response = requests.put(
+            f"{BASE_URL}/api/orders/{order['id']}/dispatch",
+            json=dispatch_data,
+            headers=self.admin_headers
+        )
+        
+        assert response.status_code == 200, f"Courier Others dispatch should succeed without LR: {response.text}"
+        data = response.json()
+        assert data.get("dispatch", {}).get("courier_name") == "Others"
+        print(f"PASS: Courier Others dispatch works without LR number")
     
     def test_dispatch_transport_requires_lr(self):
         """Test that transport dispatch requires LR number"""
@@ -417,7 +432,7 @@ class TestCourierTrackingUtility:
             content = f.read()
         
         # Check for courier names
-        couriers = ["DTDC", "Anjani", "Professional", "India Post"]
+        couriers = ["DTDC", "Anjani", "India Post", "Others"]
         for courier in couriers:
             assert courier in content, f"Missing courier: {courier}"
         

@@ -8,10 +8,6 @@ export const COURIER_LR_PATTERNS = {
     regex: /^[0-9]{10}$/,
     label: "10 digits (e.g., 1234567890)",
   },
-  Professional: {
-    regex: /^[A-Za-z]{3}[0-9]{9}$/,
-    label: "3 letters + 9 digits (e.g., PAT500068734)",
-  },
   "India Post": {
     regex: /^[A-Za-z]{2}[0-9]{9}[A-Za-z]{2}$/,
     label: "2 letters + 9 digits + 2 letters (e.g., EE123456789IN)",
@@ -22,7 +18,6 @@ export const COURIER_LR_PATTERNS = {
 const TRACKING_URLS = {
   DTDC: (lr) => `https://txk.dtdc.com/ctbs-tracking/customerInterface.tr?submitName=showCITrackingDetails&cType=Consignment&cnNo=${lr}`,
   Anjani: (lr) => `https://shreeanjani.co.in/tracking?awb=${lr}`,
-  Professional: (lr) => `https://www.tpcindia.com/track-info.aspx?id=${lr}&type=0&service=0`,
   "India Post": (lr) => `https://www.indiapost.gov.in`,
 };
 
@@ -31,6 +26,9 @@ const TRACKING_URLS = {
  * Returns { valid, message }
  */
 export function validateLrNumber(courierName, lrNo) {
+  if (courierName === "Others") {
+    return { valid: true, message: "" };
+  }
   if (!lrNo || !lrNo.trim()) {
     return { valid: false, message: "Tracking number is required" };
   }
@@ -74,6 +72,9 @@ export function extractPorterLink(text) {
 /**
  * Check if a dispatch type requires mandatory LR/tracking
  */
-export function isLrMandatory(dispatchType) {
+export function isLrMandatory(dispatchType, courierName) {
+  if (dispatchType === "courier" && courierName === "Others") {
+    return false;
+  }
   return dispatchType === "courier" || dispatchType === "transport";
 }

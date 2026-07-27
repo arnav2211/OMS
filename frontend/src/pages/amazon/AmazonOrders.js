@@ -20,7 +20,7 @@ const STATUS_BADGE = {
   dispatched: "bg-green-100 text-green-800 border-green-200",
 };
 
-const COURIERS = ["DTDC", "Anjani", "Professional", "India Post"];
+const COURIERS = ["DTDC", "Anjani", "India Post", "Others"];
 
 export default function AmazonOrders() {
   const { user } = useAuth();

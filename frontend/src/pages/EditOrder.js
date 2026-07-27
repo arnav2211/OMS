@@ -27,7 +27,7 @@ const SHIPPING_METHODS = [
   { value: "porter", label: "Porter" }, { value: "self_arranged", label: "Self-Arranged" },
   { value: "office_collection", label: "Office Collection" },
 ];
-const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
+const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"];
 const GST_RATES = [0, 5, 18];
 const PAYMENT_MODES = ["Cash", "Online", "Other"];
 const emptyItem = () => ({ product_name: "", qty: 0, unit: "", rate: 0, amount: 0, gst_rate: 0, gst_amount: 0, total: 0, description: "" });

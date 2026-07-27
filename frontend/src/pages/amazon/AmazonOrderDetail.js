@@ -42,7 +42,7 @@ export default function AmazonOrderDetail() {
   const [editingCourier, setEditingCourier] = useState(false);
   const [courierValue, setCourierValue] = useState("");
 
-  const COURIERS = ["DTDC", "Anjani", "Professional", "India Post"];
+  const COURIERS = ["DTDC", "Anjani", "India Post", "Others"];
   const canEditCourier = ["admin", "packaging", "dispatch"].includes(user?.role) && order?.status !== "dispatched" && order?.ship_type === "self_ship";
 
   const canEditPackaging = isAdmin || (isPacking && order?.status !== "dispatched");
@@ -85,9 +85,9 @@ export default function AmazonOrderDetail() {
 
   const dispatchOrder = async () => {
     if (order.ship_type === "self_ship") {
-      if (!lrNumber.trim()) return toast.error("LR Number is mandatory");
+      if (order.courier_name !== "Others" && !lrNumber.trim()) return toast.error("LR Number is mandatory");
       // Regex validation for courier-specific LR
-      if (order.courier_name) {
+      if (order.courier_name && order.courier_name !== "Others" && lrNumber.trim()) {
         const validation = validateLrNumber(order.courier_name, lrNumber);
         if (!validation.valid) {
           setLrValidationError(validation.message);
@@ -359,7 +359,7 @@ export default function AmazonOrderDetail() {
           <div className="space-y-4">
             {order.ship_type === "self_ship" && (
               <div>
-                <Label className="text-sm">LR Number <span className="text-red-500">*</span></Label>
+                <Label className="text-sm">LR Number {order.courier_name === "Others" ? null : <span className="text-red-500">*</span>}</Label>
                 <Input
                   value={lrNumber}
                   onChange={e => { setLrNumber(e.target.value); setLrValidationError(""); }}
@@ -376,7 +376,7 @@ export default function AmazonOrderDetail() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDispatch(false)}>Cancel</Button>
-            <Button onClick={dispatchOrder} disabled={saving || (order.ship_type === "self_ship" && !lrNumber.trim())} data-testid="am-confirm-dispatch">{saving ? "Dispatching..." : "Dispatch"}</Button>
+            <Button onClick={dispatchOrder} disabled={saving || (order.ship_type === "self_ship" && order.courier_name !== "Others" && !lrNumber.trim())} data-testid="am-confirm-dispatch">{saving ? "Dispatching..." : "Dispatch"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

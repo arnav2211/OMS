@@ -28,7 +28,7 @@ const CHECK_COLORS = {
   pending_recheck: "bg-red-100 text-red-800",
 };
 const CHECK_LABELS = { received: "Checked", pending: "Pending", pending_recheck: "Re-check" };
-const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
+const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"];
 
 export default function AllOrders() {
   const { user } = useAuth();

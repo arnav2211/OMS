@@ -25,6 +25,7 @@ export default function Customers() {
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
   const [form, setForm] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
+  const [totalCustomersCount, setTotalCustomersCount] = useState(0);
 
   // Address management
   const [showAddresses, setShowAddresses] = useState(null);
@@ -38,7 +39,14 @@ export default function Customers() {
   useEffect(() => { loadCustomers(); }, []);
 
   const loadCustomers = async () => {
-    try { const res = await api.get("/customers"); setCustomers(res.data); }
+    try {
+      const [custRes, countRes] = await Promise.all([
+        api.get("/customers"),
+        api.get("/customers/count")
+      ]);
+      setCustomers(custRes.data);
+      setTotalCustomersCount(countRes.data.count);
+    }
     catch { } finally { setLoading(false); }
   };
 
@@ -138,7 +146,9 @@ export default function Customers() {
   return (
     <div className="space-y-6" data-testid="customers-page">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">Customers</h1>
+        <h1 className="text-2xl font-bold tracking-tight">
+          Customers <span className="text-sm font-normal text-muted-foreground ml-2">({totalCustomersCount} total)</span>
+        </h1>
         <Button onClick={openNew} className="rounded-lg" data-testid="add-customer-btn"><UserPlus className="w-4 h-4 mr-2" /> Add Customer</Button>
       </div>
 

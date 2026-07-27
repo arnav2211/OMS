@@ -135,7 +135,7 @@ class TestCourierOptionsAPI:
         response = requests.get(f"{BASE_URL}/api/courier-options", headers=admin_headers)
         assert response.status_code == 200
         options = response.json()
-        expected = ["DTDC", "Anjani", "Professional", "India Post"]
+        expected = ["DTDC", "Anjani", "India Post", "Others"]
         assert options == expected, f"Expected {expected}, got {options}"
         print(f"PASS: Courier options: {options}")
 

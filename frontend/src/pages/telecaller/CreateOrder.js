@@ -30,7 +30,7 @@ const SHIPPING_METHODS = [
   { value: "self_arranged", label: "Self-Arranged Shipping" },
   { value: "office_collection", label: "Office Collection" },
 ];
-const COURIER_OPTIONS = ["DTDC", "Anjani", "Professional", "India Post"];
+const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"];
 const GST_RATES = [0, 5, 18];
 const PAYMENT_MODES = ["Cash", "Online", "Other"];
 
