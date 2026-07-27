@@ -915,6 +915,7 @@ export default function OrderDetail() {
             </div>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
+            {order.packaging?.weight_kg && <div><span className="text-muted-foreground">Weight:</span> <span className="font-medium">{order.packaging.weight_kg} KG</span>{order.packaging?.num_boxes ? ` · ${order.packaging.num_boxes} box(es)` : ""}</div>}
             {order.packaging?.item_packed_by?.length > 0 && <div><span className="text-muted-foreground">Packed By:</span> {order.packaging.item_packed_by.join(", ")}</div>}
             {order.packaging?.box_packed_by?.length > 0 && <div><span className="text-muted-foreground">Box Packed By:</span> {order.packaging.box_packed_by.join(", ")}</div>}
             {order.packaging?.checked_by?.length > 0 && <div><span className="text-muted-foreground">Checked By:</span> {order.packaging.checked_by.join(", ")}</div>}
@@ -1450,6 +1451,8 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving }) {
   const [itemImages, setItemImages] = useState(order.packaging?.item_images || {});
   const [orderImages, setOrderImages] = useState(order.packaging?.order_images || []);
   const [packedBoxImages, setPackedBoxImages] = useState(order.packaging?.packed_box_images || []);
+  const [weightKg, setWeightKg] = useState(order.packaging?.weight_kg || "");
+  const [numBoxes, setNumBoxes] = useState(order.packaging?.num_boxes || "1");
   const [uploading, setUploading] = useState(false);
 
   const toggleStaff = (list, setList, name) => {
@@ -1489,6 +1492,22 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving }) {
 
   return (
     <div className="space-y-4">
+      {/* Weight & number of boxes */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label className="text-sm">
+            Weight (KG){order.shipping_method === "courier" && <span className="text-red-500"> *</span>}
+          </Label>
+          <Input type="number" step="0.001" min="0" value={weightKg} onChange={e => setWeightKg(e.target.value)} placeholder="Total weight of all boxes" data-testid="od-pkg-weight" />
+        </div>
+        <div>
+          <Label className="text-sm">No. of Boxes</Label>
+          <Input type="number" min="1" step="1" value={numBoxes} onChange={e => setNumBoxes(e.target.value)} placeholder="1" data-testid="od-pkg-boxes" />
+        </div>
+      </div>
+
+      <Separator />
+
       {/* Staff Selection */}
       {[["Item Packed By", itemPackedBy, setItemPackedBy], ["Box Packed By", boxPackedBy, setBoxPackedBy], ["Checked By", checkedBy, setCheckedBy]].map(([label, list, setter]) => (
         <div key={label}>
@@ -1632,6 +1651,7 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving }) {
         <Button onClick={() => onSave({
           item_packed_by: itemPackedBy, box_packed_by: boxPackedBy, checked_by: checkedBy,
           item_images: itemImages, order_images: orderImages, packed_box_images: packedBoxImages,
+          weight_kg: String(weightKg).trim(), num_boxes: String(numBoxes).trim() || "1",
         })} disabled={saving || uploading}>
           {saving ? "Saving..." : "Save Packaging"}
         </Button>
