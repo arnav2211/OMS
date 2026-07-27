@@ -18,6 +18,10 @@ const M_SERIES = {
   "Client Code": "RL1423",
   "Service Type": "STD EXP-A",
 };
+// Carrier-risk orders book on the RL1387 account, which handles BOTH service
+// types (GROUND EXPRESS / STD EXP-A) with the transit-insurance surcharge on.
+// The service type is still auto-picked from the weight/pincode series.
+const CARRIER_RISK_ACCOUNT = "RL1387";
 
 // ─── Default values for fixed columns (from downloadData.xls) ──────────────
 const FIXED_DEFAULTS = {
@@ -213,6 +217,15 @@ function buildRowFromOrder(order) {
 
   // Manual entry — prefill if packaging weight is already saved on the order
   row["Weight(KG) (non-document)"] = order.packaging?.weight_kg || "";
+
+  // Carrier-risk orders go to the RL1387 account with the risk surcharge on.
+  // Service type stays the D-series default until weight refines it.
+  row._carrierRisk = !!order.carrier_risk_applicable;
+  if (row._carrierRisk) {
+    row["Unique_Id"] = CARRIER_RISK_ACCOUNT;
+    row["Client Code"] = CARRIER_RISK_ACCOUNT;
+    row["Risk Surcharge (YES/NO) (non-document)"] = "1";
+  }
 
   return row;
 }
@@ -475,7 +488,18 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
       }
 
       const seriesName = data.series; // "D-Series" or "M-Series"
-      const fields = seriesName === "M-Series" ? M_SERIES : D_SERIES;
+      const serviceType = seriesName === "M-Series" ? "STD EXP-A" : "GROUND EXPRESS";
+      const isCarrierRisk = rowsRef.current[rowIdx]?._carrierRisk;
+      // Carrier-risk rows stay on RL1387 (risk on); only the service type follows
+      // the detected series. Everyone else uses the normal per-series account.
+      const fields = isCarrierRisk
+        ? {
+            "Unique_Id": CARRIER_RISK_ACCOUNT,
+            "Client Code": CARRIER_RISK_ACCOUNT,
+            "Service Type": serviceType,
+            "Risk Surcharge (YES/NO) (non-document)": "1",
+          }
+        : (seriesName === "M-Series" ? M_SERIES : D_SERIES);
 
       // Autofill the series-dependent fields
       setRows(prev => {
@@ -565,32 +589,31 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
   const handleDownload = () => {
     if (rows.length === 0) { toast.error("No rows to export"); return; }
 
-    // Partition rows by detected series
-    const dRows = rows.filter((_, i) => rowSeries[i]?.series === "D-Series" || !rowSeries[i]?.series);
-    const mRows = rows.filter((_, i) => rowSeries[i]?.series === "M-Series");
-
-    // Warn if some rows have no series detected yet
-    const undetected = rows.filter((_, i) => !rowSeries[i]?.series).length;
+    // Warn if some rows have no series detected yet (non-carrier-risk ones default to RL1386)
+    const undetected = rows.filter((_, i) => !rowSeries[i]?.series && !rows[i]._carrierRisk).length;
     if (undetected > 0) {
-      toast.warning(`${undetected} row(s) have no series detected — they will be included in the D-Series file by default.`);
+      toast.warning(`${undetected} row(s) have no series detected — they default to the RL1386 file.`);
     }
 
-    const hasBoth = dRows.length > 0 && mRows.length > 0;
+    // Partition by the account each row is assigned to (one upload file per DTDC account).
+    const buckets = { RL1386: [], RL1387: [], RL1423: [] };
+    rows.forEach((row) => {
+      const acct = row["Client Code"];
+      if (acct === CARRIER_RISK_ACCOUNT) buckets.RL1387.push(row);
+      else if (acct === "RL1423") buckets.RL1423.push(row);
+      else buckets.RL1386.push(row); // RL1386 / undetected default
+    });
 
-    if (hasBoth) {
-      // Download D-Series first, then M-Series after a short delay
-      downloadSheet(dRows, "DTDC_D-Series_RL1386.xlsx", "D-Series");
-      setTimeout(() => {
-        downloadSheet(mRows, "DTDC_M-Series_RL1423.xlsx", "M-Series");
-      }, 600);
-      toast.success(`Downloaded 2 files: ${dRows.length} D-Series + ${mRows.length} M-Series order(s)`);
-    } else if (mRows.length > 0) {
-      downloadSheet(mRows, "DTDC_M-Series_RL1423.xlsx", "M-Series");
-      toast.success(`Exported ${mRows.length} M-Series order(s) to DTDC_M-Series_RL1423.xlsx`);
-    } else {
-      downloadSheet(dRows, "DTDC_D-Series_RL1386.xlsx", "D-Series");
-      toast.success(`Exported ${dRows.length} D-Series order(s) to DTDC_D-Series_RL1386.xlsx`);
-    }
+    const files = [];
+    if (buckets.RL1386.length) files.push([buckets.RL1386, "DTDC_RL1386_GROUND-EXPRESS.xlsx", "RL1386"]);
+    if (buckets.RL1387.length) files.push([buckets.RL1387, "DTDC_RL1387_CarrierRisk.xlsx", "RL1387"]);
+    if (buckets.RL1423.length) files.push([buckets.RL1423, "DTDC_RL1423_STD-EXP-A.xlsx", "RL1423"]);
+
+    // Stagger downloads so the browser doesn't drop concurrent files.
+    files.forEach(([rws, fname, sname], i) => {
+      setTimeout(() => downloadSheet(rws, fname, sname), i * 700);
+    });
+    toast.success(`Downloaded ${files.length} file(s): ${files.map(f => `${f[2]} (${f[0].length})`).join(", ")}`);
 
     onClose();
   };
@@ -670,6 +693,7 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
               <div className="flex items-center gap-2 text-xs">
                 <span className="inline-block rounded px-2 py-0.5 font-medium" style={{ background: "#7c3aed", color: "#fff" }}>M-Series → RL1423 / STD EXP-A</span>
                 <span className="inline-block rounded px-2 py-0.5 font-medium" style={{ background: "#0369a1", color: "#fff" }}>D-Series → RL1386 / GROUND EXPRESS</span>
+                <span className="inline-block rounded px-2 py-0.5 font-medium" style={{ background: "#b91c1c", color: "#fff" }}>Carrier Risk → RL1387 (both, risk on)</span>
               </div>
             </div>
           </DialogHeader>
@@ -936,13 +960,17 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
               <span>
                 {rows.length} row(s) ·{" "}
                 {(() => {
-                  const d = rows.filter((_, i) => rowSeries[i]?.series === "D-Series").length;
-                  const m = rows.filter((_, i) => rowSeries[i]?.series === "M-Series").length;
-                  const u = rows.filter((_, i) => !rowSeries[i]?.series).length;
+                  const c = { RL1386: 0, RL1387: 0, RL1423: 0 };
+                  rows.forEach((r) => {
+                    const a = r["Client Code"];
+                    if (a === CARRIER_RISK_ACCOUNT) c.RL1387++;
+                    else if (a === "RL1423") c.RL1423++;
+                    else c.RL1386++;
+                  });
                   const parts = [];
-                  if (d > 0) parts.push(`${d} D-Series`);
-                  if (m > 0) parts.push(`${m} M-Series`);
-                  if (u > 0) parts.push(`${u} pending`);
+                  if (c.RL1386 > 0) parts.push(`${c.RL1386} RL1386`);
+                  if (c.RL1387 > 0) parts.push(`${c.RL1387} RL1387`);
+                  if (c.RL1423 > 0) parts.push(`${c.RL1423} RL1423`);
                   return parts.length > 0 ? parts.join(" · ") : "Enter weights to detect series";
                 })()}
               </span>
@@ -959,11 +987,11 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
               >
                 <Download className="w-4 h-4" />
                 {(() => {
-                  const d = rows.filter((_, i) => rowSeries[i]?.series === "D-Series" || !rowSeries[i]?.series).length;
-                  const m = rows.filter((_, i) => rowSeries[i]?.series === "M-Series").length;
-                  if (d > 0 && m > 0) return `Download 2 Files (${d}D + ${m}M)`;
-                  if (m > 0) return `Download M-Series (${m})`;
-                  return `Download D-Series (${d})`;
+                  const accts = new Set(rows.map((r) => (
+                    r["Client Code"] === CARRIER_RISK_ACCOUNT ? "RL1387"
+                      : r["Client Code"] === "RL1423" ? "RL1423" : "RL1386"
+                  )));
+                  return `Download ${accts.size} File${accts.size === 1 ? "" : "s"}`;
                 })()}
               </Button>
             </div>
