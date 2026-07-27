@@ -901,6 +901,7 @@ async def list_orders(
     period: Optional[str] = None,
     shipping_method: Optional[str] = None,
     courier_name: Optional[str] = None,
+    ready_to_book: Optional[bool] = False,
     page: int = 1,
     page_size: int = 50,
     user=Depends(get_current_user)
@@ -928,6 +929,10 @@ async def list_orders(
             query["status"] = status
     if telecaller_id and user["role"] == "admin":
         query["telecaller_id"] = telecaller_id
+    if ready_to_book:
+        # Weighed & released by packing, but not yet dispatched — the booking queue.
+        query["packaging.ready_to_book"] = True
+        query["status"] = {"$in": ["packaging", "packed"]}
     if customer_id:
         query["customer_id"] = customer_id
     if date_from:
@@ -1005,10 +1010,14 @@ async def list_orders(
 
     # Lean projection — exclude heavy nested data for list view
     # NOTE: shipping_address is kept so DTDC export can read destination info
+    # NOTE: packaging is kept (minus its heavy image arrays) so the list view can
+    # read weight_kg / num_boxes / ready_to_book for the DTDC export and queue.
     list_projection = {
         "_id": 0, "items": 0, "free_samples": 0,
         "billing_address": 0,
-        "packaging": 0, "dispatch_details": 0,
+        "packaging.item_images": 0, "packaging.order_images": 0,
+        "packaging.packed_box_images": 0,
+        "dispatch_details": 0,
         "payment_mode_details": 0,
         "remark": 0, "purpose": 0, "extra_shipping_details": 0,
     }
@@ -1476,6 +1485,20 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
         packaging["box_packed_by"] = updates["box_packed_by"]
     if "checked_by" in updates:
         packaging["checked_by"] = updates["checked_by"]
+    if "num_boxes" in updates:
+        packaging["num_boxes"] = updates["num_boxes"]
+    if "weight_kg" in updates:
+        packaging["weight_kg"] = updates["weight_kg"]
+        # Saving a weight means the box is sealed and weighed. That alone releases
+        # the order to the booking queue — the DTDC label can't exist until the
+        # parcel is booked, so we must not wait for "packed" here.
+        if str(updates["weight_kg"]).strip():
+            packaging["ready_to_book"] = True
+            if not packaging.get("ready_to_book_at"):
+                packaging["ready_to_book_at"] = datetime.now(timezone.utc).isoformat()
+        else:
+            packaging["ready_to_book"] = False
+            packaging["ready_to_book_at"] = ""
 
     new_status = updates.get("status", order["status"])
     # Auto-transition: if status is "new" and packaging data is being saved, move to "packaging"
@@ -1489,6 +1512,8 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
             raise HTTPException(status_code=400, detail="Box Packed By is required")
         if not packaging.get("checked_by"):
             raise HTTPException(status_code=400, detail="Checked By is required")
+        if order.get("shipping_method") == "courier" and not str(packaging.get("weight_kg", "")).strip():
+            raise HTTPException(status_code=400, detail="Weight (KG) is required for courier orders before marking packed")
         packaging["packed_at"] = datetime.now(timezone.utc).isoformat()
 
     await db.orders.update_one(
@@ -1508,6 +1533,8 @@ async def mark_order_packed(order_id: str, user=Depends(get_current_user)):
     if order["status"] not in ["new", "packaging"]:
         raise HTTPException(status_code=400, detail="Can only mark new/packaging orders as packed")
     packaging = order.get("packaging", {})
+    if order.get("shipping_method") == "courier" and not str(packaging.get("weight_kg", "")).strip():
+        raise HTTPException(status_code=400, detail="Weight (KG) is required for courier orders before marking packed")
     packaging["packed_at"] = datetime.now(timezone.utc).isoformat()
     await db.orders.update_one({"id": order_id}, {"$set": {"status": "packed", "packaging": packaging, "updated_at": datetime.now(timezone.utc).isoformat()}})
     return await db.orders.find_one({"id": order_id}, {"_id": 0})

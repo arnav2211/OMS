@@ -57,6 +57,8 @@ export default function PackagingDashboard() {
   const [itemImages, setItemImages] = useState({});
   const [orderImages, setOrderImages] = useState([]);
   const [packedBoxImages, setPackedBoxImages] = useState([]);
+  const [weightKg, setWeightKg] = useState("");
+  const [numBoxes, setNumBoxes] = useState("1");
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
   const [uploadTarget, setUploadTarget] = useState(null);
@@ -101,6 +103,8 @@ export default function PackagingDashboard() {
       setItemImages(fullOrder.packaging?.item_images || {});
       setOrderImages(fullOrder.packaging?.order_images || []);
       setPackedBoxImages(fullOrder.packaging?.packed_box_images || []);
+      setWeightKg(fullOrder.packaging?.weight_kg || "");
+      setNumBoxes(fullOrder.packaging?.num_boxes || "1");
       setShowDetail(true);
     } catch {
       toast.error("Failed to load order details");
@@ -144,10 +148,12 @@ export default function PackagingDashboard() {
 
   const savePackaging = async (markPacked = false) => {
     if (!selectedOrder) return;
+    const isCourier = selectedOrder?.shipping_method === "courier";
     if (markPacked) {
       if (!itemPackedBy.length) return toast.error("Select who packed the items");
       if (!boxPackedBy.length) return toast.error("Select who packed the box");
       if (!checkedBy.length) return toast.error("Select who checked the order");
+      if (isCourier && !String(weightKg).trim()) return toast.error("Enter the parcel weight (KG) before marking packed — it's needed to book the courier");
     }
     try {
       const payload = {
@@ -157,6 +163,8 @@ export default function PackagingDashboard() {
         item_packed_by: itemPackedBy,
         box_packed_by: boxPackedBy,
         checked_by: checkedBy,
+        weight_kg: String(weightKg).trim(),
+        num_boxes: String(numBoxes).trim() || "1",
         status: markPacked ? "packed" : "packaging",
       };
       await api.put(`/orders/${selectedOrder.id}/packaging`, payload);
@@ -450,6 +458,38 @@ export default function PackagingDashboard() {
               </div>
 
               <Separator />
+
+              {/* Weight & number of boxes — weight is mandatory for courier orders */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium">
+                    Weight (KG)
+                    {selectedOrder?.shipping_method === "courier" && <span className="text-red-500"> *</span>}
+                  </label>
+                  <Input
+                    type="number" step="0.001" min="0"
+                    value={weightKg}
+                    onChange={e => setWeightKg(e.target.value)}
+                    placeholder="Total weight of all boxes"
+                    data-testid="pkg-weight-input"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">No. of Boxes</label>
+                  <Input
+                    type="number" min="1" step="1"
+                    value={numBoxes}
+                    onChange={e => setNumBoxes(e.target.value)}
+                    placeholder="1"
+                    data-testid="pkg-boxes-input"
+                  />
+                </div>
+              </div>
+              {selectedOrder?.shipping_method === "courier" && (
+                <p className="text-xs text-muted-foreground -mt-2">
+                  Enter the <b>total weight</b> of all boxes. Saving the weight releases this order to the booking queue.
+                </p>
+              )}
 
               {/* Three mandatory multi-select fields */}
               <MultiSelect label="Item Packed By" options={packagingStaff} value={itemPackedBy} onChange={setItemPackedBy} testId="item-packed-by" />

@@ -215,8 +215,10 @@ function buildRowFromOrder(order) {
   row["Destination City"]               = sa.city          || "";
   row["Destination State"]              = sa.state         || "";
 
-  // Manual entry — prefill if packaging weight is already saved on the order
+  // Weight & pieces come from the packing team (read-only here).
+  // Pieces = number of boxes; weight column holds the TOTAL weight of all boxes.
   row["Weight(KG) (non-document)"] = order.packaging?.weight_kg || "";
+  row["Number of Pieces (non-document)"] = order.packaging?.num_boxes || "1";
 
   // Carrier-risk orders go to the RL1387 account with the risk surcharge on.
   // Service type stays the D-series default until weight refines it.
@@ -385,48 +387,33 @@ function BoxImageViewer({ open, onClose, orderId, orderNum, backendUrl, onWeight
             {/* Right side: Weight input & order details */}
             <div style={{ flex: "1 1 200px", minWidth: 200, display: "flex", flexDirection: "column", gap: 16 }}>
               <div style={{ background: "#f8fafc", padding: 16, borderRadius: 8, border: "1px solid #e2e8f0" }}>
-                <h4 style={{ fontWeight: 600, fontSize: "0.85rem", color: "#334155", marginBottom: 12 }}>Update Weight for this Order</h4>
+                <h4 style={{ fontWeight: 600, fontSize: "0.85rem", color: "#334155", marginBottom: 12 }}>Weight (entered by packing)</h4>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <label style={{ fontSize: "0.78rem", fontWeight: 600, color: "#64748b" }}>
-                    Package Weight (KG)
+                    Package Weight (total of all boxes)
                   </label>
                   <input
-                    type="number"
-                    step="0.001"
-                    min="0"
-                    value={weight}
-                    onChange={e => setWeight(e.target.value)}
-                    placeholder="Enter weight in KG (e.g. 1.5)"
-                    disabled={loading}
+                    type="text"
+                    value={weight ? `${weight} KG` : "Not entered yet"}
+                    readOnly
                     style={{
                       width: "100%",
                       padding: "8px 12px",
-                      fontSize: "0.85rem",
+                      fontSize: "0.9rem",
+                      fontWeight: 700,
                       border: "1px solid #cbd5e1",
                       borderRadius: 6,
                       outline: "none",
-                      background: "#ffffff",
-                      color: "#0f172a", // Explicitly dark text color (slate-900)
-                      boxShadow: "inset 0 1px 2px rgba(0,0,0,0.05)",
-                    }}
-                    onKeyDown={e => {
-                      if (e.key === "Enter" && !savingWeight) {
-                        handleSaveWeight();
-                      }
+                      background: "#f1f5f9",
+                      color: weight ? "#0f172a" : "#b91c1c",
                     }}
                   />
                   <Button
-                    onClick={handleSaveWeight}
-                    disabled={loading || savingWeight}
+                    onClick={onClose}
                     className="w-full text-xs font-semibold h-9"
                     style={{ background: "#2563eb", color: "#fff", borderRadius: 6, marginTop: 4 }}
                   >
-                    {savingWeight ? (
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                        <Loader2 style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
-                        Saving Weight...
-                      </div>
-                    ) : "✓ Save Weight & Close"}
+                    Close
                   </Button>
                 </div>
               </div>
@@ -434,7 +421,7 @@ function BoxImageViewer({ open, onClose, orderId, orderNum, backendUrl, onWeight
               {/* Tips / Instructions */}
               <div style={{ padding: 12, border: "1px solid #fef08a", borderRadius: 6, background: "#fef9c3" }}>
                 <p style={{ fontSize: "0.72rem", color: "#854d0e", lineHeight: "1.4", margin: 0 }}>
-                  💡 <b>Auto-detect Logic:</b> After saving, this weight will automatically trigger DTDC series calculation and standard defaults (RL1386 or RL1423) in the main table.
+                  💡 The weight is set by the <b>packing team</b> when they seal the box. If it's missing, ask them to weigh and save it — it can't be edited here.
                 </p>
               </div>
             </div>
@@ -589,6 +576,12 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
   const handleDownload = () => {
     if (rows.length === 0) { toast.error("No rows to export"); return; }
 
+    // Warn (but allow) rows the packing team hasn't weighed yet.
+    const noWeight = rows.filter(r => !String(r["Weight(KG) (non-document)"] ?? "").trim()).length;
+    if (noWeight > 0) {
+      toast.warning(`${noWeight} order(s) have no weight yet — they'll export blank. Ask packing to weigh them.`);
+    }
+
     // Warn if some rows have no series detected yet (non-carrier-risk ones default to RL1386)
     const undetected = rows.filter((_, i) => !rowSeries[i]?.series && !rows[i]._carrierRisk).length;
     if (undetected > 0) {
@@ -679,7 +672,7 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
               {[
                 { style: COL_STYLES.fixed,  label: "Fixed defaults" },
                 { style: COL_STYLES.order,  label: "From order data" },
-                { style: COL_STYLES.manual, label: "Weight ★ → auto-detects series" },
+                { style: COL_STYLES.manual, label: "Weight (from packing) → auto-detects series" },
               ].map(({ style, label }) => (
                 <div key={label} className="flex items-center gap-2 text-xs">
                   <span
@@ -886,11 +879,13 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
 
                         {PREVIEW_COLUMNS.map(col => {
                           const s = getColStyle(col);
+                          const isWeight = COL_TYPE.manual.has(col);
+                          const missing = isWeight && !String(row[col] ?? "").trim();
                           return (
                             <td
                               key={col}
                               style={{
-                                background: s.cell.background,
+                                background: missing ? "#fee2e2" : s.cell.background,
                                 border: "1px solid #d1d5db",
                                 padding: 0,
                                 minWidth: getColWidth(col),
@@ -898,8 +893,10 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
                             >
                               <input
                                 value={row[col] ?? ""}
-                                onChange={e => updateCell(rowIdx, col, e.target.value)}
-                                placeholder={COL_TYPE.manual.has(col) ? "★ Enter weight" : ""}
+                                onChange={e => { if (!isWeight) updateCell(rowIdx, col, e.target.value); }}
+                                readOnly={isWeight}
+                                title={isWeight ? "Weight is entered by the packing team" : ""}
+                                placeholder={isWeight ? "⚠ no weight" : ""}
                                 style={{
                                   width: "100%",
                                   background: "transparent",
@@ -907,11 +904,12 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
                                   outline: "none",
                                   padding: "5px 8px",
                                   fontSize: "0.7rem",
-                                  color: s.cell.color,
+                                  color: missing ? "#b91c1c" : s.cell.color,
                                   fontFamily: "inherit",
-                                  fontWeight: COL_TYPE.manual.has(col) ? 600 : 400,
+                                  fontWeight: isWeight ? 700 : 400,
+                                  cursor: isWeight ? "not-allowed" : "text",
                                 }}
-                                onFocus={e => { e.target.style.boxShadow = "inset 0 0 0 2px #3b82f6"; e.target.style.borderRadius = "2px"; }}
+                                onFocus={e => { if (!isWeight) { e.target.style.boxShadow = "inset 0 0 0 2px #3b82f6"; e.target.style.borderRadius = "2px"; } }}
                                 onBlur={e => { e.target.style.boxShadow = "none"; }}
                               />
                             </td>

@@ -42,6 +42,7 @@ const [payStatusFilter, setPayStatusFilter] = useState(sp.get("pay") || "all");
 const [checkStatusFilter, setCheckStatusFilter] = useState(sp.get("check") || "all");
 const [shippingFilter, setShippingFilter] = useState(sp.get("shipping") || "all");
 const [courierFilter, setCourierFilter] = useState(sp.get("courier") || "all");
+const [readyToBook, setReadyToBook] = useState(sp.get("rtb") === "true");
 const [periodFilter, setPeriodFilter] = useState(sp.get("period") || "all");
 const [dateFrom, setDateFrom] = useState(sp.get("from") || "");
 const [dateTo, setDateTo] = useState(sp.get("to") || "");
@@ -69,12 +70,13 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
     if (periodFilter === "custom" && dateTo) p.set("to", dateTo);
     if (shippingFilter !== "all") p.set("shipping", shippingFilter);
     if (shippingFilter === "courier" && courierFilter !== "all") p.set("courier", courierFilter);
+    if (readyToBook) p.set("rtb", "true");
     if (viewAll) p.set("viewAll", "true");
     if (selectedTelecaller !== "all") p.set("tc", selectedTelecaller);
     if (searchDebounced) p.set("q", searchDebounced);
     if (currentPage > 1) p.set("page", currentPage.toString());
     setSp(p, { replace: true });
-  }, [statusFilter, payStatusFilter, checkStatusFilter, periodFilter, dateFrom, dateTo, shippingFilter, courierFilter, viewAll, selectedTelecaller, searchDebounced, currentPage]);
+  }, [statusFilter, payStatusFilter, checkStatusFilter, periodFilter, dateFrom, dateTo, shippingFilter, courierFilter, readyToBook, viewAll, selectedTelecaller, searchDebounced, currentPage]);
 
   const canPrintAddresses = user?.role === "admin" || user?.role === "packaging" || user?.role === "accounts";
   const canPrintPackingSheets = user?.role === "admin" || user?.role === "packaging" || user?.role === "accounts";
@@ -92,7 +94,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
   useEffect(() => {
     loadOrders();
     if (user?.role === "admin") loadUsers();
-  }, [viewAll, selectedTelecaller, currentPage, searchDebounced, statusFilter, payStatusFilter, checkStatusFilter, shippingFilter, courierFilter, periodFilter, dateFrom, dateTo]);
+  }, [viewAll, selectedTelecaller, currentPage, searchDebounced, statusFilter, payStatusFilter, checkStatusFilter, shippingFilter, courierFilter, readyToBook, periodFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     const timer = setTimeout(() => { setSearchDebounced(search); setCurrentPage(1); }, 350);
@@ -123,6 +125,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
       if (checkStatusFilter !== "all") params.set("check_status", checkStatusFilter);
       if (shippingFilter !== "all") params.set("shipping_method", shippingFilter);
       if (shippingFilter === "courier" && courierFilter !== "all") params.set("courier_name", courierFilter);
+      if (readyToBook) params.set("ready_to_book", "true");
       if (periodFilter !== "all") params.set("period", periodFilter);
       if (periodFilter === "custom" && dateFrom) params.set("date_from", dateFrom);
       if (periodFilter === "custom" && dateTo) params.set("date_to", dateTo);
@@ -254,6 +257,16 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
               )}
             </Button>
           )}
+          <Button
+            variant={readyToBook ? "default" : "outline"}
+            size="sm"
+            onClick={() => { setReadyToBook(v => !v); setCurrentPage(1); }}
+            className={readyToBook ? "bg-emerald-600 hover:bg-emerald-700 text-white" : ""}
+            data-testid="ready-to-book-filter"
+            title="Show only orders the packing team has weighed and released for booking"
+          >
+            <PackageCheck className="w-4 h-4 mr-1" />Ready to Book
+          </Button>
           <Button variant="outline" size="sm" onClick={loadOrders} data-testid="refresh-orders"><RefreshCw className="w-4 h-4 mr-1" />Refresh</Button>
         </div>
       </div>
@@ -437,7 +450,14 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
                         {user?.role === "admin" && <TableCell className="text-sm whitespace-nowrap">{o.telecaller_name || "-"}</TableCell>}
                         <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{new Date(o.created_at).toLocaleDateString("en-IN")}</TableCell>
                         <TableCell className="text-sm whitespace-nowrap" data-testid={`shipping-method-${o.id}`}>
-                          {o.shipping_method === "courier" ? (o.courier_name || "Courier") : o.shipping_method === "transport" ? (o.transporter_name || "Transport") : o.shipping_method || "-"}
+                          <div className="flex items-center gap-1.5">
+                            <span>{o.shipping_method === "courier" ? (o.courier_name || "Courier") : o.shipping_method === "transport" ? (o.transporter_name || "Transport") : o.shipping_method || "-"}</span>
+                            {o.packaging?.ready_to_book && o.status !== "dispatched" && (
+                              <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0" title={`Weighed: ${o.packaging?.weight_kg || "?"} KG · ${o.packaging?.num_boxes || 1} box(es)`}>
+                                Ready to Book
+                              </Badge>
+                            )}
+                          </div>
                         </TableCell>
                         {isAdmin && (
                           <TableCell>
