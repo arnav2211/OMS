@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2, Copy, ClipboardCopy, History, Upload, Lock, ExternalLink } from "lucide-react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import api from "@/lib/api";
@@ -38,6 +38,8 @@ export default function OrderDetail() {
   const [editData, ] = useState({});
   const [saving, setSaving] = useState(false);
   const [showPackaging, setShowPackaging] = useState(false);
+  const [packagingDirty, setPackagingDirty] = useState(false);
+  const [formulationSnapshot, setFormulationSnapshot] = useState("");
   const [showDispatch, setShowDispatch] = useState(false);
   const [showFormulation, setShowFormulation] = useState(false);
   const [formulationItems, setFormulationItems] = useState([]);
@@ -114,14 +116,36 @@ export default function OrderDetail() {
   };
 
   const openFormulation = () => {
-    setFormulationItems(order.items.map(i => ({
+    const items = order.items.map(i => ({
       product_name: i.product_name, description: i.description || "", formulation: i.formulation || "",
       qty: i.qty, unit: i.unit, amount: i.amount || 0, gst_applicable: order.gst_applicable,
-    })));
-    setFormulationFreeSamples((order.free_samples || []).map(s => ({
+    }));
+    const samples = (order.free_samples || []).map(s => ({
       item_name: s.item_name, description: s.description || "", formulation: s.formulation || "",
-    })));
+    }));
+    setFormulationItems(items);
+    setFormulationFreeSamples(samples);
+    setFormulationSnapshot(JSON.stringify({ items, samples }));
     setShowFormulation(true);
+  };
+
+  // Confirm before discarding unsaved edits when a dialog is closed by mistake
+  // (clicking outside, Escape, or the X).
+  const confirmDiscard = () =>
+    window.confirm("You have unsaved changes. Leave without saving? Your changes will be lost.");
+
+  const handlePackagingOpenChange = (open) => {
+    if (!open && packagingDirty && !confirmDiscard()) return;
+    setShowPackaging(open);
+    if (!open) setPackagingDirty(false);
+  };
+
+  const handleFormulationOpenChange = (open) => {
+    if (!open) {
+      const current = JSON.stringify({ items: formulationItems, samples: formulationFreeSamples });
+      if (current !== formulationSnapshot && !confirmDiscard()) return;
+    }
+    setShowFormulation(open);
   };
 
   const loadFormulationHistory = async () => {
@@ -145,6 +169,7 @@ export default function OrderDetail() {
   };
 
   const openPackaging = async () => {
+    setPackagingDirty(false);
     try { const res = await api.get("/packaging-staff"); setPackagingStaff(res.data.filter(s => s.active)); }
     catch { } setShowPackaging(true);
   };
@@ -153,7 +178,7 @@ export default function OrderDetail() {
     setSaving(true);
     try {
       await api.put(`/orders/${id}/packaging`, packData);
-      toast.success("Packaging updated"); setShowPackaging(false); loadOrder();
+      toast.success("Packaging updated"); setPackagingDirty(false); setShowPackaging(false); loadOrder();
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
     finally { setSaving(false); }
   };
@@ -1031,7 +1056,7 @@ export default function OrderDetail() {
       )}
 
       {/* Formulation Dialog */}
-      <Dialog open={showFormulation} onOpenChange={setShowFormulation}>
+      <Dialog open={showFormulation} onOpenChange={handleFormulationOpenChange}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -1093,10 +1118,10 @@ export default function OrderDetail() {
       </Dialog>
 
       {/* Packaging Dialog - Simplified */}
-      <Dialog open={showPackaging} onOpenChange={setShowPackaging}>
+      <Dialog open={showPackaging} onOpenChange={handlePackagingOpenChange}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Update Packaging</DialogTitle></DialogHeader>
-          <PackagingForm order={order} staffList={packagingStaff} onSave={savePackaging} onCancel={() => setShowPackaging(false)} saving={saving} />
+          <PackagingForm order={order} staffList={packagingStaff} onSave={savePackaging} onCancel={() => handlePackagingOpenChange(false)} saving={saving} onDirtyChange={setPackagingDirty} />
         </DialogContent>
       </Dialog>
 
@@ -1444,7 +1469,7 @@ function PaymentSection({ order, user, canEditPayment, isDispatched, isAdmin, or
   );
 }
 
-function PackagingForm({ order, staffList, onSave, onCancel, saving }) {
+function PackagingForm({ order, staffList, onSave, onCancel, saving, onDirtyChange }) {
   const [itemPackedBy, setItemPackedBy] = useState(order.packaging?.item_packed_by || []);
   const [boxPackedBy, setBoxPackedBy] = useState(order.packaging?.box_packed_by || []);
   const [checkedBy, setCheckedBy] = useState(order.packaging?.checked_by || []);
@@ -1454,6 +1479,14 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving }) {
   const [weightKg, setWeightKg] = useState(order.packaging?.weight_kg || "");
   const [numBoxes, setNumBoxes] = useState(order.packaging?.num_boxes || "1");
   const [uploading, setUploading] = useState(false);
+
+  // Report unsaved changes to the parent so it can warn before an accidental close.
+  const firstRender = useRef(true);
+  useEffect(() => {
+    if (firstRender.current) { firstRender.current = false; return; }
+    onDirtyChange?.(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemPackedBy, boxPackedBy, checkedBy, itemImages, orderImages, packedBoxImages, weightKg, numBoxes]);
 
   const toggleStaff = (list, setList, name) => {
     setList(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
