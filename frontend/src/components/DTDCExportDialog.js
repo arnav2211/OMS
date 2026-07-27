@@ -215,8 +215,8 @@ function buildRowFromOrder(order) {
   row["Destination City"]               = sa.city          || "";
   row["Destination State"]              = sa.state         || "";
 
-  // Weight & pieces come from the packing team (read-only here).
-  // Pieces = number of boxes; weight column holds the TOTAL weight of all boxes.
+  // Weight & pieces are prefilled from what the packing team entered, but stay
+  // editable here. Pieces = number of boxes; weight = TOTAL weight of all boxes.
   row["Weight(KG) (non-document)"] = order.packaging?.weight_kg || "";
   row["Number of Pieces (non-document)"] = order.packaging?.num_boxes || "1";
 
@@ -387,33 +387,48 @@ function BoxImageViewer({ open, onClose, orderId, orderNum, backendUrl, onWeight
             {/* Right side: Weight input & order details */}
             <div style={{ flex: "1 1 200px", minWidth: 200, display: "flex", flexDirection: "column", gap: 16 }}>
               <div style={{ background: "#f8fafc", padding: 16, borderRadius: 8, border: "1px solid #e2e8f0" }}>
-                <h4 style={{ fontWeight: 600, fontSize: "0.85rem", color: "#334155", marginBottom: 12 }}>Weight (entered by packing)</h4>
+                <h4 style={{ fontWeight: 600, fontSize: "0.85rem", color: "#334155", marginBottom: 12 }}>Update Weight for this Order</h4>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <label style={{ fontSize: "0.78rem", fontWeight: 600, color: "#64748b" }}>
-                    Package Weight (total of all boxes)
+                    Package Weight (KG)
                   </label>
                   <input
-                    type="text"
-                    value={weight ? `${weight} KG` : "Not entered yet"}
-                    readOnly
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    value={weight}
+                    onChange={e => setWeight(e.target.value)}
+                    placeholder="Enter weight in KG (e.g. 1.5)"
+                    disabled={loading}
                     style={{
                       width: "100%",
                       padding: "8px 12px",
-                      fontSize: "0.9rem",
-                      fontWeight: 700,
+                      fontSize: "0.85rem",
                       border: "1px solid #cbd5e1",
                       borderRadius: 6,
                       outline: "none",
-                      background: "#f1f5f9",
-                      color: weight ? "#0f172a" : "#b91c1c",
+                      background: "#ffffff",
+                      color: "#0f172a",
+                      boxShadow: "inset 0 1px 2px rgba(0,0,0,0.05)",
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === "Enter" && !savingWeight) {
+                        handleSaveWeight();
+                      }
                     }}
                   />
                   <Button
-                    onClick={onClose}
+                    onClick={handleSaveWeight}
+                    disabled={loading || savingWeight}
                     className="w-full text-xs font-semibold h-9"
                     style={{ background: "#2563eb", color: "#fff", borderRadius: 6, marginTop: 4 }}
                   >
-                    Close
+                    {savingWeight ? (
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                        <Loader2 style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
+                        Saving Weight...
+                      </div>
+                    ) : "✓ Save Weight & Close"}
                   </Button>
                 </div>
               </div>
@@ -421,7 +436,7 @@ function BoxImageViewer({ open, onClose, orderId, orderNum, backendUrl, onWeight
               {/* Tips / Instructions */}
               <div style={{ padding: 12, border: "1px solid #fef08a", borderRadius: 6, background: "#fef9c3" }}>
                 <p style={{ fontSize: "0.72rem", color: "#854d0e", lineHeight: "1.4", margin: 0 }}>
-                  💡 The weight is set by the <b>packing team</b> when they seal the box. If it's missing, ask them to weigh and save it — it can't be edited here.
+                  💡 Weight is auto-filled from what the packing team entered. You can edit it here if needed — it re-triggers the DTDC series calculation.
                 </p>
               </div>
             </div>
@@ -672,7 +687,7 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
               {[
                 { style: COL_STYLES.fixed,  label: "Fixed defaults" },
                 { style: COL_STYLES.order,  label: "From order data" },
-                { style: COL_STYLES.manual, label: "Weight (from packing) → auto-detects series" },
+                { style: COL_STYLES.manual, label: "Weight ★ (auto-filled, editable) → detects series" },
               ].map(({ style, label }) => (
                 <div key={label} className="flex items-center gap-2 text-xs">
                   <span
@@ -893,10 +908,9 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
                             >
                               <input
                                 value={row[col] ?? ""}
-                                onChange={e => { if (!isWeight) updateCell(rowIdx, col, e.target.value); }}
-                                readOnly={isWeight}
-                                title={isWeight ? "Weight is entered by the packing team" : ""}
-                                placeholder={isWeight ? "⚠ no weight" : ""}
+                                onChange={e => updateCell(rowIdx, col, e.target.value)}
+                                title={isWeight ? "Auto-filled from packing — editable if you need to correct it" : ""}
+                                placeholder={isWeight ? "★ Enter weight" : ""}
                                 style={{
                                   width: "100%",
                                   background: "transparent",
@@ -906,10 +920,9 @@ export default function DTDCExportDialog({ open, onClose, orders }) {
                                   fontSize: "0.7rem",
                                   color: missing ? "#b91c1c" : s.cell.color,
                                   fontFamily: "inherit",
-                                  fontWeight: isWeight ? 700 : 400,
-                                  cursor: isWeight ? "not-allowed" : "text",
+                                  fontWeight: isWeight ? 600 : 400,
                                 }}
-                                onFocus={e => { if (!isWeight) { e.target.style.boxShadow = "inset 0 0 0 2px #3b82f6"; e.target.style.borderRadius = "2px"; } }}
+                                onFocus={e => { e.target.style.boxShadow = "inset 0 0 0 2px #3b82f6"; e.target.style.borderRadius = "2px"; }}
                                 onBlur={e => { e.target.style.boxShadow = "none"; }}
                               />
                             </td>
