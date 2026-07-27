@@ -48,6 +48,8 @@ export default function OrderDetail() {
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [showHistory, setShowHistory] = useState(false);
   const [formulationHistory, setFormulationHistory] = useState([]);
+  const [showHistoryPanel, setShowHistoryPanel] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [formulationVisible, setFormulationVisible] = useState(true);
   const [packagingStaff, setPackagingStaff] = useState([]);
   const [dispatchData, setDispatchData] = useState({ courier_name: "", transporter_name: "", lr_no: "", dispatch_type: "", porter_link: "" });
@@ -126,7 +128,22 @@ export default function OrderDetail() {
     setFormulationItems(items);
     setFormulationFreeSamples(samples);
     setFormulationSnapshot(JSON.stringify({ items, samples }));
+    setShowHistoryPanel(false);
     setShowFormulation(true);
+  };
+
+  // Toggle the side-by-side history panel inside the formulation editor.
+  const toggleHistoryPanel = async () => {
+    if (showHistoryPanel) { setShowHistoryPanel(false); return; }
+    if (formulationHistory.length === 0 && order?.customer_id) {
+      setHistoryLoading(true);
+      try {
+        const res = await api.get(`/orders/formulation-history/${order.customer_id}`);
+        setFormulationHistory(res.data);
+      } catch { toast.error("Failed to load history"); }
+      finally { setHistoryLoading(false); }
+    }
+    setShowHistoryPanel(true);
   };
 
   // Confirm before discarding unsaved edits when a dialog is closed by mistake
@@ -1057,15 +1074,17 @@ export default function OrderDetail() {
 
       {/* Formulation Dialog */}
       <Dialog open={showFormulation} onOpenChange={handleFormulationOpenChange}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className={`w-[95vw] max-h-[90vh] overflow-y-auto ${showHistoryPanel ? "max-w-2xl lg:max-w-5xl" : "max-w-2xl"}`}>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
+            <DialogTitle className="flex items-center gap-2 flex-wrap pr-8">
               Edit Formulations
-              <Button variant="ghost" size="sm" onClick={loadFormulationHistory} data-testid="formulation-history-in-edit">
-                <History className="w-4 h-4 mr-1" /> History
+              <Button variant={showHistoryPanel ? "default" : "ghost"} size="sm" onClick={toggleHistoryPanel} data-testid="formulation-history-in-edit">
+                <History className="w-4 h-4 mr-1" /> {showHistoryPanel ? "Hide History" : "History"}
               </Button>
             </DialogTitle>
-            <DialogDescription>Set formulations for order items and free samples.</DialogDescription>
+            <DialogDescription>
+              Set formulations for order items and free samples.{showHistoryPanel ? " Copy from past formulations alongside." : ""}
+            </DialogDescription>
           </DialogHeader>
           {["admin", "packaging"].includes(user?.role) && order.purpose && (
             <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
@@ -1073,7 +1092,9 @@ export default function OrderDetail() {
               <span className="font-medium">{order.purpose}</span>
             </div>
           )}
-          <div className="space-y-4">
+          <div className="flex flex-col lg:flex-row gap-4">
+            {/* Edit form */}
+            <div className={`space-y-4 ${showHistoryPanel ? "lg:w-1/2 lg:max-h-[60vh] lg:overflow-y-auto lg:pr-2" : "w-full"}`}>
             {formulationItems.map((item, i) => (
               <div key={i} className="space-y-1">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
@@ -1109,9 +1130,46 @@ export default function OrderDetail() {
                 ))}
               </>
             )}
+            </div>
+
+            {/* History side panel */}
+            {showHistoryPanel && (
+              <div className="lg:w-1/2 border-t pt-3 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-4 lg:max-h-[60vh] lg:overflow-y-auto">
+                <p className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+                  <History className="w-4 h-4" /> Past Formulations
+                </p>
+                {historyLoading ? (
+                  <p className="text-sm text-muted-foreground py-4">Loading…</p>
+                ) : formulationHistory.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4">No past formulations for this customer.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {formulationHistory.map((h, i) => (
+                      <div key={i} className="border rounded-lg p-3 space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="font-medium text-sm">{h.order_number}</span>
+                          <span className="text-xs text-muted-foreground">{new Date(h.created_at).toLocaleDateString("en-IN")}</span>
+                        </div>
+                        {h.items?.filter(it => it.formulation).map((it, j) => (
+                          <div key={j} className="border-l-2 border-amber-400 pl-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="text-sm">{it.product_name} <span className="text-muted-foreground">({it.qty} {it.unit})</span></p>
+                              <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => copyToClipboard(it.formulation, "Formulation")} title="Copy formulation">
+                                <ClipboardCopy className="w-3.5 h-3.5" />
+                              </Button>
+                            </div>
+                            <p className="text-xs text-amber-600 whitespace-pre-wrap select-text">{it.formulation}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowFormulation(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => handleFormulationOpenChange(false)}>Cancel</Button>
             <Button onClick={saveFormulation} disabled={saving}>{saving ? "Saving..." : "Save Formulations"}</Button>
           </DialogFooter>
         </DialogContent>
