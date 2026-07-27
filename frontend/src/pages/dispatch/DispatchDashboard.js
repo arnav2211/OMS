@@ -14,9 +14,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { Truck, Send, Eye, Search, ExternalLink } from "lucide-react";
 import { SlipScanner } from "@/components/SlipScanner";
-import { validateLrNumber, extractPorterLink, COURIER_LR_PATTERNS } from "@/lib/courierTracking";
+import { validateLrNumber, extractPorterLink, COURIER_LR_PATTERNS, isOtherCourier } from "@/lib/courierTracking";
+import CourierSelect from "@/components/CourierSelect";
 
-const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"];
 
 export default function DispatchDashboard() {
   const { user } = useAuth();
@@ -76,7 +76,7 @@ export default function DispatchDashboard() {
     }
 
     // Mandatory LR for transport, and courier unless courier is Others
-    const isLrReq = method === "transport" || (method === "courier" && courierName !== "Others");
+    const isLrReq = method === "transport" || (method === "courier" && !isOtherCourier(courierName));
     if (isLrReq && !lrNo.trim()) {
       return toast.error("LR / Tracking Number is mandatory for " + (method === "courier" ? "Courier" : "Transport") + " dispatch");
     }
@@ -239,14 +239,7 @@ export default function DispatchDashboard() {
               {editShippingMethod === "courier" && (
                 <div>
                   <Label>Courier <span className="text-red-500">*</span></Label>
-                  <Select value={courierName} onValueChange={(v) => { setCourierName(v); setLrValidationError(""); }}>
-                    <SelectTrigger data-testid="dispatch-courier-select"><SelectValue placeholder="Select courier" /></SelectTrigger>
-                    <SelectContent>
-                      {COURIER_OPTIONS.map((c) => (
-                        <SelectItem key={c} value={c}>{c}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <CourierSelect value={courierName} onChange={(v) => { setCourierName(v); setLrValidationError(""); }} triggerTestId="dispatch-courier-select" />
                 </div>
               )}
 
@@ -267,7 +260,7 @@ export default function DispatchDashboard() {
               {(editShippingMethod === "courier" || editShippingMethod === "transport") && (
                 <>
                   <div>
-                    <Label>LR / Tracking No. {editShippingMethod === "courier" && courierName === "Others" ? null : <span className="text-red-500">*</span>}</Label>
+                    <Label>LR / Tracking No. {editShippingMethod === "courier" && isOtherCourier(courierName) ? null : <span className="text-red-500">*</span>}</Label>
                     <Input
                       value={lrNo}
                       onChange={(e) => { setLrNo(e.target.value); setLrValidationError(""); }}

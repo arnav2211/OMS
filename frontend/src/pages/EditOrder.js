@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { Plus, Trash2, MapPin, ArrowLeft, Upload, X, Edit, Lock, ShieldAlert } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { INDIAN_STATES } from "@/lib/indianStates";
+import CourierSelect from "@/components/CourierSelect";
 import {
   calcCarrierRisk, formatCarrierRisk, stripCarrierRisk, resolveCarrierRiskFlag,
   CARRIER_RISK_GST_PERCENT, CARRIER_RISK_COURIER,
@@ -27,7 +28,6 @@ const SHIPPING_METHODS = [
   { value: "porter", label: "Porter" }, { value: "self_arranged", label: "Self-Arranged" },
   { value: "office_collection", label: "Office Collection" },
 ];
-const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"];
 const GST_RATES = [0, 5, 18];
 const PAYMENT_MODES = ["Cash", "Online", "Other"];
 const emptyItem = () => ({ product_name: "", qty: 0, unit: "", rate: 0, amount: 0, gst_rate: 0, gst_amount: 0, total: 0, description: "" });
@@ -330,10 +330,7 @@ function DispatchEditSection({ order, onSaved }) {
             </div>
             {dispatchType === "courier" && (
               <div><Label>Courier</Label>
-                <Select value={courierName} onValueChange={setCourierName}>
-                  <SelectTrigger><SelectValue placeholder="Select courier" /></SelectTrigger>
-                  <SelectContent>{COURIER_OPTIONS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                </Select>
+                <CourierSelect value={courierName} onChange={setCourierName} />
               </div>
             )}
             {dispatchType === "transport" && (
@@ -369,10 +366,7 @@ function DispatchEditSection({ order, onSaved }) {
             </div>
             {dispatchType === "courier" && (
               <div><Label>Courier</Label>
-                <Select value={courierName} onValueChange={setCourierName}>
-                  <SelectTrigger><SelectValue placeholder="Select courier" /></SelectTrigger>
-                  <SelectContent>{COURIER_OPTIONS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                </Select>
+                <CourierSelect value={courierName} onChange={setCourierName} />
               </div>
             )}
             {dispatchType === "transport" && (
@@ -898,10 +892,7 @@ export default function EditOrder() {
                 </div>
                 {shippingMethod === "courier" && (
                   <div><Label>Courier</Label>
-                    <Select value={courierName} onValueChange={handleCourierChange}>
-                      <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                      <SelectContent>{COURIER_OPTIONS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                    </Select>
+                    <CourierSelect value={courierName} onChange={handleCourierChange} />
                   </div>
                 )}
                 {shippingMethod === "transport" && (

@@ -20,10 +20,10 @@ import {
 } from "@/components/ui/dialog";
 import { mobilePrintPdf } from "@/lib/mobilePrint";
 import { SlipScanner } from "@/components/SlipScanner";
-import { validateLrNumber, getTrackingUrl, extractPorterLink, isLrMandatory, COURIER_LR_PATTERNS } from "@/lib/courierTracking";
+import { validateLrNumber, getTrackingUrl, extractPorterLink, isLrMandatory, COURIER_LR_PATTERNS, isOtherCourier } from "@/lib/courierTracking";
+import CourierSelect from "@/components/CourierSelect";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
-const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"];
 
 export default function OrderDetail() {
   const { orderId: id } = useParams();
@@ -1112,10 +1112,7 @@ export default function OrderDetail() {
             </div>
             {dispatchData.dispatch_type === "courier" && (
               <div><Label>Courier <span className="text-red-500">*</span></Label>
-                <Select value={dispatchData.courier_name} onValueChange={(v) => { setDispatchData({ ...dispatchData, courier_name: v }); setLrValidationError(""); }}>
-                  <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                  <SelectContent>{COURIER_OPTIONS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                </Select>
+                <CourierSelect value={dispatchData.courier_name} onChange={(v) => { setDispatchData({ ...dispatchData, courier_name: v }); setLrValidationError(""); }} />
               </div>
             )}
             {dispatchData.dispatch_type === "transport" && (
@@ -1124,7 +1121,7 @@ export default function OrderDetail() {
             {(dispatchData.dispatch_type === "courier" || dispatchData.dispatch_type === "transport") && (
               <>
                 <div>
-                  <Label>LR / Tracking No. <span className="text-red-500">*</span></Label>
+                  <Label>LR / Tracking No. {dispatchData.dispatch_type === "courier" && isOtherCourier(dispatchData.courier_name) ? null : <span className="text-red-500">*</span>}</Label>
                   <Input
                     value={dispatchData.lr_no}
                     onChange={(e) => { setDispatchData({ ...dispatchData, lr_no: e.target.value }); setLrValidationError(""); }}

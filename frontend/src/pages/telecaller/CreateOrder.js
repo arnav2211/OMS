@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { INDIAN_STATES } from "@/lib/indianStates";
+import CourierSelect from "@/components/CourierSelect";
 import {
   calcCarrierRisk, formatCarrierRisk, stripCarrierRisk, resolveCarrierRiskFlag,
   CARRIER_RISK_GST_PERCENT, CARRIER_RISK_COURIER,
@@ -30,7 +31,6 @@ const SHIPPING_METHODS = [
   { value: "self_arranged", label: "Self-Arranged Shipping" },
   { value: "office_collection", label: "Office Collection" },
 ];
-const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"];
 const GST_RATES = [0, 5, 18];
 const PAYMENT_MODES = ["Cash", "Online", "Other"];
 
@@ -659,10 +659,7 @@ export default function CreateOrder() {
             {shippingMethod === "courier" && (
               <div>
                 <Label>Courier *</Label>
-                <Select value={courierName} onValueChange={handleCourierChange}>
-                  <SelectTrigger data-testid="courier-name-select"><SelectValue placeholder="Select courier" /></SelectTrigger>
-                  <SelectContent>{COURIER_OPTIONS.map((c) => (<SelectItem key={c} value={c}>{c}</SelectItem>))}</SelectContent>
-                </Select>
+                <CourierSelect value={courierName} onChange={handleCourierChange} triggerTestId="courier-name-select" />
               </div>
             )}
             {shippingMethod === "transport" && (

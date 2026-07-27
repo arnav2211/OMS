@@ -1,3 +1,16 @@
+// Named couriers with their own behaviour/LR rules. Anything else the user
+// types (via the "Others" option) is stored directly in courier_name and
+// treated as a free-form courier that does not require an LR number.
+export const KNOWN_COURIERS = ["DTDC", "Anjani", "India Post", "Amazon"];
+
+// What the courier dropdown shows. "Others" reveals a free-text box.
+export const COURIER_DROPDOWN = [...KNOWN_COURIERS, "Others"];
+
+/** True when courier_name is a free-form / "Others" courier (not a named one). */
+export function isOtherCourier(courierName) {
+  return !!courierName && !KNOWN_COURIERS.includes(courierName);
+}
+
 // Courier LR/Tracking Number Regex Patterns
 export const COURIER_LR_PATTERNS = {
   DTDC: {
@@ -26,7 +39,7 @@ const TRACKING_URLS = {
  * Returns { valid, message }
  */
 export function validateLrNumber(courierName, lrNo) {
-  if (courierName === "Others") {
+  if (isOtherCourier(courierName)) {
     return { valid: true, message: "" };
   }
   if (!lrNo || !lrNo.trim()) {
@@ -73,7 +86,7 @@ export function extractPorterLink(text) {
  * Check if a dispatch type requires mandatory LR/tracking
  */
 export function isLrMandatory(dispatchType, courierName) {
-  if (dispatchType === "courier" && courierName === "Others") {
+  if (dispatchType === "courier" && isOtherCourier(courierName)) {
     return false;
   }
   return dispatchType === "courier" || dispatchType === "transport";
