@@ -1824,6 +1824,25 @@ async def update_payment_check(order_id: str, body: dict, user=Depends(get_curre
     }})
     return await db.orders.find_one({"id": order_id}, {"_id": 0})
 
+
+@api_router.put("/orders/{order_id}/slip-received")
+async def update_slip_received(order_id: str, body: dict, user=Depends(get_current_user)):
+    """Accounts marks that the physical courier/transport slip was received."""
+    if user["role"] not in ["admin", "accounts"]:
+        raise HTTPException(status_code=403, detail="Only accounts or admin can update slip received")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    received = bool(body.get("slip_received", False))
+    now = datetime.now(timezone.utc).isoformat()
+    await db.orders.update_one({"id": order_id}, {"$set": {
+        "slip_received": received,
+        "slip_received_by": user["name"] if received else "",
+        "slip_received_at": now if received else "",
+        "updated_at": now,
+    }})
+    return await db.orders.find_one({"id": order_id}, {"_id": 0})
+
 # Bulk Shipping Address Print
 @api_router.post("/orders/print-addresses")
 async def print_order_addresses(body: dict, user=Depends(get_current_user)):

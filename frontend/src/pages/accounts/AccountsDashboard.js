@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { Upload, Trash2, FileText, CheckCircle, Clock, RefreshCw, AlertTriangle, BanknoteIcon, Eye, X } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -156,6 +157,15 @@ export default function AccountsDashboard() {
       setAllOrders(prev => prev.map(o => o.id === orderId ? { ...o, payment_check_status: status } : o));
     } catch { toast.error("Failed to update"); }
     finally { setUpdating(p => ({ ...p, [orderId]: false })); }
+  };
+
+  const updateSlipReceived = async (orderId, received) => {
+    setUpdating(p => ({ ...p, [`slip-${orderId}`]: true }));
+    try {
+      await api.put(`/orders/${orderId}/slip-received`, { slip_received: received });
+      setAllOrders(prev => prev.map(o => o.id === orderId ? { ...o, slip_received: received, slip_received_by: received ? user?.name : "" } : o));
+    } catch { toast.error("Failed to update slip status"); }
+    finally { setUpdating(p => ({ ...p, [`slip-${orderId}`]: false })); }
   };
 
   const filteredAllOrders = allOrders.filter(o => {
@@ -384,6 +394,7 @@ export default function AccountsDashboard() {
                         <TableHead className="whitespace-nowrap">Mode</TableHead>
                         <TableHead className="whitespace-nowrap">GST</TableHead>
                         <TableHead className="whitespace-nowrap">Proof</TableHead>
+                        <TableHead className="whitespace-nowrap">Slip Rcvd</TableHead>
                         <TableHead className="whitespace-nowrap">Check Status</TableHead>
                         <TableHead className="whitespace-nowrap">Checked By</TableHead>
                         <TableHead className="whitespace-nowrap">Action</TableHead>
@@ -391,7 +402,7 @@ export default function AccountsDashboard() {
                     </TableHeader>
                     <TableBody>
                       {filteredAllOrders.length === 0 && (
-                        <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-8">No orders found</TableCell></TableRow>
+                        <TableRow><TableCell colSpan={12} className="text-center text-muted-foreground py-8">No orders found</TableCell></TableRow>
                       )}
                       {filteredAllOrders.map(o => {
                         const checkInfo = CHECK_BADGE[o.payment_check_status || "pending"] || CHECK_BADGE.pending;
@@ -411,6 +422,24 @@ export default function AccountsDashboard() {
                                 <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => setPreviewScreenshots(o.payment_screenshots)} data-testid={`preview-proof-${o.id}`}>
                                   <Eye className="w-3 h-3 mr-1" />{o.payment_screenshots.length}
                                 </Button>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </TableCell>
+                            <TableCell data-testid={`slip-cell-${o.id}`}>
+                              {["courier", "transport"].includes(o.shipping_method) ? (
+                                <div className="flex items-center gap-1.5">
+                                  <Checkbox
+                                    checked={!!o.slip_received}
+                                    onCheckedChange={(v) => updateSlipReceived(o.id, !!v)}
+                                    disabled={updating[`slip-${o.id}`]}
+                                    data-testid={`slip-checkbox-${o.id}`}
+                                    aria-label="Physical slip received"
+                                  />
+                                  {o.slip_received && o.slip_received_by && (
+                                    <span className="text-[10px] text-muted-foreground truncate max-w-[70px]" title={`Received by ${o.slip_received_by}`}>{o.slip_received_by}</span>
+                                  )}
+                                </div>
                               ) : (
                                 <span className="text-xs text-muted-foreground">—</span>
                               )}
