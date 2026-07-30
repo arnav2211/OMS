@@ -18,7 +18,7 @@ import {
 import { Link } from "react-router-dom";
 import { INDIAN_STATES } from "@/lib/indianStates";
 import {
-  calcCarrierRisk, formatCarrierRisk, stripCarrierRisk, resolveCarrierRiskFlag,
+  resolveCarrierRiskCharge, formatCarrierRisk, stripCarrierRisk, resolveCarrierRiskFlag,
   CARRIER_RISK_GST_PERCENT, CARRIER_RISK_COURIER,
 } from "@/lib/carrierRisk";
 import { useAuth } from "@/contexts/AuthContext";
@@ -225,7 +225,7 @@ export default function PIBuilder() {
   // Carrier risk is levied on the rest of the invoice, so it is derived last.
   const carrierRiskBase = subtotal + totalGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst;
   const carrierRisk = carrierRiskApplicable
-    ? calcCarrierRisk(carrierRiskBase, gstApplicable ? CARRIER_RISK_GST_PERCENT : 0)
+    ? resolveCarrierRiskCharge(carrierRiskBase, gstApplicable)
     : null;
   const grandTotal = Math.ceil(carrierRiskBase + (carrierRisk ? carrierRisk.total : 0));
 

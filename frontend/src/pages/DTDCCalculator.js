@@ -4,7 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
@@ -23,12 +22,11 @@ export default function DTDCCalculator() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // Carrier risk calculator
+  // Carrier risk calculator — GST always applies on this tool.
   const [invoiceValue, setInvoiceValue] = useState("");
-  const [riskGstApplicable, setRiskGstApplicable] = useState(true);
   const parsedInvoiceValue = parseFloat(invoiceValue);
   const carrierRisk = Number.isFinite(parsedInvoiceValue) && parsedInvoiceValue > 0
-    ? calcCarrierRisk(parsedInvoiceValue, riskGstApplicable ? CARRIER_RISK_GST_PERCENT : 0)
+    ? calcCarrierRisk(parsedInvoiceValue, CARRIER_RISK_GST_PERCENT)
     : null;
 
   const handleCalculate = async () => {
@@ -257,17 +255,6 @@ export default function DTDCCalculator() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="carrierRiskGst"
-                checked={riskGstApplicable}
-                onCheckedChange={setRiskGstApplicable}
-                data-testid="carrier-risk-gst-checkbox"
-              />
-              <Label htmlFor="carrierRiskGst" className="cursor-pointer text-sm">
-                Add {CARRIER_RISK_GST_PERCENT}% GST
-              </Label>
-            </div>
 
             {carrierRisk && (
               <>

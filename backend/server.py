@@ -227,10 +227,20 @@ def build_additional_charges(raw_charges, gst_applicable: bool, carrier_risk_app
         charges.append(c)
 
     if carrier_risk_applicable:
-        carrier_risk = calc_carrier_risk(
-            base_value + total_amount + total_gst,
-            CARRIER_RISK_GST_PERCENT if gst_applicable else 0,
-        )
+        # Carrier risk always carries 18% GST. On a GST invoice it's shown as
+        # amount + GST; on a non-GST invoice the GST is folded into a single
+        # inclusive amount (e.g. 118) with no GST line.
+        cr = calc_carrier_risk(base_value + total_amount + total_gst, CARRIER_RISK_GST_PERCENT)
+        if gst_applicable:
+            carrier_risk = cr
+        else:
+            inclusive = float(math.ceil(cr["amount"] + cr["gst_amount"]))
+            carrier_risk = {
+                "name": CARRIER_RISK_LABEL,
+                "amount": inclusive,
+                "gst_percent": 0,
+                "gst_amount": 0,
+            }
         charges.append(carrier_risk)
         total_amount += carrier_risk["amount"]
         total_gst += carrier_risk["gst_amount"]

@@ -39,11 +39,31 @@ export function calcCarrierRisk(baseValue, gstPercent = CARRIER_RISK_GST_PERCENT
   };
 }
 
-/** "105 + 18% = 123.90" */
+/**
+ * The carrier-risk charge exactly as it should appear on a document. DTDC always
+ * levies 2% + GST, so GST is always part of the cost. When the invoice is
+ * GST-applicable it's shown as amount + GST; when it is NOT, the GST is folded
+ * into a single inclusive amount (e.g. 118) with no GST wording anywhere.
+ */
+export function resolveCarrierRiskCharge(baseValue, gstApplicable) {
+  const c = calcCarrierRisk(baseValue, CARRIER_RISK_GST_PERCENT);
+  if (gstApplicable) return c;
+  const inclusive = Math.ceil(c.total);
+  return {
+    name: CARRIER_RISK_LABEL,
+    amount: inclusive,
+    gst_percent: 0,
+    gst_amount: 0,
+    total: inclusive,
+    minimum_applied: c.minimum_applied,
+  };
+}
+
+/** "105 + 18% = 123.90" when GST applies; just "118" when it doesn't. */
 export function formatCarrierRisk(charge) {
   if (!charge) return "";
   const total = charge.total ?? charge.amount + (charge.gst_amount || 0);
-  if (!charge.gst_percent) return `${charge.amount} = ${total.toFixed(2)}`;
+  if (!charge.gst_percent) return `${charge.amount}`;
   return `${charge.amount} + ${charge.gst_percent}% = ${total.toFixed(2)}`;
 }
 

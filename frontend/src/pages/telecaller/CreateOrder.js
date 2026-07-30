@@ -19,7 +19,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { INDIAN_STATES } from "@/lib/indianStates";
 import CourierSelect from "@/components/CourierSelect";
 import {
-  calcCarrierRisk, formatCarrierRisk, stripCarrierRisk, resolveCarrierRiskFlag,
+  resolveCarrierRiskCharge, formatCarrierRisk, stripCarrierRisk, resolveCarrierRiskFlag,
   CARRIER_RISK_GST_PERCENT, CARRIER_RISK_COURIER,
 } from "@/lib/carrierRisk";
 
@@ -280,7 +280,7 @@ export default function CreateOrder() {
   const rawTotal = subtotal + totalItemGst + shippingCharge + shippingGst + totalAdditional + totalAdditionalGst;
   // Carrier risk is levied on the rest of the invoice, so it is derived last.
   const carrierRisk = carrierRiskApplicable
-    ? calcCarrierRisk(rawTotal, gstApplicable ? CARRIER_RISK_GST_PERCENT : 0)
+    ? resolveCarrierRiskCharge(rawTotal, gstApplicable)
     : null;
   const grandTotal = Math.ceil(rawTotal + (carrierRisk ? carrierRisk.total : 0));
   const balanceAmount = paymentStatus === "full" ? 0 : paymentStatus === "partial" ? Math.max(0, grandTotal - amountPaid) : grandTotal;
