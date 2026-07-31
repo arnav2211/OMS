@@ -25,8 +25,8 @@ const NAV_ITEMS = {
     { label: "Customers", icon: Users, path: "/customers" },
     { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
-    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
+    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
   ],
   packaging: [
     { label: "Dashboard", icon: Home, path: "/" },
@@ -37,8 +37,8 @@ const NAV_ITEMS = {
     { label: "Amazon Dispatch", icon: Truck, path: "/amazon-dispatch" },
     { label: "Dispatch", icon: Truck, path: "/dispatch" },
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
-    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
+    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
   ],
   dispatch: [
     { label: "Dashboard", icon: Home, path: "/" },
@@ -46,8 +46,8 @@ const NAV_ITEMS = {
     { label: "Dispatch Queue", icon: Truck, path: "/dispatch" },
     { label: "Amazon Dispatch", icon: ShoppingBag, path: "/amazon-dispatch" },
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
-    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
+    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
   ],
   admin: [
     { label: "Dashboard", icon: Home, path: "/" },
@@ -71,16 +71,16 @@ const NAV_ITEMS = {
     { label: "Field Tracking", icon: Navigation, path: "/tracking" },
     { label: "Alerts", icon: Megaphone, path: "/admin-alerts" },
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
-    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
+    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
   ],
   accounts: [
     { label: "Dashboard", icon: Home, path: "/" },
     { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Customers", icon: Users, path: "/customers" },
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
-    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
+    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
   ],
 };
 
