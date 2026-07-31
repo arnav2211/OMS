@@ -4666,7 +4666,8 @@ async def amazon_bookable_orders(user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Not authorized")
     orders = await db.orders.find({
         "courier_name": "Amazon",
-        "status": {"$ne": "cancelled"},
+        # Dispatched orders have already shipped, so there is nothing left to book.
+        "status": {"$nin": ["cancelled", "dispatched"]},
         "packaging.weight_kg": {"$nin": ["", None]},
     }, {
         "_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1,
@@ -4675,6 +4676,12 @@ async def amazon_bookable_orders(user=Depends(get_current_user)):
     out = []
     for o in orders:
         pkg = o.get("packaging") or {}
+        # Guard against whitespace-only / zero weights that the query can't catch.
+        try:
+            if float(str(pkg.get("weight_kg", "")).strip() or 0) <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
         out.append({
             "id": o["id"], "order_number": o.get("order_number"),
             "customer_name": o.get("customer_name"), "grand_total": o.get("grand_total"),
