@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 from passlib.context import CryptContext
-from reportlab.lib.pagesizes import A4, A5
+from reportlab.lib.pagesizes import A4, A5, landscape
 from reportlab.lib.units import mm
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
@@ -4615,6 +4615,261 @@ async def amazon_check_pincode(pincode: str, weight: float = 1.0):
     except Exception as e:
         logging.error(f"Amazon serviceability error: {e}")
         return {"serviceable": False, "configured": True, "message": "Unable to check Amazon serviceability right now."}
+
+
+def _amazon_ship_from() -> dict:
+    return {
+        "name": AMAZON_SHIP["origin_name"],
+        "addressLine1": AMAZON_SHIP["origin_addr"][:60],
+        "city": AMAZON_SHIP["origin_city"],
+        "stateOrRegion": AMAZON_SHIP["origin_state"],
+        "postalCode": AMAZON_SHIP["origin_pincode"],
+        "countryCode": "IN",
+        "phoneNumber": AMAZON_SHIP["origin_phone"],
+    }
+
+
+def _amazon_rates_body(ship_to: dict, weight_kg: float, declared_value: float, ref: str) -> dict:
+    """Shared getRates payload. items + root taxDetails are mandatory for IN accounts."""
+    w = max(0.1, float(weight_kg or 1))
+    val = max(1, int(declared_value or 100))
+    return {
+        "shipFrom": _amazon_ship_from(),
+        "shipTo": ship_to,
+        "packages": [{
+            "dimensions": {"length": 20, "width": 15, "height": 10, "unit": "CENTIMETER"},
+            "weight": {"unit": "KILOGRAM", "value": w},
+            "insuredValue": {"value": val, "unit": "INR"},
+            "packageClientReferenceId": ref,
+            "items": [{
+                "itemValue": {"value": val, "unit": "INR"},
+                "description": "Aroma product",
+                "itemIdentifier": ref,
+                "quantity": 1,
+                "weight": {"unit": "KILOGRAM", "value": w},
+            }],
+        }],
+        "channelDetails": {"channelType": "EXTERNAL"},
+        "taxDetails": [{"taxType": "GST", "taxRegistrationNumber": COMPANY["gstin"]}],
+    }
+
+
+class AmazonBookRequest(BaseModel):
+    order_id: str
+    service_id: Optional[str] = None   # which quoted service to buy; cheapest if omitted
+
+
+@api_router.get("/amazon/bookable")
+async def amazon_bookable_orders(user=Depends(get_current_user)):
+    """Orders assigned to Amazon courier that packing has weighed and that are not booked yet."""
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    orders = await db.orders.find({
+        "courier_name": "Amazon",
+        "status": {"$ne": "cancelled"},
+        "packaging.weight_kg": {"$nin": ["", None]},
+    }, {
+        "_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1,
+        "shipping_address": 1, "packaging": 1, "amazon_shipment": 1, "status": 1,
+    }).sort("created_at", -1).to_list(300)
+    out = []
+    for o in orders:
+        pkg = o.get("packaging") or {}
+        out.append({
+            "id": o["id"], "order_number": o.get("order_number"),
+            "customer_name": o.get("customer_name"), "grand_total": o.get("grand_total"),
+            "status": o.get("status"),
+            "weight_kg": pkg.get("weight_kg"), "num_boxes": pkg.get("num_boxes") or "1",
+            "shipping_address": o.get("shipping_address") or {},
+            "amazon_shipment": o.get("amazon_shipment"),
+        })
+    return out
+
+
+@api_router.post("/amazon/quote")
+async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_user)):
+    """Live rates for a specific order — read-only, books nothing."""
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not _amazon_configured():
+        raise HTTPException(status_code=400, detail="Amazon Shipping API is not configured")
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    pkg = order.get("packaging") or {}
+    if not str(pkg.get("weight_kg", "")).strip():
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+    sa = order.get("shipping_address") or {}
+    ship_to = {
+        "name": sa.get("address_name") or order.get("customer_name") or "Customer",
+        "addressLine1": (sa.get("address_line") or "Address")[:60],
+        "city": sa.get("city") or "", "stateOrRegion": sa.get("state") or "",
+        "postalCode": sa.get("pincode") or "", "countryCode": "IN",
+        "phoneNumber": "9999999999",
+    }
+    token = await _amazon_access_token()
+    body = _amazon_rates_body(ship_to, pkg.get("weight_kg"), order.get("grand_total"), order.get("order_number") or "ord")
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/rates",
+                         headers={"x-amz-access-token": token, "content-type": "application/json"}, json=body)
+    if r.status_code != 200:
+        return {"ok": False, "message": f"Amazon returned HTTP {r.status_code}", "detail": r.text[:400]}
+    payload = r.json().get("payload") or r.json()
+    rates, seen = [], set()
+    for x in payload.get("rates") or []:
+        ch = x.get("totalCharge") or {}
+        key = (x.get("serviceId") or x.get("serviceName"), ch.get("value"))
+        if key in seen:
+            continue
+        seen.add(key)
+        rates.append({
+            "rate_id": x.get("rateId"), "service_id": x.get("serviceId"),
+            "service": x.get("serviceName"), "amount": ch.get("value"), "currency": ch.get("unit"),
+            "promise": x.get("promise"),
+        })
+    if not rates:
+        reason = ""
+        for ir in payload.get("ineligibleRates") or []:
+            rs = (ir.get("ineligibilityReasons") or [{}])[0]
+            reason = rs.get("message") or rs.get("code") or ""
+            break
+        return {"ok": False, "message": "Amazon Shipping does not serve this address.", "detail": reason}
+    return {"ok": True, "rates": rates, "request_token": payload.get("requestToken")}
+
+
+@api_router.post("/amazon/book")
+async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_user)):
+    """PURCHASES a real Amazon shipment (this costs money and schedules a pickup)."""
+    if user["role"] not in ["admin", "dispatch", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized to book shipments")
+    if not _amazon_configured():
+        raise HTTPException(status_code=400, detail="Amazon Shipping API is not configured")
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if (order.get("amazon_shipment") or {}).get("shipment_id"):
+        raise HTTPException(status_code=400, detail="This order is already booked with Amazon")
+    pkg = order.get("packaging") or {}
+    if not str(pkg.get("weight_kg", "")).strip():
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+
+    sa = order.get("shipping_address") or {}
+    ship_to = {
+        "name": sa.get("address_name") or order.get("customer_name") or "Customer",
+        "addressLine1": (sa.get("address_line") or "Address")[:60],
+        "city": sa.get("city") or "", "stateOrRegion": sa.get("state") or "",
+        "postalCode": sa.get("pincode") or "", "countryCode": "IN",
+        "phoneNumber": "9999999999",
+    }
+    token = await _amazon_access_token()
+    ref = order.get("order_number") or req.order_id[:20]
+    headers = {"x-amz-access-token": token, "content-type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=40) as c:
+        rr = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/rates",
+                          headers=headers,
+                          json=_amazon_rates_body(ship_to, pkg.get("weight_kg"), order.get("grand_total"), ref))
+        if rr.status_code != 200:
+            raise HTTPException(status_code=400, detail=f"Amazon rates failed: {rr.text[:300]}")
+        payload = rr.json().get("payload") or rr.json()
+        rates = payload.get("rates") or []
+        if not rates:
+            raise HTTPException(status_code=400, detail="Amazon Shipping does not serve this address")
+        chosen = None
+        if req.service_id:
+            chosen = next((x for x in rates if x.get("serviceId") == req.service_id or x.get("rateId") == req.service_id), None)
+        if not chosen:
+            chosen = min(rates, key=lambda x: (x.get("totalCharge") or {}).get("value", 1e9))
+
+        purchase = {
+            "requestToken": payload.get("requestToken"),
+            "rateId": chosen.get("rateId"),
+            "requestedDocumentSpecification": {
+                "format": "PNG",
+                "size": {"length": 6, "width": 4, "unit": "INCH"},
+                "dpi": 300,
+                "pageLayout": "DEFAULT",
+                "needFileJoining": False,
+                "requestedDocumentTypes": ["LABEL"],
+            },
+        }
+        pr = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments",
+                          headers=headers, json=purchase)
+    if pr.status_code not in (200, 201):
+        logging.error(f"Amazon purchase failed: {pr.status_code} {pr.text[:500]}")
+        raise HTTPException(status_code=400, detail=f"Amazon booking failed: {pr.text[:300]}")
+
+    pp = pr.json().get("payload") or pr.json()
+    tracking_id, label_b64, label_fmt = "", "", "PNG"
+    for pd in pp.get("packageDocumentDetails") or []:
+        tracking_id = tracking_id or pd.get("trackingId") or ""
+        for doc in pd.get("packageDocuments") or []:
+            if not label_b64:
+                label_b64 = doc.get("contents") or ""
+                label_fmt = doc.get("format") or "PNG"
+
+    charge = chosen.get("totalCharge") or {}
+    shipment = {
+        "shipment_id": pp.get("shipmentId") or "",
+        "tracking_id": tracking_id,
+        "service": chosen.get("serviceName"),
+        "service_id": chosen.get("serviceId"),
+        "amount": charge.get("value"),
+        "currency": charge.get("unit"),
+        "promise": chosen.get("promise"),
+        "label_format": label_fmt,
+        "label_base64": label_b64,
+        "booked_by": user["name"],
+        "booked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    update = {"amazon_shipment": shipment, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if tracking_id:
+        dispatch = order.get("dispatch") or {}
+        dispatch["courier_name"] = "Amazon"
+        dispatch.setdefault("lr_no", tracking_id)
+        update["dispatch"] = dispatch
+    await db.orders.update_one({"id": req.order_id}, {"$set": update})
+    safe = {k: v for k, v in shipment.items() if k != "label_base64"}
+    return {"ok": True, "shipment": safe, "has_label": bool(label_b64)}
+
+
+@api_router.get("/amazon/label/{order_id}")
+async def amazon_label_pdf(order_id: str, token: str = "", user=None):
+    """Amazon shipping label rendered on a landscape A5 page."""
+    if token:
+        user = await get_user_from_token_param(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    shipment = order.get("amazon_shipment") or {}
+    if not shipment.get("label_base64"):
+        raise HTTPException(status_code=404, detail="No Amazon label stored for this order")
+
+    import base64
+    raw = base64.b64decode(shipment["label_base64"])
+    page = landscape(A5)                      # 210mm x 148mm
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=page,
+                            leftMargin=6*mm, rightMargin=6*mm,
+                            topMargin=6*mm, bottomMargin=6*mm)
+    avail_w, avail_h = page[0] - 12*mm, page[1] - 12*mm
+    elements = []
+    try:
+        from reportlab.lib.utils import ImageReader
+        img_reader = ImageReader(io.BytesIO(raw))
+        iw, ih = img_reader.getSize()
+        scale = min(avail_w / iw, avail_h / ih)
+        elements.append(Image(io.BytesIO(raw), width=iw * scale, height=ih * scale))
+    except Exception as e:
+        logging.error(f"Amazon label render error: {e}")
+        raise HTTPException(status_code=500, detail="Could not render the stored label image")
+    doc.build(elements)
+    buffer.seek(0)
+    fname = f"amazon-label-{order.get('order_number') or order_id}.pdf"
+    return StreamingResponse(buffer, media_type="application/pdf",
+                             headers={"Content-Disposition": f"inline; filename={fname}"})
 
 
 # ─── Admin Alert / Urgent Notification System ────────────────────────────
