@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAuth } from "@/contexts/AuthContext";
 import AmazonBookPanel from "@/components/AmazonBookPanel";
 import { Search, MapPin, Loader2, CheckCircle2, XCircle, AlertTriangle, Truck, Clock, PackageCheck, ClipboardList } from "lucide-react";
 
@@ -18,7 +19,13 @@ const fmtWindow = (w) => {
   return s && e ? `${s} — ${e}` : (s || e);
 };
 
+// Booking spends money and schedules pickups — mirrors the backend's role gate,
+// which rejects telecallers on /amazon/bookable and /amazon/book.
+const BOOKING_ROLES = ["admin", "dispatch", "packaging", "accounts"];
+
 export default function AmazonChecker() {
+  const { user } = useAuth();
+  const canSeeBooking = BOOKING_ROLES.includes(user?.role);
   const [pincode, setPincode] = useState("");
   const [weight, setWeight] = useState("1");
   const [result, setResult] = useState(null);
@@ -54,12 +61,16 @@ export default function AmazonChecker() {
       <Tabs defaultValue="check" className="w-full">
         <TabsList className="mb-5 mx-auto flex w-fit">
           <TabsTrigger value="check" data-testid="amz-tab-check"><MapPin className="w-4 h-4 mr-2" /> Pincode Check</TabsTrigger>
-          <TabsTrigger value="book" data-testid="amz-tab-book"><ClipboardList className="w-4 h-4 mr-2" /> Book Orders</TabsTrigger>
+          {canSeeBooking && (
+            <TabsTrigger value="book" data-testid="amz-tab-book"><ClipboardList className="w-4 h-4 mr-2" /> Book Orders</TabsTrigger>
+          )}
         </TabsList>
 
-        <TabsContent value="book">
-          <AmazonBookPanel />
-        </TabsContent>
+        {canSeeBooking && (
+          <TabsContent value="book">
+            <AmazonBookPanel />
+          </TabsContent>
+        )}
 
         <TabsContent value="check">
         <div className="w-full max-w-2xl mx-auto space-y-5">
