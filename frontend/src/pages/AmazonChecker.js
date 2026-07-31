@@ -45,14 +45,14 @@ export default function AmazonChecker() {
   const handleKeyDown = (e) => { if (e.key === "Enter") handleCheck(); };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight" data-testid="amazon-page-title">Amazon Shipping</h1>
-        <p className="text-sm text-muted-foreground mt-1">Check serviceability, get live rates, and book parcels</p>
+    <div className="w-full max-w-5xl mx-auto space-y-6 px-1">
+      <div className="text-center">
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight" data-testid="amazon-page-title">Amazon Shipping</h1>
+        <p className="text-sm text-muted-foreground mt-1.5">Check serviceability, get live rates, and book parcels</p>
       </div>
 
-      <Tabs defaultValue="check">
-        <TabsList className="mb-4">
+      <Tabs defaultValue="check" className="w-full">
+        <TabsList className="mb-5 mx-auto flex w-fit">
           <TabsTrigger value="check" data-testid="amz-tab-check"><MapPin className="w-4 h-4 mr-2" /> Pincode Check</TabsTrigger>
           <TabsTrigger value="book" data-testid="amz-tab-book"><ClipboardList className="w-4 h-4 mr-2" /> Book Orders</TabsTrigger>
         </TabsList>
@@ -62,40 +62,42 @@ export default function AmazonChecker() {
         </TabsContent>
 
         <TabsContent value="check">
-        <div className="max-w-2xl space-y-6">
+        <div className="w-full max-w-2xl mx-auto space-y-5">
       <Card>
         <CardHeader className="pb-4">
           <CardTitle className="text-base flex items-center gap-2"><MapPin className="w-4 h-4" /> Enter Pincode</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div>
-            <Label>Destination Pincode</Label>
-            <div className="relative mt-1">
-              <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="sm:col-span-2">
+              <Label>Destination Pincode</Label>
+              <div className="relative mt-1.5">
+                <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  value={pincode}
+                  onChange={(e) => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Enter 6-digit pincode"
+                  className="pl-9 h-11 text-base"
+                  data-testid="amazon-pincode-input"
+                />
+              </div>
+            </div>
+            <div>
+              <Label>Weight (KG)</Label>
               <Input
-                value={pincode}
-                onChange={(e) => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                type="number" step="0.001" min="0.1"
+                value={weight}
+                onChange={(e) => setWeight(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Enter 6-digit pincode"
-                className="pl-9"
-                data-testid="amazon-pincode-input"
+                placeholder="1.5"
+                className="mt-1.5 h-11 text-base"
+                data-testid="amazon-weight-input"
               />
             </div>
           </div>
-          <div>
-            <Label>Weight (KG)</Label>
-            <Input
-              type="number" step="0.001" min="0.1"
-              value={weight}
-              onChange={(e) => setWeight(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="e.g. 1.5"
-              className="mt-1"
-              data-testid="amazon-weight-input"
-            />
-            <p className="text-xs text-muted-foreground mt-1">Rates depend on weight — enter the actual parcel weight.</p>
-          </div>
-          <Button onClick={handleCheck} disabled={loading} className="w-full" data-testid="amazon-check-btn">
+          <p className="text-xs text-muted-foreground -mt-1">Rates depend on weight — enter the actual parcel weight.</p>
+          <Button onClick={handleCheck} disabled={loading} className="w-full h-11 text-base" data-testid="amazon-check-btn">
             {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Search className="w-4 h-4 mr-2" />}
             Check Serviceability
           </Button>
