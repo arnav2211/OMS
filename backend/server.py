@@ -4449,6 +4449,113 @@ async def anjani_check_pincode(pincode: str):
         return {"serviceable": False, "message": "Unable to check serviceability right now. Please try again."}
 
 
+# ─── Amazon Shipping Serviceability (via Amazon Shipping API v2 getRates) ──
+# Serviceability is implicit: if Amazon returns rates for origin -> destination,
+# the pincode is serviceable. Credentials come from the server .env so the
+# feature activates the moment they are added (nothing hard-coded).
+AMAZON_SHIP = {
+    "client_id": os.environ.get("AMAZON_SHIP_CLIENT_ID", ""),
+    "client_secret": os.environ.get("AMAZON_SHIP_CLIENT_SECRET", ""),
+    "refresh_token": os.environ.get("AMAZON_SHIP_REFRESH_TOKEN", ""),
+    # India is served by the EU regional endpoint of the Amazon Shipping / SP-API.
+    "endpoint": os.environ.get("AMAZON_SHIP_ENDPOINT", "https://sellingpartnerapi-eu.amazon.com").rstrip("/"),
+    "origin_pincode": os.environ.get("AMAZON_SHIP_ORIGIN_PINCODE", "440025"),
+    "origin_city": os.environ.get("AMAZON_SHIP_ORIGIN_CITY", "Nagpur"),
+    "origin_state": os.environ.get("AMAZON_SHIP_ORIGIN_STATE", "Maharashtra"),
+    "origin_name": os.environ.get("AMAZON_SHIP_ORIGIN_NAME", COMPANY["name"]),
+    "origin_phone": os.environ.get("AMAZON_SHIP_ORIGIN_PHONE", COMPANY["mobile"]),
+    "origin_addr": os.environ.get("AMAZON_SHIP_ORIGIN_ADDR", COMPANY["address"]),
+}
+
+_amazon_token_cache = {"token": "", "expires_at": 0.0}
+
+
+def _amazon_configured() -> bool:
+    return bool(AMAZON_SHIP["client_id"] and AMAZON_SHIP["client_secret"] and AMAZON_SHIP["refresh_token"])
+
+
+async def _amazon_access_token() -> str:
+    """Exchange the LWA refresh token for a short-lived access token (cached ~1h)."""
+    import time
+    now = time.time()
+    if _amazon_token_cache["token"] and _amazon_token_cache["expires_at"] - 60 > now:
+        return _amazon_token_cache["token"]
+    async with httpx.AsyncClient(timeout=15) as c:
+        resp = await c.post("https://api.amazon.com/auth/o2/token", data={
+            "grant_type": "refresh_token",
+            "refresh_token": AMAZON_SHIP["refresh_token"],
+            "client_id": AMAZON_SHIP["client_id"],
+            "client_secret": AMAZON_SHIP["client_secret"],
+        })
+        resp.raise_for_status()
+        data = resp.json()
+    _amazon_token_cache["token"] = data["access_token"]
+    _amazon_token_cache["expires_at"] = now + int(data.get("expires_in", 3600))
+    return _amazon_token_cache["token"]
+
+
+@api_router.get("/amazon/check/{pincode}")
+async def amazon_check_pincode(pincode: str, weight: float = 1.0):
+    pincode = pincode.strip()
+    if not pincode.isdigit() or len(pincode) != 6:
+        return {"serviceable": False, "configured": True, "message": "Invalid pincode format."}
+    if not _amazon_configured():
+        return {
+            "serviceable": None, "configured": False,
+            "message": "Amazon Shipping API is not configured yet. Add the API credentials on the server to enable this.",
+        }
+    try:
+        token = await _amazon_access_token()
+        body = {
+            "shipFrom": {
+                "name": AMAZON_SHIP["origin_name"], "addressLine1": AMAZON_SHIP["origin_addr"][:60],
+                "city": AMAZON_SHIP["origin_city"], "stateOrRegion": AMAZON_SHIP["origin_state"],
+                "postalCode": AMAZON_SHIP["origin_pincode"], "countryCode": "IN",
+                "phoneNumber": AMAZON_SHIP["origin_phone"],
+            },
+            "shipTo": {
+                "name": "Serviceability Check", "addressLine1": "NA", "city": "NA",
+                "stateOrRegion": "NA", "postalCode": pincode, "countryCode": "IN",
+                "phoneNumber": "0000000000",
+            },
+            "packages": [{
+                "dimensions": {"length": 10, "width": 10, "height": 10, "unit": "CENTIMETER"},
+                "weight": {"unit": "KILOGRAM", "value": max(0.1, float(weight or 1))},
+                "insuredValue": {"value": 100, "unit": "INR"},
+                "packageClientReferenceId": "svc-check-1",
+            }],
+            "channelDetails": {"channelType": "EXTERNAL"},
+        }
+        async with httpx.AsyncClient(timeout=20) as c:
+            resp = await c.post(
+                f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/rates",
+                headers={"x-amz-access-token": token, "content-type": "application/json"},
+                json=body,
+            )
+        if resp.status_code == 200:
+            data = resp.json()
+            rates = (data.get("payload") or data).get("rates") or []
+            if rates:
+                simple = [{
+                    "service": r.get("serviceName") or r.get("serviceId") or "Amazon Shipping",
+                    "carrier": r.get("carrierName") or r.get("carrierId"),
+                    "amount": (r.get("totalCharge") or {}).get("value"),
+                    "currency": (r.get("totalCharge") or {}).get("unit"),
+                    "promise": r.get("promise"),
+                } for r in rates]
+                return {"serviceable": True, "configured": True, "rates": simple, "count": len(rates)}
+            return {"serviceable": False, "configured": True, "message": "Amazon Shipping does not serve this pincode."}
+        # Non-200 usually means not serviceable, or a credential/region mismatch to fix on first setup.
+        return {
+            "serviceable": False, "configured": True,
+            "message": f"Amazon Shipping returned HTTP {resp.status_code}.",
+            "detail": resp.text[:500],
+        }
+    except Exception as e:
+        logging.error(f"Amazon serviceability error: {e}")
+        return {"serviceable": False, "configured": True, "message": "Unable to check Amazon serviceability right now."}
+
+
 # ─── Admin Alert / Urgent Notification System ────────────────────────────
 
 @api_router.get("/admin/alerts/other-users")

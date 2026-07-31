@@ -26,6 +26,7 @@ import AdminAccounts from "@/pages/admin/AdminAccounts";
 import AdminAlerts from "@/pages/admin/AdminAlerts";
 import DTDCCalculator from "@/pages/DTDCCalculator";
 import AnjaniChecker from "@/pages/AnjaniChecker";
+import AmazonChecker from "@/pages/AmazonChecker";
 import FieldTracking from "@/pages/admin/FieldTracking";
 import FieldHome from "@/pages/field/FieldHome";
 
@@ -81,6 +82,7 @@ function AppRoutes() {
       <Route path="/admin-alerts" element={<ProtectedRoute allowedRoles={["admin"]}><AdminAlerts /></ProtectedRoute>} />
       <Route path="/dtdc" element={<ProtectedRoute><DTDCCalculator /></ProtectedRoute>} />
       <Route path="/anjani" element={<ProtectedRoute><AnjaniChecker /></ProtectedRoute>} />
+      <Route path="/amazon-check" element={<ProtectedRoute><AmazonChecker /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
