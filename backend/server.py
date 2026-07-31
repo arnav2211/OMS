@@ -4855,24 +4855,38 @@ async def amazon_label_pdf(order_id: str, token: str = "", user=None):
         raise HTTPException(status_code=404, detail="No Amazon label stored for this order")
 
     import base64
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas as pdf_canvas
+
     raw = base64.b64decode(shipment["label_base64"])
     page = landscape(A5)                      # 210mm x 148mm
+    margin = 6 * mm
+    avail_w, avail_h = page[0] - 2 * margin, page[1] - 2 * margin
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=page,
-                            leftMargin=6*mm, rightMargin=6*mm,
-                            topMargin=6*mm, bottomMargin=6*mm)
-    avail_w, avail_h = page[0] - 12*mm, page[1] - 12*mm
-    elements = []
     try:
-        from reportlab.lib.utils import ImageReader
-        img_reader = ImageReader(io.BytesIO(raw))
-        iw, ih = img_reader.getSize()
-        scale = min(avail_w / iw, avail_h / ih)
-        elements.append(Image(io.BytesIO(raw), width=iw * scale, height=ih * scale))
+        img = ImageReader(io.BytesIO(raw))
+        iw, ih = img.getSize()
+        c = pdf_canvas.Canvas(buffer, pagesize=page)
+        # Shipping labels are portrait (4x6). Rotating them onto the landscape
+        # page roughly doubles the printed size, which keeps the barcode scannable.
+        if ih > iw:
+            s = min(avail_w / ih, avail_h / iw)
+            w, h = iw * s, ih * s          # image dims in its own orientation
+            c.saveState()
+            c.translate(page[0] / 2 + h / 2, page[1] / 2 - w / 2)
+            c.rotate(90)
+            c.drawImage(img, 0, 0, width=w, height=h, preserveAspectRatio=True, anchor="sw")
+            c.restoreState()
+        else:
+            s = min(avail_w / iw, avail_h / ih)
+            w, h = iw * s, ih * s
+            c.drawImage(img, (page[0] - w) / 2, (page[1] - h) / 2,
+                        width=w, height=h, preserveAspectRatio=True, anchor="c")
+        c.showPage()
+        c.save()
     except Exception as e:
         logging.error(f"Amazon label render error: {e}")
         raise HTTPException(status_code=500, detail="Could not render the stored label image")
-    doc.build(elements)
     buffer.seek(0)
     fname = f"amazon-label-{order.get('order_number') or order_id}.pdf"
     return StreamingResponse(buffer, media_type="application/pdf",
