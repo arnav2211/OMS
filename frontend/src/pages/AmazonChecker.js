@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/contexts/AuthContext";
 import AmazonBookPanel from "@/components/AmazonBookPanel";
+import { fmtAmazonRate, fmtAmazonRateBreakdown } from "@/lib/amazonShipping";
 import { Search, MapPin, Loader2, CheckCircle2, XCircle, AlertTriangle, Truck, Clock, PackageCheck, ClipboardList } from "lucide-react";
 
 const fmtWindow = (w) => {
@@ -161,9 +162,10 @@ export default function AmazonChecker() {
                     {r.carrier && <span className="text-xs text-muted-foreground">· {r.carrier}</span>}
                   </div>
                   {r.amount != null && (
-                    <span className="font-mono font-semibold">
-                      {r.currency === "INR" || !r.currency ? "₹" : `${r.currency} `}{r.amount}
-                    </span>
+                    <div className="text-right">
+                      <div className="font-mono font-semibold text-base">{fmtAmazonRate(r.amount, r.currency)}</div>
+                      <div className="text-[11px] text-muted-foreground font-mono">{fmtAmazonRateBreakdown(r.amount, r.currency)}</div>
+                    </div>
                   )}
                 </div>
                 <div className="mt-2 space-y-1">

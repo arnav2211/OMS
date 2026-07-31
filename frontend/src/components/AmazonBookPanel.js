@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Loader2, RefreshCw, Printer, PackageCheck, Clock, AlertTriangle, Truck } from "lucide-react";
+import { fmtAmazonRate, fmtAmazonRateBreakdown } from "@/lib/amazonShipping";
 
 const fmtWindow = (w) => {
   if (!w?.start && !w?.end) return null;
@@ -180,9 +181,12 @@ export default function AmazonBookPanel() {
                   className={`w-full text-left rounded-lg border p-3 transition-colors ${active ? "border-primary bg-accent" : "border-border hover:bg-accent/50"}`}
                   data-testid={`amz-rate-opt-${i}`}
                 >
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <span className="font-medium text-sm">{r.service}</span>
-                    <span className="font-mono font-semibold">₹{r.amount}</span>
+                    <div className="text-right shrink-0">
+                      <div className="font-mono font-semibold">{fmtAmazonRate(r.amount, r.currency)}</div>
+                      <div className="text-[11px] text-muted-foreground font-mono">{fmtAmazonRateBreakdown(r.amount, r.currency)}</div>
+                    </div>
                   </div>
                   {fmtWindow(r.promise?.pickupWindow) && (
                     <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-1 flex items-center gap-1">
@@ -203,7 +207,7 @@ export default function AmazonBookPanel() {
             <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <p className="text-xs text-amber-800 dark:text-amber-300">
               This purchases a real shipment on your Amazon Shipping account
-              {selectedRate?.amount ? <> for <b>₹{selectedRate.amount}</b></> : null} and schedules a pickup. It cannot be undone from here.
+              {selectedRate?.amount ? <> for <b>{fmtAmazonRate(selectedRate.amount, selectedRate.currency)}</b> ({fmtAmazonRateBreakdown(selectedRate.amount, selectedRate.currency)})</> : null} and schedules a pickup. It cannot be undone from here.
             </p>
           </div>
 
