@@ -94,8 +94,10 @@ export default function AmazonChecker() {
             <Badge variant="outline" className="border-green-300 bg-green-50 text-green-700 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800 gap-1.5 py-1">
               <CheckCircle2 className="w-3.5 h-3.5" /> Serviceable
             </Badge>
-            <span className="text-sm text-muted-foreground">Pincode: {pincode}</span>
-            {result.count != null && <span className="text-sm text-muted-foreground">({result.count} rate{result.count > 1 ? "s" : ""})</span>}
+            <span className="text-sm text-muted-foreground">
+              Pincode: {pincode}{result.city ? ` · ${result.city}, ${result.state}` : ""}
+            </span>
+            {result.count != null && <span className="text-sm text-muted-foreground">({result.count} service{result.count > 1 ? "s" : ""})</span>}
           </div>
 
           {(result.rates || []).map((r, i) => (

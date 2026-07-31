@@ -4468,6 +4468,33 @@ AMAZON_SHIP = {
 }
 
 _amazon_token_cache = {"token": "", "expires_at": 0.0}
+_pincode_geo_cache = {}
+
+
+async def _resolve_pincode_geo(pincode: str) -> tuple:
+    """(city, state) for a pincode. Amazon rejects placeholder city/state with
+    NO_COVERAGE, so a real locality is required for an accurate answer."""
+    if pincode in _pincode_geo_cache:
+        return _pincode_geo_cache[pincode]
+    # Local DTDC table first — instant, no network.
+    info = _dtdc_pincodes.get(pincode)
+    if info and info.get("city") and info.get("state"):
+        geo = (info["city"], info["state"])
+        _pincode_geo_cache[pincode] = geo
+        return geo
+    try:
+        async with httpx.AsyncClient(timeout=8) as c:
+            r = await c.get(f"https://api.postalpincode.in/pincode/{pincode}")
+            data = r.json()
+        if data and data[0].get("Status") == "Success" and data[0].get("PostOffice"):
+            po = data[0]["PostOffice"][0]
+            geo = (po.get("District") or po.get("Block") or "", po.get("State") or "")
+            if geo[0] and geo[1]:
+                _pincode_geo_cache[pincode] = geo
+                return geo
+    except Exception as e:
+        logging.warning(f"Pincode geo lookup failed for {pincode}: {e}")
+    return ("", "")
 
 
 def _amazon_configured() -> bool:
@@ -4506,6 +4533,8 @@ async def amazon_check_pincode(pincode: str, weight: float = 1.0):
         }
     try:
         token = await _amazon_access_token()
+        city, state = await _resolve_pincode_geo(pincode)
+        pkg_weight = max(0.1, float(weight or 1))
         body = {
             "shipFrom": {
                 "name": AMAZON_SHIP["origin_name"], "addressLine1": AMAZON_SHIP["origin_addr"][:60],
@@ -4514,17 +4543,27 @@ async def amazon_check_pincode(pincode: str, weight: float = 1.0):
                 "phoneNumber": AMAZON_SHIP["origin_phone"],
             },
             "shipTo": {
-                "name": "Serviceability Check", "addressLine1": "NA", "city": "NA",
-                "stateOrRegion": "NA", "postalCode": pincode, "countryCode": "IN",
-                "phoneNumber": "0000000000",
+                "name": "Serviceability Check", "addressLine1": "Main Road",
+                "city": city or "NA", "stateOrRegion": state or "NA",
+                "postalCode": pincode, "countryCode": "IN",
+                "phoneNumber": "9999999999",
             },
             "packages": [{
                 "dimensions": {"length": 10, "width": 10, "height": 10, "unit": "CENTIMETER"},
-                "weight": {"unit": "KILOGRAM", "value": max(0.1, float(weight or 1))},
+                "weight": {"unit": "KILOGRAM", "value": pkg_weight},
                 "insuredValue": {"value": 100, "unit": "INR"},
                 "packageClientReferenceId": "svc-check-1",
+                "items": [{
+                    "itemValue": {"value": 100, "unit": "INR"},
+                    "description": "Aroma product",
+                    "itemIdentifier": "item-1",
+                    "quantity": 1,
+                    "weight": {"unit": "KILOGRAM", "value": pkg_weight},
+                }],
             }],
             "channelDetails": {"channelType": "EXTERNAL"},
+            # Mandatory for Indian Amazon Shipping accounts.
+            "taxDetails": [{"taxType": "GST", "taxRegistrationNumber": COMPANY["gstin"]}],
         }
         async with httpx.AsyncClient(timeout=20) as c:
             resp = await c.post(
@@ -4533,18 +4572,40 @@ async def amazon_check_pincode(pincode: str, weight: float = 1.0):
                 json=body,
             )
         if resp.status_code == 200:
-            data = resp.json()
-            rates = (data.get("payload") or data).get("rates") or []
+            payload = (resp.json().get("payload") or resp.json())
+            rates = payload.get("rates") or []
             if rates:
-                simple = [{
-                    "service": r.get("serviceName") or r.get("serviceId") or "Amazon Shipping",
-                    "carrier": r.get("carrierName") or r.get("carrierId"),
-                    "amount": (r.get("totalCharge") or {}).get("value"),
-                    "currency": (r.get("totalCharge") or {}).get("unit"),
-                    "promise": r.get("promise"),
-                } for r in rates]
-                return {"serviceable": True, "configured": True, "rates": simple, "count": len(rates)}
-            return {"serviceable": False, "configured": True, "message": "Amazon Shipping does not serve this pincode."}
+                # Amazon returns the same service more than once; collapse duplicates.
+                seen, simple = set(), []
+                for r in rates:
+                    charge = r.get("totalCharge") or {}
+                    key = (r.get("serviceId") or r.get("serviceName"), charge.get("value"))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    simple.append({
+                        "service": r.get("serviceName") or r.get("serviceId") or "Amazon Shipping",
+                        "carrier": r.get("carrierName") or r.get("carrierId"),
+                        "amount": charge.get("value"),
+                        "currency": charge.get("unit"),
+                        "promise": r.get("promise"),
+                    })
+                return {
+                    "serviceable": True, "configured": True,
+                    "rates": simple, "count": len(simple),
+                    "city": city, "state": state,
+                }
+            reason = ""
+            for ir in payload.get("ineligibleRates") or []:
+                reasons = ir.get("ineligibilityReasons") or []
+                if reasons:
+                    reason = reasons[0].get("message") or reasons[0].get("code") or ""
+                    break
+            return {
+                "serviceable": False, "configured": True,
+                "message": "Amazon Shipping does not serve this pincode.",
+                "detail": reason, "city": city, "state": state,
+            }
         # Non-200 usually means not serviceable, or a credential/region mismatch to fix on first setup.
         return {
             "serviceable": False, "configured": True,
