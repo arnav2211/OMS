@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import asyncio
 import logging
 import re
 import uuid
@@ -4694,13 +4695,17 @@ class AmazonBookRequest(BaseModel):
     service_id: Optional[str] = None   # which quoted service to buy; cheapest if omitted
 
 
+# Couriers are free text ("Amazon", "Amazon shipping", ...), so match loosely.
+AMAZON_COURIER_RE = {"$regex": r"^\s*amazon", "$options": "i"}
+
+
 @api_router.get("/amazon/bookable")
 async def amazon_bookable_orders(user=Depends(get_current_user)):
     """Orders assigned to Amazon courier that packing has weighed and that are not booked yet."""
     if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     orders = await db.orders.find({
-        "courier_name": "Amazon",
+        "courier_name": AMAZON_COURIER_RE,
         # Dispatched orders have already shipped, so there is nothing left to book.
         "status": {"$nin": ["cancelled", "dispatched"]},
         "packaging.weight_kg": {"$nin": ["", None]},
@@ -4864,6 +4869,7 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         "tracking_id": tracking_id,
         "service": chosen.get("serviceName"),
         "service_id": chosen.get("serviceId"),
+        "carrier_id": chosen.get("carrierId") or "ATS",
         "amount": charge.get("value"),
         "currency": charge.get("unit"),
         "promise": chosen.get("promise"),
@@ -4882,6 +4888,180 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
     await db.orders.update_one({"id": req.order_id}, {"$set": update})
     safe = {k: v for k, v in shipment.items() if k != "label_base64"}
     return {"ok": True, "shipment": safe, "has_label": bool(label_b64)}
+
+
+# ─── Amazon pickup tracking → auto-dispatch ───────────────────────────────
+# Amazon emits "PickupDone" when the parcel leaves us; the summary status also
+# moves past "ReadyForReceive" once it is in the network.
+AMAZON_PICKUP_EVENTS = {"PickupDone", "PickedUp", "Departed"}
+AMAZON_PICKED_STATUSES = {"InTransit", "OutForDelivery", "Delivering", "Delivered", "AttemptFail"}
+AMAZON_SYNC_INTERVAL_SECONDS = int(os.environ.get("AMAZON_SYNC_INTERVAL_SECONDS", "600"))
+
+
+async def _amazon_track(tracking_id: str, carrier_id: str = "ATS") -> Optional[dict]:
+    token = await _amazon_access_token()
+    async with httpx.AsyncClient(timeout=25) as c:
+        r = await c.get(f"{AMAZON_SHIP['endpoint']}/shipping/v2/tracking",
+                        params={"trackingId": tracking_id, "carrierId": carrier_id or "ATS"},
+                        headers={"x-amz-access-token": token})
+    if r.status_code != 200:
+        logging.warning(f"Amazon tracking {tracking_id}: HTTP {r.status_code} {r.text[:200]}")
+        return None
+    return r.json().get("payload") or r.json()
+
+
+def _amazon_pickup_time(payload: dict) -> Optional[str]:
+    """Pickup timestamp if the parcel has left us, else None."""
+    if not payload:
+        return None
+    for ev in (payload.get("eventHistory") or []):
+        if ev.get("eventCode") in AMAZON_PICKUP_EVENTS:
+            return ev.get("eventTime")
+    status = ((payload.get("summary") or {}).get("status") or "")
+    if status in AMAZON_PICKED_STATUSES:
+        events = payload.get("eventHistory") or []
+        return (events[-1].get("eventTime") if events else datetime.now(timezone.utc).isoformat())
+    return None
+
+
+async def _save_label_as_slip(shipment: dict) -> str:
+    """Persist the label PNG (portrait, as Amazon issued it) as a dispatch slip image."""
+    b64 = shipment.get("label_base64")
+    if not b64:
+        return ""
+    import base64 as _b64
+    raw = _b64.b64decode(b64)
+    filename = f"{uuid.uuid4()}.png"
+    async with aiofiles.open(UPLOAD_DIR / filename, "wb") as f:
+        await f.write(raw)
+    return f"/api/uploads/{filename}"
+
+
+async def _amazon_sync_order(order: dict) -> Optional[str]:
+    """Mark an order dispatched once Amazon reports pickup. Returns a status note."""
+    shipment = order.get("amazon_shipment") or {}
+    tracking = shipment.get("tracking_id")
+    if not tracking or order.get("status") == "dispatched":
+        return None
+    payload = await _amazon_track(tracking, shipment.get("carrier_id") or "ATS")
+    picked_at = _amazon_pickup_time(payload)
+    if not picked_at:
+        return None
+
+    dispatch = order.get("dispatch") or {}
+    slips = list(dispatch.get("dispatch_slip_images") or [])
+    if not slips:
+        url = await _save_label_as_slip(shipment)
+        if url:
+            slips.append(url)
+    dispatch.update({
+        "courier_name": "Amazon",
+        "transporter_name": "",
+        "lr_no": tracking,
+        "dispatch_slip_images": slips,
+        "dispatch_type": "courier",
+        "porter_link": "",
+        "dispatched_by": dispatch.get("dispatched_by") or "Amazon Shipping (auto)",
+        "dispatched_at": picked_at,
+    })
+    await db.orders.update_one({"id": order["id"]}, {"$set": {
+        "dispatch": dispatch,
+        "status": "dispatched",
+        "courier_name": "Amazon",
+        "amazon_shipment.picked_up_at": picked_at,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    logging.info(f"Amazon auto-dispatch: {order.get('order_number')} picked up at {picked_at}")
+    return f"{order.get('order_number')} dispatched (picked up {picked_at})"
+
+
+async def _amazon_sync_all() -> list:
+    if not _amazon_configured():
+        return []
+    pending = await db.orders.find({
+        "amazon_shipment.tracking_id": {"$exists": True, "$ne": ""},
+        "status": {"$nin": ["dispatched", "cancelled"]},
+    }, {"_id": 0}).to_list(200)
+    notes = []
+    for o in pending:
+        try:
+            note = await _amazon_sync_order(o)
+            if note:
+                notes.append(note)
+        except Exception as e:
+            logging.error(f"Amazon sync failed for {o.get('order_number')}: {e}")
+    return notes
+
+
+class AmazonLinkRequest(BaseModel):
+    order_id: str
+    tracking_id: str
+    service: Optional[str] = "Amazon Shipping Standard"
+    amount: Optional[float] = None
+    carrier_id: Optional[str] = "ATS"
+
+
+@api_router.post("/amazon/link-shipment")
+async def amazon_link_shipment(req: AmazonLinkRequest, user=Depends(get_current_user)):
+    """Attach a shipment that was booked directly in the Amazon portal, so the
+    OMS can track it and auto-dispatch on pickup. No label is available for
+    these — Amazon only returns documents to the caller that purchased them."""
+    if user["role"] not in ["admin", "dispatch", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    tracking = re.sub(r"\s", "", req.tracking_id or "")
+    if not tracking:
+        raise HTTPException(status_code=400, detail="Tracking ID is required")
+    existing = order.get("amazon_shipment") or {}
+    if existing.get("tracking_id") and existing["tracking_id"] != tracking:
+        raise HTTPException(status_code=400, detail=f"Order already linked to {existing['tracking_id']}")
+    shipment = {
+        **existing,
+        "tracking_id": tracking,
+        "service": req.service or "Amazon Shipping Standard",
+        "carrier_id": req.carrier_id or "ATS",
+        "amount": req.amount if req.amount is not None else existing.get("amount"),
+        "currency": "INR",
+        "linked_manually": True,
+        "booked_by": existing.get("booked_by") or f"{user['name']} (linked)",
+        "booked_at": existing.get("booked_at") or datetime.now(timezone.utc).isoformat(),
+    }
+    await db.orders.update_one({"id": req.order_id}, {"$set": {
+        "amazon_shipment": shipment,
+        "courier_name": "Amazon",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    note = await _amazon_sync_order({**order, "amazon_shipment": shipment})
+    return {"ok": True, "tracking_id": tracking, "dispatched": bool(note), "note": note}
+
+
+@api_router.post("/amazon/sync-tracking")
+async def amazon_sync_tracking(user=Depends(get_current_user)):
+    """Check Amazon tracking now and dispatch anything already picked up."""
+    if user["role"] not in ["admin", "dispatch", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    notes = await _amazon_sync_all()
+    return {"ok": True, "dispatched": notes, "count": len(notes)}
+
+
+async def _amazon_sync_loop():
+    # Give the app a moment to finish starting before the first poll.
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await _amazon_sync_all()
+        except Exception as e:
+            logging.error(f"Amazon sync loop error: {e}")
+        await asyncio.sleep(AMAZON_SYNC_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def _start_amazon_sync():
+    if _amazon_configured():
+        asyncio.create_task(_amazon_sync_loop())
+        logging.info(f"Amazon pickup sync every {AMAZON_SYNC_INTERVAL_SECONDS}s")
 
 
 @api_router.get("/amazon/label/{order_id}")
