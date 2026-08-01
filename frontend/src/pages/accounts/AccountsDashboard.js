@@ -163,7 +163,12 @@ export default function AccountsDashboard() {
     setUpdating(p => ({ ...p, [`slip-${orderId}`]: true }));
     try {
       await api.put(`/orders/${orderId}/slip-received`, { slip_received: received });
-      setAllOrders(prev => prev.map(o => o.id === orderId ? { ...o, slip_received: received, slip_received_by: received ? user?.name : "" } : o));
+      // Patch both tabs' lists so the tick stays consistent without a refetch.
+      const patch = (list) => list.map(o => o.id === orderId
+        ? { ...o, slip_received: received, slip_received_by: received ? user?.name : "" }
+        : o);
+      setAllOrders(patch);
+      setGstOrders(patch);
     } catch { toast.error("Failed to update slip status"); }
     finally { setUpdating(p => ({ ...p, [`slip-${orderId}`]: false })); }
   };
@@ -274,12 +279,13 @@ export default function AccountsDashboard() {
                         <TableHead className="whitespace-nowrap">Amount</TableHead>
                         <TableHead className="whitespace-nowrap">Status</TableHead>
                         <TableHead className="whitespace-nowrap">Invoice</TableHead>
+                        <TableHead className="whitespace-nowrap">Slip Rcvd</TableHead>
                         <TableHead className="whitespace-nowrap">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {gstOrders.length === 0 && (
-                        <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No GST orders found</TableCell></TableRow>
+                        <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No GST orders found</TableCell></TableRow>
                       )}
                       {gstOrders.filter(o => {
                         if (invoiceFilter === "uploaded") return !!o.tax_invoice_url;
@@ -301,6 +307,26 @@ export default function AccountsDashboard() {
                               </a>
                             ) : (
                               <span className="text-xs text-muted-foreground">Not uploaded</span>
+                            )}
+                          </TableCell>
+                          <TableCell data-testid={`inv-slip-cell-${o.id}`}>
+                            {["courier", "transport"].includes(o.shipping_method) ? (
+                              <div className="flex items-center gap-1.5">
+                                <Checkbox
+                                  checked={!!o.slip_received}
+                                  onCheckedChange={(v) => updateSlipReceived(o.id, !!v)}
+                                  disabled={updating[`slip-${o.id}`]}
+                                  data-testid={`inv-slip-checkbox-${o.id}`}
+                                  aria-label="Physical dispatch slip received"
+                                />
+                                {o.slip_received && o.slip_received_by && (
+                                  <span className="text-[10px] text-muted-foreground truncate max-w-[70px]" title={`Received by ${o.slip_received_by}`}>
+                                    {o.slip_received_by}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
                             )}
                           </TableCell>
                           <TableCell>

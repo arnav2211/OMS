@@ -82,6 +82,24 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
   const canPrintPackingSheets = user?.role === "admin" || user?.role === "packaging" || user?.role === "accounts";
   const showPaymentCheck = ["admin", "telecaller", "accounts"].includes(user?.role);
   const isAdmin = user?.role === "admin";
+  // Physical dispatch slip receipt — same field the Accounts dashboard writes,
+  // so ticking it anywhere stays in sync everywhere.
+  const showSlip = ["admin", "accounts"].includes(user?.role);
+  const [slipUpdating, setSlipUpdating] = useState({});
+
+  const updateSlipReceived = async (orderId, received) => {
+    setSlipUpdating(p => ({ ...p, [orderId]: true }));
+    try {
+      await api.put(`/orders/${orderId}/slip-received`, { slip_received: received });
+      setOrders(prev => prev.map(o => o.id === orderId
+        ? { ...o, slip_received: received, slip_received_by: received ? user?.name : "" }
+        : o));
+    } catch {
+      toast.error("Failed to update slip status");
+    } finally {
+      setSlipUpdating(p => ({ ...p, [orderId]: false }));
+    }
+  };
 
   const toggleForwardToPackaging = async (orderId, e) => {
     e.stopPropagation();
@@ -404,6 +422,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
                     {user?.role === "admin" && <TableHead className="text-xs uppercase whitespace-nowrap">Executive</TableHead>}
                     <TableHead className="text-xs uppercase whitespace-nowrap">Date</TableHead>
                     <TableHead className="text-xs uppercase whitespace-nowrap">Shipping</TableHead>
+                    {showSlip && <TableHead className="text-xs uppercase whitespace-nowrap">Slip Rcvd</TableHead>}
                     {isAdmin && <TableHead className="text-xs uppercase whitespace-nowrap">Fwd Pkg</TableHead>}
                   </TableRow>
                 </TableHeader>
@@ -459,6 +478,28 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
                             )}
                           </div>
                         </TableCell>
+                        {showSlip && (
+                          <TableCell data-testid={`slip-cell-${o.id}`}>
+                            {["courier", "transport"].includes(o.shipping_method) ? (
+                              <div className="flex items-center gap-1.5">
+                                <Checkbox
+                                  checked={!!o.slip_received}
+                                  onCheckedChange={(v) => updateSlipReceived(o.id, !!v)}
+                                  disabled={!!slipUpdating[o.id]}
+                                  data-testid={`slip-checkbox-${o.id}`}
+                                  aria-label="Physical dispatch slip received"
+                                />
+                                {o.slip_received && o.slip_received_by && (
+                                  <span className="text-[10px] text-muted-foreground truncate max-w-[70px]" title={`Received by ${o.slip_received_by}`}>
+                                    {o.slip_received_by}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
+                        )}
                         {isAdmin && (
                           <TableCell>
                             <Button
