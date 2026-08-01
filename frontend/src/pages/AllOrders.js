@@ -83,8 +83,10 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
   const showPaymentCheck = ["admin", "telecaller", "accounts"].includes(user?.role);
   const isAdmin = user?.role === "admin";
   // Physical dispatch slip receipt — same field the Accounts dashboard writes,
-  // so ticking it anywhere stays in sync everywhere.
-  const showSlip = ["admin", "accounts"].includes(user?.role);
+  // so ticking it anywhere stays in sync everywhere. Accounts always see the
+  // column; admins switch it on when they need it (off by default).
+  const [showSlipCol, setShowSlipCol] = useState(false);
+  const showSlip = user?.role === "accounts" || (user?.role === "admin" && showSlipCol);
   const [slipUpdating, setSlipUpdating] = useState({});
 
   const updateSlipReceived = async (orderId, received) => {
@@ -392,6 +394,13 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
               <div className="flex items-center gap-2">
                 <Checkbox id="viewAllOrders" checked={viewAll} onCheckedChange={setViewAll} data-testid="view-all-toggle" />
                 <Label htmlFor="viewAllOrders" className="cursor-pointer text-sm whitespace-nowrap">Show All</Label>
+              </div>
+            )}
+            {/* Admins opt in to the slip column; accounts always see it. */}
+            {isAdmin && (
+              <div className="flex items-center gap-2">
+                <Checkbox id="showSlipCol" checked={showSlipCol} onCheckedChange={(v) => setShowSlipCol(!!v)} data-testid="slip-column-toggle" />
+                <Label htmlFor="showSlipCol" className="cursor-pointer text-sm whitespace-nowrap">Slip Rcvd</Label>
               </div>
             )}
           </div>
