@@ -4617,6 +4617,41 @@ async def amazon_check_pincode(pincode: str, weight: float = 1.0):
         return {"serviceable": False, "configured": True, "message": "Unable to check Amazon serviceability right now."}
 
 
+def _to_local_phone(raw) -> str:
+    """Last 10 digits — Amazon India wants a plain local mobile number."""
+    digits = re.sub(r"\D", "", str(raw or ""))
+    return digits[-10:] if len(digits) >= 10 else ""
+
+
+def _amazon_declared_value(order: dict) -> float:
+    """Declared (insured) value for Amazon.
+
+    GST invoices already carry tax in the grand total, so it is declared as-is.
+    Non-GST invoices are grossed up by 18% so the declared value reflects the
+    true worth of the goods.
+    """
+    total = float(order.get("grand_total") or 0)
+    if order.get("gst_applicable"):
+        return round(total, 2)
+    return round(total * 1.18, 2)
+
+
+async def _order_recipient_phone(order: dict) -> str:
+    """The customer's real contact number for the shipping label."""
+    for p in (order.get("customer_phone") or []):
+        v = _to_local_phone(p)
+        if v:
+            return v
+    cid = order.get("customer_id")
+    if cid:
+        cust = await db.customers.find_one({"id": cid}, {"_id": 0, "phone_numbers": 1})
+        for p in ((cust or {}).get("phone_numbers") or []):
+            v = _to_local_phone(p)
+            if v:
+                return v
+    return ""
+
+
 def _amazon_ship_from() -> dict:
     return {
         "name": AMAZON_SHIP["origin_name"],
@@ -4632,7 +4667,7 @@ def _amazon_ship_from() -> dict:
 def _amazon_rates_body(ship_to: dict, weight_kg: float, declared_value: float, ref: str) -> dict:
     """Shared getRates payload. items + root taxDetails are mandatory for IN accounts."""
     w = max(0.1, float(weight_kg or 1))
-    val = max(1, int(declared_value or 100))
+    val = max(1, int(round(float(declared_value or 100))))
     return {
         "shipFrom": _amazon_ship_from(),
         "shipTo": ship_to,
@@ -4707,15 +4742,16 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
     if not str(pkg.get("weight_kg", "")).strip():
         raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
     sa = order.get("shipping_address") or {}
+    phone = await _order_recipient_phone(order)
     ship_to = {
         "name": sa.get("address_name") or order.get("customer_name") or "Customer",
         "addressLine1": (sa.get("address_line") or "Address")[:60],
         "city": sa.get("city") or "", "stateOrRegion": sa.get("state") or "",
         "postalCode": sa.get("pincode") or "", "countryCode": "IN",
-        "phoneNumber": "9999999999",
+        "phoneNumber": phone or AMAZON_SHIP["origin_phone"],
     }
     token = await _amazon_access_token()
-    body = _amazon_rates_body(ship_to, pkg.get("weight_kg"), order.get("grand_total"), order.get("order_number") or "ord")
+    body = _amazon_rates_body(ship_to, pkg.get("weight_kg"), _amazon_declared_value(order), order.get("order_number") or "ord")
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/rates",
                          headers={"x-amz-access-token": token, "content-type": "application/json"}, json=body)
@@ -4761,12 +4797,19 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
 
     sa = order.get("shipping_address") or {}
+    # Never ship with a placeholder number — the courier calls this to deliver.
+    phone = await _order_recipient_phone(order)
+    if not phone:
+        raise HTTPException(
+            status_code=400,
+            detail="Customer has no valid phone number. Add one to the customer record before booking — the courier needs it for delivery.",
+        )
     ship_to = {
         "name": sa.get("address_name") or order.get("customer_name") or "Customer",
         "addressLine1": (sa.get("address_line") or "Address")[:60],
         "city": sa.get("city") or "", "stateOrRegion": sa.get("state") or "",
         "postalCode": sa.get("pincode") or "", "countryCode": "IN",
-        "phoneNumber": "9999999999",
+        "phoneNumber": phone,
     }
     token = await _amazon_access_token()
     ref = order.get("order_number") or req.order_id[:20]
@@ -4775,7 +4818,7 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
     async with httpx.AsyncClient(timeout=40) as c:
         rr = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/rates",
                           headers=headers,
-                          json=_amazon_rates_body(ship_to, pkg.get("weight_kg"), order.get("grand_total"), ref))
+                          json=_amazon_rates_body(ship_to, pkg.get("weight_kg"), _amazon_declared_value(order), ref))
         if rr.status_code != 200:
             raise HTTPException(status_code=400, detail=f"Amazon rates failed: {rr.text[:300]}")
         payload = rr.json().get("payload") or rr.json()
@@ -4826,6 +4869,7 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         "promise": chosen.get("promise"),
         "label_format": label_fmt,
         "label_base64": label_b64,
+        "recipient_phone": phone,
         "booked_by": user["name"],
         "booked_at": datetime.now(timezone.utc).isoformat(),
     }
