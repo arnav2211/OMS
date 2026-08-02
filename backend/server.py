@@ -5192,9 +5192,12 @@ async def _anjani_track(docket: str) -> Optional[dict]:
 
 @api_router.get("/courier-status/{order_id}")
 async def courier_status(order_id: str, user=Depends(get_current_user)):
-    """Live status from the courier for a dispatched order (DTDC or Anjani)."""
-    if user["role"] == "telecaller":
-        raise HTTPException(status_code=403, detail="Not authorized")
+    """Live status from the courier for a dispatched order (DTDC or Anjani).
+
+    Open to every role: telecallers field "where is my parcel" calls, and the
+    docket is already on the order they can see, so withholding the tracking
+    only pushed them to ask someone else to look it up.
+    """
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
