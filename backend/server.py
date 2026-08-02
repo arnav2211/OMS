@@ -6518,10 +6518,18 @@ def _indiapost_event_time(payload: dict) -> str:
 
 
 @api_router.post("/indiapost/webhook/{token}")
-async def indiapost_webhook(token: str, request: Request):
+@api_router.post("/indiapost/webhook/{token}/{stream}")
+async def indiapost_webhook(token: str, request: Request, stream: str = "events"):
     """Receives India Post article events. Deliberately unauthenticated except
     for the URL secret and an optional source-IP pin — the sender is their
-    server, which has no OMS credentials."""
+    server, which has no OMS credentials.
+
+    India Post requires two separate URLs, one for booking events and one for
+    everything else, so the stream is carried in the path. Both are handled
+    identically here; the tag is kept only so the logs show which fired.
+    """
+    if stream not in ("booking", "events"):
+        raise HTTPException(status_code=404, detail="Not found")
     if not INDIAPOST_WEBHOOK_TOKEN or token != INDIAPOST_WEBHOOK_TOKEN:
         raise HTTPException(status_code=404, detail="Not found")
     if INDIAPOST_WEBHOOK_IPS:
@@ -6552,7 +6560,7 @@ async def indiapost_webhook(token: str, request: Request):
             {"article_number": article, "event_code": code, "event_at": at},
             {"$set": {"article_number": article, "event_code": code, "event_at": at,
                       "description": ev.get("event_description"),
-                      "office": ev.get("event_office_name"),
+                      "office": ev.get("event_office_name"), "stream": stream,
                       "raw": ev, "received_at": datetime.now(timezone.utc).isoformat()}},
             upsert=True)
         accepted += 1
