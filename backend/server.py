@@ -6293,6 +6293,23 @@ async def indiapost_delivery_office(pincode: str) -> Optional[dict]:
     return None
 
 
+def _indiapost_billing_weight(product: str, weight_g: int) -> int:
+    """Weight India Post actually charges on.
+
+    The tariff API answers for the exact grams asked, but the counter bills by
+    slab. Verified against a real receipt: consignment CM640588294IN weighed
+    1180 g Nagpur->Talcher and was charged the 2 kg rate (base 115, total 135),
+    while the API quoted 1180 g at 80. Parcels therefore round up to the next
+    whole kilogram; Speed Post steps per 500 g once past its 500 g document
+    band. Quoting the raw weight silently under-quotes by a whole slab.
+    """
+    if product in ("BUSINESS_PARCEL", "PARCEL"):
+        return max(1000, int(math.ceil(weight_g / 1000.0) * 1000))
+    if product == "SP_INLAND_PARCEL":
+        return max(500, int(math.ceil(weight_g / 500.0) * 500))
+    return weight_g          # documents and letters are already slab-priced
+
+
 def _indiapost_eligible(product: str, weight_g: int, dims: dict) -> Optional[str]:
     """None if the article may go by this product, else why not."""
     spec = INDIAPOST_PRODUCTS.get(product)
@@ -6315,9 +6332,10 @@ async def indiapost_quote_product(account_key: str, product: str, weight_g: int,
                                   pod: bool = False) -> dict:
     """One tariff call. Returns a normalised quote or an error dict."""
     spec = INDIAPOST_PRODUCTS[product]
+    billed_g = _indiapost_billing_weight(product, int(weight_g))
     params = {
         "product-code": spec["code"],
-        "weight": int(weight_g),                 # grams, whole numbers only
+        "weight": billed_g,                      # grams, whole numbers only
         "source-pincode": INDIAPOST_ORIGIN_PINCODE,
         "destination-pincode": str(dst_pin),
         "length": int(float(dims.get("length") or 0)),
@@ -6366,8 +6384,10 @@ async def indiapost_quote_product(account_key: str, product: str, weight_g: int,
         "product_label": spec["label"],
         "service": spec["service"],
         "weight_g": int(weight_g),
+        "billed_weight_g": billed_g,
+        "rounded_up": billed_g > int(weight_g),
         "chargeable_weight_g": (d.get("chargeable_weight") or d.get("applicable_weight")
-                                or weight_g),
+                                or billed_g),
         "volumetric_weight_g": d.get("volumetric_weight") or d.get("dimensional_weight"),
         "base_tariff": round(float(base or 0), 2),
         "vas_charges": round(vas_total, 2),
