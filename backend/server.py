@@ -5092,6 +5092,9 @@ def compute_order_expense(order: dict, periods: list) -> Optional[dict]:
         "city": sa.get("city"),
         "state": sa.get("state"),
         "pincode": sa.get("pincode"),
+        "damaged": bool(order.get("damaged")),
+        "damaged_note": order.get("damaged_note") or "",
+        "damaged_by": order.get("damaged_by") or "",
     }
 
     if courier == "Anjani":
@@ -5099,13 +5102,15 @@ def compute_order_expense(order: dict, periods: list) -> Optional[dict]:
         base = ANJANI_RATE_MAHARASHTRA if in_mh else ANJANI_RATE_REST
         row.update({"zone": "Maharashtra" if in_mh else "Rest of India",
                     "service": "Anjani", "base": base, "fuel_percent": 0.0,
-                    "fuel": 0.0, "gst_percent": 0.0, "gst": 0.0, "total": base})
+                    "fuel": 0.0, "base_plus_fuel": base,
+                    "gst_percent": 0.0, "gst": 0.0, "total": base})
         return row
 
     info = _dtdc_pincodes.get(str(sa.get("pincode") or "").strip())
     if not info:
         row.update({"zone": None, "service": None, "base": 0.0, "fuel_percent": 0.0,
-                    "fuel": 0.0, "gst_percent": 0.0, "gst": 0.0, "total": 0.0,
+                    "fuel": 0.0, "base_plus_fuel": 0.0,
+                    "gst_percent": 0.0, "gst": 0.0, "total": 0.0,
                     "error": "Pincode not in the DTDC zone list"})
         return row
     category = info["category"]
@@ -5125,10 +5130,104 @@ def compute_order_expense(order: dict, periods: list) -> Optional[dict]:
     row.update({
         "zone": category, "service": service,
         "base": round(base, 2), "fuel_percent": fuel_pct, "fuel": round(fuel, 2),
+        # DTDC's invoice reads as (freight + fuel) then GST on that, so carry the
+        # subtotal explicitly rather than making the reader add it up.
+        "base_plus_fuel": round(base + fuel, 2),
         "gst_percent": DTDC_EXPENSE_GST_PERCENT, "gst": round(gst, 2),
         "total": round(base + fuel + gst, 2),
     })
     return row
+
+
+class DamagedRequest(BaseModel):
+    order_id: str
+    damaged: bool = True
+    note: Optional[str] = ""
+
+
+@api_router.put("/orders/{order_id}/damaged")
+async def mark_order_damaged(order_id: str, req: DamagedRequest, user=Depends(get_current_user)):
+    """Flag a consignment as received damaged, so accounts can raise it with the courier."""
+    if user["role"] not in ["admin", "accounts", "dispatch", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    now = datetime.now(timezone.utc).isoformat()
+    update = {
+        "damaged": bool(req.damaged),
+        "damaged_note": (req.note or "").strip() if req.damaged else "",
+        "damaged_by": user["name"] if req.damaged else "",
+        "damaged_at": now if req.damaged else "",
+        "updated_at": now,
+    }
+    await db.orders.update_one({"id": order_id}, {"$set": update})
+    return {"ok": True, **{k: v for k, v in update.items() if k != "updated_at"}}
+
+
+async def _anjani_track(docket: str) -> Optional[dict]:
+    """Shree Anjani public tracking — GET /public/awb/{docket}, no auth needed."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(f"https://api-customer.shreeanjani.co.in/public/awb/{docket}")
+        if r.status_code == 200:
+            d = r.json()
+            if d.get("success"):
+                return d.get("data") or {}
+    except Exception as e:
+        logging.warning(f"Anjani tracking failed for {docket}: {e}")
+    return None
+
+
+@api_router.get("/courier-status/{order_id}")
+async def courier_status(order_id: str, user=Depends(get_current_user)):
+    """Live status from the courier for a dispatched order (DTDC or Anjani)."""
+    if user["role"] == "telecaller":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    courier = _order_courier(order)
+    docket = (order.get("dispatch") or {}).get("lr_no") or \
+             (order.get("dtdc_shipment") or {}).get("awb") or ""
+    if not docket:
+        return {"ok": False, "message": "No docket number on this order"}
+
+    if courier == "Anjani":
+        data = await _anjani_track(docket)
+        if not data:
+            return {"ok": False, "courier": courier, "docket": docket,
+                    "message": "Anjani returned no data for this docket"}
+        b = data.get("booking") or {}
+        return {"ok": True, "courier": courier, "docket": docket,
+                "status": b.get("status_name") or "-",
+                "booking_date": b.get("booking_date"),
+                "from": b.get("from_center_name"), "to": b.get("to_center_name"),
+                "raw": data}
+
+    if courier == "DTDC":
+        sh = order.get("dtdc_shipment") or {}
+        account = DTDC_ACCOUNTS.get(sh.get("account") or "", {})
+        key = account.get("api_key") or next(
+            (a["api_key"] for a in DTDC_ACCOUNTS.values() if a["api_key"]), "")
+        if not key:
+            return {"ok": False, "message": "No DTDC API key configured"}
+        async with httpx.AsyncClient(timeout=25) as c:
+            r = await c.get(f"{DTDC_BASE_URL}{DTDC_PATH_TRACK}",
+                            params={"reference_number": docket},
+                            headers={"api-key": key})
+        if r.status_code != 200:
+            return {"ok": False, "courier": courier, "docket": docket,
+                    "message": f"DTDC returned HTTP {r.status_code}", "detail": r.text[:200]}
+        d = r.json()
+        events = d.get("events") or []
+        return {"ok": True, "courier": courier, "docket": docket,
+                "status": d.get("status") or "-",
+                "hub": d.get("hub_code"),
+                "last_event": (events[0] if events else None),
+                "events": events[:12], "raw_status": d.get("status")}
+
+    return {"ok": False, "message": "Order is not on DTDC or Anjani"}
 
 
 @api_router.get("/courier-expenses/fuel-surcharges")
@@ -5195,17 +5294,26 @@ async def courier_expenses(date_from: str = "", date_to: str = "",
     rows.sort(key=lambda r: (r["date"], r.get("order_number") or ""))
     summary = {}
     for r in rows:
-        s = summary.setdefault(r["courier"], {"shipments": 0, "weight_kg": 0.0, "base": 0.0,
-                                              "fuel": 0.0, "gst": 0.0, "total": 0.0})
+        s = summary.setdefault(r["courier"], {
+            "shipments": 0, "weight_kg": 0.0, "base": 0.0, "fuel": 0.0,
+            "base_plus_fuel": 0.0, "gst": 0.0, "total": 0.0,
+            "damaged_count": 0, "damaged_total": 0.0,
+        })
         s["shipments"] += 1
         s["weight_kg"] = round(s["weight_kg"] + r["weight_kg"], 3)
-        for k in ("base", "fuel", "gst", "total"):
-            s[k] = round(s[k] + r[k], 2)
+        for k in ("base", "fuel", "base_plus_fuel", "gst", "total"):
+            s[k] = round(s[k] + r.get(k, 0), 2)
+        if r.get("damaged"):
+            s["damaged_count"] += 1
+            s["damaged_total"] = round(s["damaged_total"] + r["total"], 2)
     grand = round(sum(v["total"] for v in summary.values()), 2)
+    damaged_total = round(sum(v["damaged_total"] for v in summary.values()), 2)
     return {
         "date_from": start, "date_to": end,
         "fuel_surcharges": periods,
         "rows": rows, "summary": summary, "grand_total": grand,
+        "damaged_total": damaged_total,
+        "damaged_count": sum(v["damaged_count"] for v in summary.values()),
         "count": len(rows), "unpriced": skipped,
     }
 

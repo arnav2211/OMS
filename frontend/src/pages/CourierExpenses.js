@@ -10,7 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, Fuel, IndianRupee, Package, Plus, Trash2, Download } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Loader2, RefreshCw, Fuel, IndianRupee, Package, Plus, Trash2, Download, AlertTriangle, Activity } from "lucide-react";
 
 const money = (n) => (n == null ? "—" : `₹${Number(n).toFixed(2)}`);
 const monthOptions = () => {
@@ -38,6 +39,13 @@ export default function CourierExpenses() {
   const [courier, setCourier] = useState("all");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  // DTDC invoices read as (freight + fuel) then GST, so that is the default view.
+  const [showBreakdown, setShowBreakdown] = useState(false);
+  const [statusFor, setStatusFor] = useState(null);
+  const [statusData, setStatusData] = useState(null);
+  const [damageFor, setDamageFor] = useState(null);
+  const [damageNote, setDamageNote] = useState("");
+  const [busy, setBusy] = useState({});
 
   // fuel surcharge editor
   const [showFuel, setShowFuel] = useState(false);
@@ -89,14 +97,38 @@ export default function CourierExpenses() {
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
   };
 
+  const viewStatus = async (row) => {
+    setStatusFor(row); setStatusData(null);
+    try {
+      const res = await api.get(`/courier-status/${row.order_id}`);
+      setStatusData(res.data);
+    } catch (err) {
+      setStatusData({ ok: false, message: err.response?.data?.detail || "Failed to fetch status" });
+    }
+  };
+
+  const toggleDamaged = async (row, damaged, note) => {
+    setBusy(p => ({ ...p, [row.order_id]: true }));
+    try {
+      await api.put(`/orders/${row.order_id}/damaged`, {
+        order_id: row.order_id, damaged, note: note || "",
+      });
+      toast.success(damaged ? "Marked as received damaged" : "Damage flag removed");
+      setDamageFor(null); setDamageNote("");
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to update");
+    } finally { setBusy(p => ({ ...p, [row.order_id]: false })); }
+  };
+
   const exportCsv = () => {
     if (!data?.rows?.length) return toast.error("Nothing to export");
     const head = ["Date", "Order", "Customer", "Docket", "Courier", "Service", "Zone", "Weight(kg)",
-                  "Boxes", "Base", "Fuel%", "Fuel", "GST", "Total"];
+                  "Boxes", "Base", "Fuel%", "Fuel", "Base+Fuel", "GST", "Total", "Damaged"];
     const lines = [head.join(",")].concat(data.rows.map(r => [
       r.date, r.order_number, `"${(r.customer_name || "").replace(/"/g, "'")}"`, r.docket_no || "", r.courier,
       r.service || "", r.zone || "", r.weight_kg, r.num_boxes,
-      r.base, r.fuel_percent, r.fuel, r.gst, r.total,
+      r.base, r.fuel_percent, r.fuel, r.base_plus_fuel, r.gst, r.total, r.damaged ? "YES" : "",
     ].join(",")));
     const blob = new Blob([lines.join("\n")], { type: "text/csv" });
     const a = document.createElement("a");
@@ -164,6 +196,13 @@ export default function CourierExpenses() {
               </div>
             </>
           )}
+          <div className="flex items-center gap-2 pb-2">
+            <Checkbox id="showBreakdown" checked={showBreakdown}
+              onCheckedChange={(v) => setShowBreakdown(!!v)} data-testid="breakdown-toggle" />
+            <Label htmlFor="showBreakdown" className="cursor-pointer text-sm whitespace-nowrap">
+              Show full breakdown
+            </Label>
+          </div>
           <div>
             <Label className="text-xs">Courier</Label>
             <Select value={courier} onValueChange={setCourier}>
@@ -208,6 +247,12 @@ export default function CourierExpenses() {
               {money(data?.grand_total || 0)}
             </p>
             <p className="text-xs text-muted-foreground">{data?.count || 0} shipment(s) in period</p>
+            {data?.damaged_count ? (
+              <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3" />
+                {data.damaged_count} damaged · {money(data.damaged_total)}
+              </p>
+            ) : null}
           </CardContent>
         </Card>
       </div>
@@ -231,15 +276,17 @@ export default function CourierExpenses() {
                   <TableHead className="whitespace-nowrap">Courier</TableHead>
                   <TableHead className="whitespace-nowrap">Service / Zone</TableHead>
                   <TableHead className="whitespace-nowrap text-right">Wt</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">Base</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">Fuel</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">GST</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">Total</TableHead>
+                  {showBreakdown && <TableHead className="whitespace-nowrap text-right">Base</TableHead>}
+                  {showBreakdown && <TableHead className="whitespace-nowrap text-right">Fuel</TableHead>}
+                  <TableHead className="whitespace-nowrap text-right">Base + Fuel</TableHead>
+                  {showBreakdown && <TableHead className="whitespace-nowrap text-right">GST</TableHead>}
+                  <TableHead className="whitespace-nowrap text-right">Total (incl. GST)</TableHead>
+                  <TableHead className="whitespace-nowrap">Status / Damage</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {(data?.rows || []).length === 0 && (
-                  <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-10">
+                  <TableRow><TableCell colSpan={showBreakdown ? 14 : 11} className="text-center text-muted-foreground py-10">
                     No courier shipments with a weight in this period.
                   </TableCell></TableRow>
                 )}
@@ -260,12 +307,37 @@ export default function CourierExpenses() {
                       )}
                     </TableCell>
                     <TableCell className="text-sm font-mono text-right whitespace-nowrap">{r.weight_kg}</TableCell>
-                    <TableCell className="text-sm font-mono text-right">{money(r.base)}</TableCell>
-                    <TableCell className="text-sm font-mono text-right">
-                      {r.courier === "DTDC" ? <>{money(r.fuel)}<span className="text-[10px] text-muted-foreground ml-1">{r.fuel_percent}%</span></> : "—"}
-                    </TableCell>
-                    <TableCell className="text-sm font-mono text-right">{r.courier === "DTDC" ? money(r.gst) : "—"}</TableCell>
+                    {showBreakdown && <TableCell className="text-sm font-mono text-right">{money(r.base)}</TableCell>}
+                    {showBreakdown && (
+                      <TableCell className="text-sm font-mono text-right">
+                        {r.courier === "DTDC" ? <>{money(r.fuel)}<span className="text-[10px] text-muted-foreground ml-1">{r.fuel_percent}%</span></> : "—"}
+                      </TableCell>
+                    )}
+                    <TableCell className="text-sm font-mono text-right">{money(r.base_plus_fuel)}</TableCell>
+                    {showBreakdown && <TableCell className="text-sm font-mono text-right">{r.courier === "DTDC" ? money(r.gst) : "—"}</TableCell>}
                     <TableCell className="text-sm font-mono text-right font-semibold">{money(r.total)}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        <Button variant="ghost" size="sm" className="h-7 text-xs px-2"
+                          onClick={() => viewStatus(r)} title="Live courier status" data-testid={`status-${r.order_id}`}>
+                          <Activity className="w-3 h-3" />
+                        </Button>
+                        {r.damaged ? (
+                          <Badge className="bg-red-100 text-red-800 text-[10px] cursor-pointer"
+                            title={r.damaged_note || "Received damaged"}
+                            onClick={() => toggleDamaged(r, false)} data-testid={`damaged-${r.order_id}`}>
+                            <AlertTriangle className="w-2.5 h-2.5 mr-0.5" /> Damaged
+                          </Badge>
+                        ) : (
+                          <Button variant="ghost" size="sm" className="h-7 text-xs px-2 text-muted-foreground"
+                            disabled={!!busy[r.order_id]}
+                            onClick={() => { setDamageFor(r); setDamageNote(""); }}
+                            data-testid={`mark-damaged-${r.order_id}`}>
+                            Mark damaged
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -273,6 +345,83 @@ export default function CourierExpenses() {
           )}
         </CardContent>
       </Card>
+
+      {/* Live courier status */}
+      <Dialog open={!!statusFor} onOpenChange={(v) => { if (!v) { setStatusFor(null); setStatusData(null); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Courier Status — {statusFor?.order_number}</DialogTitle></DialogHeader>
+          {!statusData ? (
+            <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin" /></div>
+          ) : !statusData.ok ? (
+            <p className="text-sm text-muted-foreground py-3">{statusData.message}</p>
+          ) : (
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between border-b pb-1">
+                <span className="text-muted-foreground">Courier</span><span>{statusData.courier}</span>
+              </div>
+              <div className="flex justify-between border-b pb-1">
+                <span className="text-muted-foreground">Docket</span>
+                <span className="font-mono">{statusData.docket}</span>
+              </div>
+              <div className="flex justify-between border-b pb-1">
+                <span className="text-muted-foreground">Status</span>
+                <span className="font-semibold">{statusData.status}</span>
+              </div>
+              {statusData.from && (
+                <div className="flex justify-between border-b pb-1">
+                  <span className="text-muted-foreground">Route</span>
+                  <span>{statusData.from} → {statusData.to}</span>
+                </div>
+              )}
+              {statusData.hub && (
+                <div className="flex justify-between border-b pb-1">
+                  <span className="text-muted-foreground">Hub</span><span>{statusData.hub}</span>
+                </div>
+              )}
+              {(statusData.events || []).length > 0 && (
+                <div className="pt-2">
+                  <p className="text-xs font-semibold mb-1">Recent events</p>
+                  <div className="space-y-1 max-h-44 overflow-y-auto">
+                    {statusData.events.map((e, i) => (
+                      <div key={i} className="text-xs border-l-2 border-primary/40 pl-2">
+                        <span className="font-medium">{e.customer_update || e.type}</span>
+                        {e.hub_name ? <span className="text-muted-foreground"> · {e.hub_name}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setStatusFor(null); setStatusData(null); }}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Mark damaged */}
+      <Dialog open={!!damageFor} onOpenChange={(v) => { if (!v) setDamageFor(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Mark as Received Damaged</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {damageFor?.order_number} · {damageFor?.customer_name} · docket {damageFor?.docket_no || "—"}
+          </p>
+          <div>
+            <Label className="text-xs">What was damaged? (optional)</Label>
+            <Input value={damageNote} onChange={e => setDamageNote(e.target.value)}
+              placeholder="e.g. box crushed, 2 bottles leaked" className="mt-1" data-testid="damage-note" />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            The shipment stays in the payable total; it is flagged so accounts can raise it with the courier.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDamageFor(null)}>Cancel</Button>
+            <Button onClick={() => toggleDamaged(damageFor, true, damageNote)} data-testid="confirm-damaged">
+              Mark Damaged
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Fuel surcharge periods */}
       <Dialog open={showFuel} onOpenChange={setShowFuel}>
