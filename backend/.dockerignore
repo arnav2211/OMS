@@ -1,0 +1,10 @@
+# uploads is bind-mounted at runtime, so it must not go into the image.
+# It is ~1.1 GB / 12k files and was adding minutes to every build.
+uploads/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+*.bak
+server.py.bak
+.env
