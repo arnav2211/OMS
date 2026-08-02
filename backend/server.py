@@ -6443,6 +6443,102 @@ class IndiaPostRateRequest(BaseModel):
     pod: Optional[bool] = False
 
 
+# India Post pushes tracking events here rather than us polling. It cannot
+# present a JWT, so the URL carries a secret and we pin the source address.
+INDIAPOST_WEBHOOK_TOKEN = os.environ.get("INDIAPOST_WEBHOOK_TOKEN", "")
+INDIAPOST_WEBHOOK_IPS = [ip.strip() for ip in
+                         os.environ.get("INDIAPOST_WEBHOOK_IPS", "").split(",") if ip.strip()]
+
+# Event codes that mean the article is physically moving, and those that end it.
+INDIAPOST_BOOKED_EVENTS = {"ITEM_BOOK"}
+INDIAPOST_MOVING_EVENTS = {"BAG_DISPATCH", "ITEM_DISPATCH", "BAG_OPEN",
+                           "ITEM_RECEIVE", "BEAT_DISPATCH", "ITEM_INVOICE", "ITEM_TOBO"}
+INDIAPOST_RETURN_EVENTS = {"ITEM_RETURN"}
+INDIAPOST_DELIVERED_EVENTS = {"ITEM_DELIVERY"}
+
+
+def _indiapost_event_time(payload: dict) -> str:
+    """'2025-11-09' + '08:37:52' -> ISO. Falls back to now on anything odd."""
+    d = str(payload.get("event_date") or "").strip()
+    t = str(payload.get("event_time") or "00:00:00").strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%d%m%Y %H:%M:%S", "%d-%m-%Y %H:%M:%S"):
+        try:
+            return datetime.strptime(f"{d} {t}", fmt).replace(
+                tzinfo=timezone.utc).isoformat()
+        except ValueError:
+            continue
+    return datetime.now(timezone.utc).isoformat()
+
+
+@api_router.post("/indiapost/webhook/{token}")
+async def indiapost_webhook(token: str, request: Request):
+    """Receives India Post article events. Deliberately unauthenticated except
+    for the URL secret and an optional source-IP pin — the sender is their
+    server, which has no OMS credentials."""
+    if not INDIAPOST_WEBHOOK_TOKEN or token != INDIAPOST_WEBHOOK_TOKEN:
+        raise HTTPException(status_code=404, detail="Not found")
+    if INDIAPOST_WEBHOOK_IPS:
+        src = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() \
+              or (request.client.host if request.client else "")
+        if src not in INDIAPOST_WEBHOOK_IPS:
+            logging.warning(f"India Post webhook from unexpected source {src}")
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body must be JSON")
+    events = payload if isinstance(payload, list) else [payload]
+
+    accepted = 0
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        article = str(ev.get("article_number") or "").strip().upper()
+        if not article:
+            continue
+        code = str(ev.get("event_code") or "").strip().upper()
+        at = _indiapost_event_time(ev)
+
+        # Idempotent: India Post may resend, and duplicates must not pile up.
+        await db.indiapost_events.update_one(
+            {"article_number": article, "event_code": code, "event_at": at},
+            {"$set": {"article_number": article, "event_code": code, "event_at": at,
+                      "description": ev.get("event_description"),
+                      "office": ev.get("event_office_name"),
+                      "raw": ev, "received_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True)
+        accepted += 1
+
+        order = await db.orders.find_one({"indiapost_shipment.barcode": article}, {"_id": 0})
+        if not order:
+            continue
+
+        update = {
+            "indiapost_shipment.last_event": code,
+            "indiapost_shipment.last_event_desc": ev.get("event_description"),
+            "indiapost_shipment.last_event_at": at,
+            "indiapost_shipment.last_office": ev.get("event_office_name"),
+        }
+        if code in INDIAPOST_DELIVERED_EVENTS:
+            update["indiapost_shipment.delivered_at"] = at
+        if code in INDIAPOST_RETURN_EVENTS:
+            # Same flag the courier-expenses RTO control sets, so returns show
+            # up there without anyone having to notice and tick it by hand.
+            update["rto"] = True
+            update["issue_note"] = (order.get("issue_note")
+                                    or f"Returned to sender per India Post on {at[:10]}")
+            update["issue_at"] = at
+            update["issue_by"] = "India Post"
+        if (code in INDIAPOST_BOOKED_EVENTS or code in INDIAPOST_MOVING_EVENTS) \
+                and order.get("status") not in ("dispatched", "cancelled"):
+            update["status"] = "dispatched"
+            update["dispatched_at"] = at
+        await db.orders.update_one({"id": order["id"]}, {"$set": update})
+
+    return {"ok": True, "accepted": accepted}
+
+
 class IndiaPostCardRequest(BaseModel):
     pincodes: Optional[List[str]] = None
     weights_g: Optional[List[int]] = None
