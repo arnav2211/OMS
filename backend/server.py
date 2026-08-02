@@ -4442,7 +4442,9 @@ async def dtdc_check_pincode(pincode: str):
 #   Carrier risk ticked                -> RL1387, same service type, risk ON
 import httpx
 
-DTDC_BASE_URL = os.environ.get("DTDC_BASE_URL", "https://app.shipsy.in").rstrip("/")
+# NOTE: the API playground shows "API Server https://app.shipsy.in", but that
+# host rejects DTDC customer keys (401). The live DTDC tenant is dtdcapi.shipsy.io.
+DTDC_BASE_URL = os.environ.get("DTDC_BASE_URL", "https://dtdcapi.shipsy.io").rstrip("/")
 DTDC_PATH_BOOK = "/api/customer/integration/consignment/upload/softdata/v2"
 DTDC_PATH_TRACK = "/api/customer/integration/consignment/track"
 DTDC_PATH_LABEL = "/api/customer/integration/consignment/shippinglabel/stream"
@@ -4512,8 +4514,10 @@ def _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phones)
         "load_type": "NON-DOCUMENT",
         "description": "Aroma products",
         "customer_code": account["customer_code"],
-        "reference_number": order.get("order_number") or order["id"][:20],
-        "customer_reference_number": order.get("order_number") or "",
+        # reference_number is DTDC's consignment number and must come from the
+        # D/M series that matches the service type — omitting it makes DTDC
+        # allocate the correct one. Our order number goes in the customer ref.
+        "customer_reference_number": order.get("order_number") or order["id"][:20],
         "service_type_id": service,
         "is_risk_surcharge_applicable": bool(risk),
         "dimension_unit": "cm",
@@ -4675,7 +4679,7 @@ async def dtdc_book(req: DtdcBookRequest, user=Depends(get_current_user)):
         logging.error(f"DTDC booking failed ({p['account_key']}): {r.status_code} {r.text[:400]}")
         raise HTTPException(status_code=400, detail=f"DTDC booking failed: {str(data)[:300]}")
 
-    # DTDC echoes the consignment/AWB number; shape varies, so look in likely spots.
+    # DTDC returns the consignment number it allocated, e.g. {"reference_number": "M1001198344"}
     payload = data.get("data") if isinstance(data.get("data"), dict) else data
     awb = ""
     for key in ("reference_number", "consignment_number", "cn_number", "awb", "awb_number"):
@@ -4687,7 +4691,12 @@ async def dtdc_book(req: DtdcBookRequest, user=Depends(get_current_user)):
         first = data["data"][0]
         if isinstance(first, dict):
             awb = str(first.get("reference_number") or first.get("consignment_number") or "").strip()
-    reference = p["payload"]["reference_number"]
+    if not awb:
+        logging.error(f"DTDC booked but no consignment number in response: {str(data)[:400]}")
+        raise HTTPException(status_code=400, detail="DTDC accepted the booking but returned no consignment number")
+    reference = awb
+    piece_refs = [str(x.get("reference_number") or "") for x in (payload.get("pieces") or [])
+                  if isinstance(x, dict)]
 
     shipment = {
         "account": p["account_key"],
@@ -4697,6 +4706,8 @@ async def dtdc_book(req: DtdcBookRequest, user=Depends(get_current_user)):
         "series": p["quote"]["series"],
         "reference_number": reference,
         "awb": awb,
+        "piece_refs": piece_refs,
+        "customer_reference": p["payload"]["customer_reference_number"],
         "est_charge": p["quote"]["final_charge"],
         "weight_kg": p["weight"],
         "num_boxes": p["boxes"],
