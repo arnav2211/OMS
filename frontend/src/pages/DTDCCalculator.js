@@ -7,7 +7,9 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Search, Package, Truck, MapPin, Scale, IndianRupee, ArrowRight, Loader2, ShieldCheck } from "lucide-react";
+import { Search, Package, Truck, MapPin, Scale, IndianRupee, ArrowRight, Loader2, ShieldCheck, ClipboardList } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import DTDCBookPanel from "@/components/DTDCBookPanel";
 import {
   calcCarrierRisk,
   formatCarrierRisk,
@@ -15,7 +17,12 @@ import {
   CARRIER_RISK_MIN_AMOUNT,
 } from "@/lib/carrierRisk";
 
+// Booking is for everyone except telecallers; mirrors the backend role gate.
+const DTDC_BOOKING_ROLES = ["admin", "dispatch", "packaging", "accounts"];
+
 export default function DTDCCalculator() {
+  const { user } = useAuth();
+  const canBook = DTDC_BOOKING_ROLES.includes(user?.role);
   const [pincode, setPincode] = useState("");
   const [kg, setKg] = useState("");
   const [grams, setGrams] = useState("");
@@ -59,14 +66,25 @@ export default function DTDCCalculator() {
       </div>
 
       <Tabs defaultValue="shipping" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-2">
+        <TabsList className={`grid w-full ${canBook ? "grid-cols-3" : "grid-cols-2"}`}>
           <TabsTrigger value="shipping" data-testid="dtdc-tab-shipping">
             <Truck className="w-4 h-4 mr-2" /> Shipping Rate
           </TabsTrigger>
           <TabsTrigger value="carrier-risk" data-testid="dtdc-tab-carrier-risk">
             <ShieldCheck className="w-4 h-4 mr-2" /> Carrier Risk
           </TabsTrigger>
+          {canBook && (
+            <TabsTrigger value="book" data-testid="dtdc-tab-book">
+              <ClipboardList className="w-4 h-4 mr-2" /> Book Orders
+            </TabsTrigger>
+          )}
         </TabsList>
+
+        {canBook && (
+          <TabsContent value="book" className="mt-0">
+            <DTDCBookPanel />
+          </TabsContent>
+        )}
 
         <TabsContent value="shipping" className="space-y-6 mt-0">
 

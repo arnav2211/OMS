@@ -7,6 +7,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import asyncio
+import json
 import logging
 import re
 import uuid
@@ -4496,8 +4497,11 @@ def _dtdc_party_origin() -> dict:
     }
 
 
-def _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phone) -> dict:
+def _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phones) -> dict:
     sa = order.get("shipping_address") or {}
+    line1, line2 = _address_lines(sa)
+    phone = phones[0] if phones else ""
+    alt_phone = phones[1] if len(phones) > 1 else ""
     declared = _declared_value(order)
     created = (order.get("created_at") or datetime.now(timezone.utc).isoformat())[:10]
     per_piece = round(weight / max(1, boxes), 3)
@@ -4526,8 +4530,9 @@ def _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phone) 
         "destination_details": {
             "name": sa.get("address_name") or order.get("customer_name") or "Customer",
             "phone": phone,
-            "address_line_1": (sa.get("address_line") or "")[:120],
-            "address_line_2": "",
+            "alternate_phone": alt_phone,
+            "address_line_1": line1,
+            "address_line_2": line2,
             "pincode": sa.get("pincode") or "",
             "city": sa.get("city") or "",
             "district": sa.get("city") or "",
@@ -4566,13 +4571,17 @@ async def _dtdc_prepare(order: dict) -> dict:
     account = DTDC_ACCOUNTS[acct_key]
     if not account["api_key"]:
         raise HTTPException(status_code=400, detail=f"DTDC account {acct_key} has no API key configured")
-    phone = await _order_recipient_phone(order)
-    if not phone:
+    phones = await _order_phones(order)
+    if not phones:
         raise HTTPException(status_code=400, detail="Customer has no valid phone number — add one before booking")
+    sa_full = order.get("shipping_address") or {}
+    missing = [f for f in ("address_line", "city", "state", "pincode") if not str(sa_full.get(f) or "").strip()]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Shipping address incomplete — missing: {', '.join(missing)}")
     return {
         "account_key": acct_key, "account": account, "service": service, "risk": risk,
         "quote": quote, "weight": weight, "boxes": boxes,
-        "payload": _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phone),
+        "payload": _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phones),
     }
 
 
@@ -4727,6 +4736,181 @@ async def dtdc_label(order_id: str, token: str = "", user=None):
         io.BytesIO(r.content), media_type=media,
         headers={"Content-Disposition": f"inline; filename=dtdc-label-{ref}.{ext}"},
     )
+
+
+async def _dtdc_fetch_label_bytes(shipment: dict):
+    """(bytes, content_type) for a booked consignment's label, or (None, '')."""
+    ref = shipment.get("awb") or shipment.get("reference_number")
+    account = DTDC_ACCOUNTS.get(shipment.get("account") or "", {})
+    if not ref or not account.get("api_key"):
+        return None, ""
+    try:
+        async with httpx.AsyncClient(timeout=45) as c:
+            r = await c.get(f"{DTDC_BASE_URL}{DTDC_PATH_LABEL}",
+                            params={"reference_number": ref},
+                            headers={"api-key": account["api_key"]})
+        if r.status_code == 200 and r.content:
+            return r.content, r.headers.get("content-type", "application/pdf").split(";")[0]
+    except Exception as e:
+        logging.error(f"DTDC label fetch failed for {ref}: {e}")
+    return None, ""
+
+
+async def _dtdc_save_label_as_slip(shipment: dict) -> str:
+    raw, media = await _dtdc_fetch_label_bytes(shipment)
+    if not raw:
+        return ""
+    ext = "pdf" if "pdf" in media else ("png" if "png" in media else "jpg")
+    filename = f"{uuid.uuid4()}.{ext}"
+    async with aiofiles.open(UPLOAD_DIR / filename, "wb") as f:
+        await f.write(raw)
+    return f"/api/uploads/{filename}"
+
+
+async def _dtdc_mark_dispatched(order: dict, when: str, by: str, docket: str = "", slip_url: str = "") -> dict:
+    """Shared dispatch write for both the manual button and the pickup poller."""
+    shipment = order.get("dtdc_shipment") or {}
+    dispatch = order.get("dispatch") or {}
+    slips = list(dispatch.get("dispatch_slip_images") or [])
+    if slip_url and slip_url not in slips:
+        slips.append(slip_url)
+    if not slips:
+        auto = await _dtdc_save_label_as_slip(shipment)
+        if auto:
+            slips.append(auto)
+    lr = docket or shipment.get("awb") or shipment.get("reference_number") or ""
+    dispatch.update({
+        "courier_name": "DTDC",
+        "transporter_name": "",
+        "lr_no": lr,
+        "dispatch_slip_images": slips,
+        "dispatch_type": "courier",
+        "porter_link": "",
+        "dispatched_by": by,
+        "dispatched_at": when,
+    })
+    await db.orders.update_one({"id": order["id"]}, {"$set": {
+        "dispatch": dispatch,
+        "status": "dispatched",
+        "courier_name": "DTDC",
+        "dtdc_shipment.docket_no": lr,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    return {"lr_no": lr, "slips": slips}
+
+
+class DtdcDispatchRequest(BaseModel):
+    order_id: str
+    docket_no: Optional[str] = ""
+    slip_image_url: Optional[str] = ""
+
+
+@api_router.post("/dtdc/dispatch")
+async def dtdc_manual_dispatch(req: DtdcDispatchRequest, user=Depends(get_current_user)):
+    """Dispatch now, without waiting for DTDC to report pickup."""
+    if user["role"] not in ["admin", "dispatch", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("status") == "dispatched":
+        raise HTTPException(status_code=400, detail="Order is already dispatched")
+    shipment = order.get("dtdc_shipment") or {}
+    docket = (req.docket_no or "").strip() or shipment.get("awb") or shipment.get("reference_number") or ""
+    if not docket:
+        raise HTTPException(status_code=400, detail="Docket / consignment number is required")
+    res = await _dtdc_mark_dispatched(
+        order, datetime.now(timezone.utc).isoformat(), user["name"],
+        docket=docket, slip_url=(req.slip_image_url or "").strip(),
+    )
+    return {"ok": True, **res}
+
+
+# DTDC pickup detection — statuses that mean the parcel has left us.
+DTDC_PICKED_HINTS = ("PICKED", "PICKUP", "IN TRANSIT", "INTRANSIT", "DISPATCH",
+                     "SHIPPED", "OUT FOR DELIVERY", "DELIVERED", "BOOKED")
+
+
+def _dtdc_pickup_time(tracking: dict):
+    """Timestamp if DTDC tracking shows the parcel picked up, else None."""
+    if not tracking:
+        return None
+    blob = json.dumps(tracking).upper() if isinstance(tracking, (dict, list)) else str(tracking).upper()
+    if not any(h in blob for h in DTDC_PICKED_HINTS):
+        return None
+    # Try to surface a real event time; fall back to now.
+    def walk(node):
+        if isinstance(node, dict):
+            status = str(node.get("status") or node.get("action") or node.get("activity") or "").upper()
+            when = node.get("timestamp") or node.get("date") or node.get("event_time") or node.get("activity_date")
+            if status and any(h in status for h in DTDC_PICKED_HINTS) and when:
+                return str(when)
+            for v in node.values():
+                got = walk(v)
+                if got:
+                    return got
+        elif isinstance(node, list):
+            for v in node:
+                got = walk(v)
+                if got:
+                    return got
+        return None
+    return walk(tracking) or datetime.now(timezone.utc).isoformat()
+
+
+async def _dtdc_sync_all() -> list:
+    if not _dtdc_configured():
+        return []
+    pending = await db.orders.find({
+        "dtdc_shipment.reference_number": {"$exists": True, "$ne": ""},
+        "status": {"$nin": ["dispatched", "cancelled"]},
+    }, {"_id": 0}).to_list(200)
+    notes = []
+    for o in pending:
+        try:
+            sh = o.get("dtdc_shipment") or {}
+            ref = sh.get("awb") or sh.get("reference_number")
+            account = DTDC_ACCOUNTS.get(sh.get("account") or "", {})
+            if not ref or not account.get("api_key"):
+                continue
+            async with httpx.AsyncClient(timeout=25) as c:
+                r = await c.get(f"{DTDC_BASE_URL}{DTDC_PATH_TRACK}",
+                                params={"reference_number": ref},
+                                headers={"api-key": account["api_key"]})
+            if r.status_code != 200:
+                continue
+            picked = _dtdc_pickup_time(r.json())
+            if not picked:
+                continue
+            await _dtdc_mark_dispatched(o, picked, "DTDC (auto)")
+            notes.append(f"{o.get('order_number')} dispatched (picked up {picked})")
+        except Exception as e:
+            logging.error(f"DTDC sync failed for {o.get('order_number')}: {e}")
+    return notes
+
+
+@api_router.post("/dtdc/sync-tracking")
+async def dtdc_sync_tracking(user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "dispatch", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    notes = await _dtdc_sync_all()
+    return {"ok": True, "dispatched": notes, "count": len(notes)}
+
+
+async def _dtdc_sync_loop():
+    await asyncio.sleep(45)
+    while True:
+        try:
+            await _dtdc_sync_all()
+        except Exception as e:
+            logging.error(f"DTDC sync loop error: {e}")
+        await asyncio.sleep(AMAZON_SYNC_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def _start_dtdc_sync():
+    if _dtdc_configured():
+        asyncio.create_task(_dtdc_sync_loop())
 
 
 @api_router.get("/dtdc/track/{order_id}")
@@ -4950,24 +5134,45 @@ def _declared_value(order: dict) -> float:
     """
     total = float(order.get("grand_total") or 0)
     if order.get("gst_applicable"):
-        return round(total, 2)
-    return round(total * 1.18, 2)
+        return round(total, 2)          # GST invoices already include tax
+    return float(math.ceil(total * 1.18))   # e.g. 101 -> 119.18 -> 120
 
 
-async def _order_recipient_phone(order: dict) -> str:
-    """The customer's real contact number for the shipping label."""
+async def _order_phones(order: dict) -> list:
+    """All valid contact numbers for the customer, primary first."""
+    out = []
     for p in (order.get("customer_phone") or []):
         v = _to_local_phone(p)
-        if v:
-            return v
+        if v and v not in out:
+            out.append(v)
     cid = order.get("customer_id")
     if cid:
         cust = await db.customers.find_one({"id": cid}, {"_id": 0, "phone_numbers": 1})
         for p in ((cust or {}).get("phone_numbers") or []):
             v = _to_local_phone(p)
-            if v:
-                return v
-    return ""
+            if v and v not in out:
+                out.append(v)
+    return out
+
+
+async def _order_recipient_phone(order: dict) -> str:
+    """The customer's real contact number for the shipping label."""
+    phones = await _order_phones(order)
+    return phones[0] if phones else ""
+
+
+def _address_lines(sa: dict) -> tuple:
+    """(line1, line2) for a courier label.
+
+    The OMS address has no address_line2; users put extra address text (flat /
+    building / landmark) into `label`, so it must be carried through or parcels
+    go out with an incomplete address.
+    """
+    line1 = str(sa.get("address_line") or "").strip()
+    line2 = str(sa.get("label") or "").strip()
+    if not line1:
+        line1, line2 = line2, ""
+    return line1[:120], line2[:120]
 
 
 def _amazon_ship_from() -> dict:
