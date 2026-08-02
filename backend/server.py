@@ -4550,7 +4550,7 @@ def _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phones)
     }
 
 
-async def _dtdc_prepare(order: dict) -> dict:
+async def _dtdc_prepare(order: dict, force_account: Optional[str] = None) -> dict:
     """Resolve weight, series, account and payload for an order — books nothing."""
     pkg = order.get("packaging") or {}
     raw_weight = str(pkg.get("weight_kg", "")).strip()
@@ -4568,6 +4568,11 @@ async def _dtdc_prepare(order: dict) -> dict:
     if not quote:
         raise HTTPException(status_code=400, detail="This pincode is not serviceable by DTDC")
     acct_key, service, risk = _dtdc_route(order, quote["series"])
+    if force_account:
+        if force_account not in DTDC_ACCOUNTS:
+            raise HTTPException(status_code=400, detail=f"Unknown DTDC account {force_account}")
+        acct_key = force_account
+        risk = force_account == "RL1387"
     account = DTDC_ACCOUNTS[acct_key]
     if not account["api_key"]:
         raise HTTPException(status_code=400, detail=f"DTDC account {acct_key} has no API key configured")
@@ -4624,6 +4629,9 @@ async def dtdc_bookable_orders(user=Depends(get_current_user)):
 
 class DtdcBookRequest(BaseModel):
     order_id: str
+    # Force a specific account instead of the automatic routing (admin testing).
+    account: Optional[str] = None
+    allow_rebook: Optional[bool] = False
 
 
 @api_router.post("/dtdc/preview")
@@ -4652,9 +4660,9 @@ async def dtdc_book(req: DtdcBookRequest, user=Depends(get_current_user)):
     order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    if (order.get("dtdc_shipment") or {}).get("reference_number"):
+    if (order.get("dtdc_shipment") or {}).get("reference_number") and not req.allow_rebook:
         raise HTTPException(status_code=400, detail="This order is already booked with DTDC")
-    p = await _dtdc_prepare(order)
+    p = await _dtdc_prepare(order, force_account=req.account)
     async with httpx.AsyncClient(timeout=45) as c:
         r = await c.post(f"{DTDC_BASE_URL}{DTDC_PATH_BOOK}",
                          headers={"api-key": p["account"]["api_key"], "content-type": "application/json"},
@@ -5161,15 +5169,26 @@ async def _order_recipient_phone(order: dict) -> str:
     return phones[0] if phones else ""
 
 
+# Words that mean `label` is a category name ("Billing address", "Home") rather
+# than real address text — those must not be printed on the shipping label.
+_ADDRESS_LABEL_WORDS = ("billing", "shipping", "home", "office", "work", "branch",
+                        "warehouse", "godown", "factory", "default", "primary",
+                        "secondary", "adress", "address")
+
+
 def _address_lines(sa: dict) -> tuple:
     """(line1, line2) for a courier label.
 
-    The OMS address has no address_line2; users put extra address text (flat /
-    building / landmark) into `label`, so it must be carried through or parcels
-    go out with an incomplete address.
+    The OMS address has no address_line2. Users sometimes put real address text
+    (flat / building / landmark) into `label` — that must be carried through or
+    the parcel ships to an incomplete address — and sometimes just a category
+    like "Billing address", which must not be printed.
     """
     line1 = str(sa.get("address_line") or "").strip()
-    line2 = str(sa.get("label") or "").strip()
+    label = str(sa.get("label") or "").strip()
+    normalised = re.sub(r"[^a-z ]", "", label.lower()).strip()
+    is_category = len(normalised) <= 25 and any(w in normalised for w in _ADDRESS_LABEL_WORDS)
+    line2 = "" if is_category else label
     if not line1:
         line1, line2 = line2, ""
     return line1[:120], line2[:120]
