@@ -4455,18 +4455,25 @@ DTDC_PATH_CANCEL = "/api/customer/integration/consignment/cancel"
 DTDC_SERVICE_GROUND = os.environ.get("DTDC_SERVICE_GROUND", "GROUND EXPRESS")
 DTDC_SERVICE_STD = os.environ.get("DTDC_SERVICE_STD", "STD EXP-A")
 
+# Pickup hub. RL1386/RL1423 auto-allocate to R11 (NAGPUR PANDE LAYOUT BRANCH);
+# RL1387 has no auto-allocation mapping, so the hub must be sent explicitly.
+DTDC_DEFAULT_HUB = os.environ.get("DTDC_HUB_CODE", "R11")
+
 DTDC_ACCOUNTS = {
     "RL1386": {
         "api_key": os.environ.get("DTDC_API_KEY_RL1386", ""),
         "customer_code": os.environ.get("DTDC_CUSTOMER_CODE_RL1386", "RL1386"),
+        "hub_code": os.environ.get("DTDC_HUB_RL1386", ""),
     },
     "RL1387": {
         "api_key": os.environ.get("DTDC_API_KEY_RL1387", ""),
         "customer_code": os.environ.get("DTDC_CUSTOMER_CODE_RL1387", "RL1387"),
+        "hub_code": os.environ.get("DTDC_HUB_RL1387", DTDC_DEFAULT_HUB),
     },
     "RL1423": {
         "api_key": os.environ.get("DTDC_API_KEY_RL1423", ""),
         "customer_code": os.environ.get("DTDC_CUSTOMER_CODE_RL1423", "RL1423"),
+        "hub_code": os.environ.get("DTDC_HUB_RL1423", ""),
     },
 }
 
@@ -4507,7 +4514,12 @@ def _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phones)
     declared = _declared_value(order)
     created = (order.get("created_at") or datetime.now(timezone.utc).isoformat())[:10]
     per_piece = round(weight / max(1, boxes), 3)
-    return {
+    origin = _dtdc_party_origin()
+    hub = account.get("hub_code") or ""
+    if hub:
+        # RL1387 cannot auto-allocate a pickup hub; it needs both of these set.
+        origin["address_hub_code"] = hub
+    payload = {
         "action_type": "single_pickup",
         "consignment_type": "forward",
         "movement_type": "forward",
@@ -4530,7 +4542,7 @@ def _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phones)
         "invoice_number": order.get("order_number") or "",
         "invoice_date": created,
         "tax_details": [{"sender_gstin": COMPANY["gstin"]}],
-        "origin_details": _dtdc_party_origin(),
+        "origin_details": origin,
         "destination_details": {
             "name": sa.get("address_name") or order.get("customer_name") or "Customer",
             "phone": phone,
@@ -4552,6 +4564,9 @@ def _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phones)
             "dimension_unit": "cm",
         } for _ in range(max(1, boxes))],
     }
+    if hub:
+        payload["hub_code"] = hub
+    return payload
 
 
 async def _dtdc_prepare(order: dict, force_account: Optional[str] = None) -> dict:
@@ -4749,12 +4764,27 @@ async def dtdc_label(order_id: str, token: str = "", user=None):
                         headers={"api-key": account["api_key"]})
     if r.status_code != 200:
         raise HTTPException(status_code=400, detail=f"DTDC label failed: {r.text[:300]}")
-    media = r.headers.get("content-type", "application/pdf").split(";")[0]
-    ext = "pdf" if "pdf" in media else ("png" if "png" in media else "bin")
+    media, ext = _sniff_media(r.content, r.headers.get("content-type", ""))
     return StreamingResponse(
         io.BytesIO(r.content), media_type=media,
         headers={"Content-Disposition": f"inline; filename=dtdc-label-{ref}.{ext}"},
     )
+
+
+def _sniff_media(raw: bytes, header_value: str = "") -> tuple:
+    """(media_type, extension). DTDC returns an empty content-type, so trust the
+    file signature over the header."""
+    if raw[:4] == b"%PDF":
+        return "application/pdf", "pdf"
+    if raw[:4] == b"\x89PNG":
+        return "image/png", "png"
+    if raw[:3] == b"\xff\xd8\xff":
+        return "image/jpeg", "jpg"
+    header = (header_value or "").split(";")[0].strip()
+    if header:
+        ext = "pdf" if "pdf" in header else ("png" if "png" in header else "bin")
+        return header, ext
+    return "application/pdf", "pdf"
 
 
 async def _dtdc_fetch_label_bytes(shipment: dict):
@@ -4769,17 +4799,18 @@ async def _dtdc_fetch_label_bytes(shipment: dict):
                             params={"reference_number": ref},
                             headers={"api-key": account["api_key"]})
         if r.status_code == 200 and r.content:
-            return r.content, r.headers.get("content-type", "application/pdf").split(";")[0]
+            media, _ext = _sniff_media(r.content, r.headers.get("content-type", ""))
+            return r.content, media
     except Exception as e:
         logging.error(f"DTDC label fetch failed for {ref}: {e}")
     return None, ""
 
 
 async def _dtdc_save_label_as_slip(shipment: dict) -> str:
-    raw, media = await _dtdc_fetch_label_bytes(shipment)
+    raw, _media = await _dtdc_fetch_label_bytes(shipment)
     if not raw:
         return ""
-    ext = "pdf" if "pdf" in media else ("png" if "png" in media else "jpg")
+    _m, ext = _sniff_media(raw)
     filename = f"{uuid.uuid4()}.{ext}"
     async with aiofiles.open(UPLOAD_DIR / filename, "wb") as f:
         await f.write(raw)
