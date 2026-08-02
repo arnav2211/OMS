@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, RefreshCw, Fuel, IndianRupee, Package, Plus, Trash2, Download, AlertTriangle } from "lucide-react";
+import { Loader2, RefreshCw, Fuel, IndianRupee, Package, Plus, Trash2, Download, AlertTriangle, RotateCcw } from "lucide-react";
 
 const money = (n) => (n == null ? "—" : `₹${Number(n).toFixed(2)}`);
 const monthOptions = () => {
@@ -44,8 +44,10 @@ export default function CourierExpenses() {
   const [loading, setLoading] = useState(true);
   // DTDC invoices read as (freight + fuel) then GST, so that is the default view.
   const [showBreakdown, setShowBreakdown] = useState(false);
-  const [damageFor, setDamageFor] = useState(null);
-  const [damageNote, setDamageNote] = useState("");
+  const [flagFor, setFlagFor] = useState(null);
+  const [flagDamaged, setFlagDamaged] = useState(false);
+  const [flagRto, setFlagRto] = useState(false);
+  const [flagNote, setFlagNote] = useState("");
   const [busy, setBusy] = useState({});
 
   // fuel surcharge editor
@@ -98,28 +100,37 @@ export default function CourierExpenses() {
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
   };
 
-  const toggleDamaged = async (row, damaged, note) => {
-    setBusy(p => ({ ...p, [row.order_id]: true }));
+  const openFlags = (row) => {
+    setFlagFor(row);
+    setFlagDamaged(!!row.damaged);
+    setFlagRto(!!row.rto);
+    setFlagNote(row.issue_note || "");
+  };
+
+  const saveFlags = async () => {
+    if (!flagFor) return;
+    setBusy(p => ({ ...p, [flagFor.order_id]: true }));
     try {
-      await api.put(`/orders/${row.order_id}/damaged`, {
-        order_id: row.order_id, damaged, note: note || "",
+      await api.put(`/orders/${flagFor.order_id}/flags`, {
+        order_id: flagFor.order_id, damaged: flagDamaged, rto: flagRto, note: flagNote,
       });
-      toast.success(damaged ? "Marked as received damaged" : "Damage flag removed");
-      setDamageFor(null); setDamageNote("");
+      const on = [flagDamaged && "Damaged", flagRto && "RTO"].filter(Boolean);
+      toast.success(on.length ? `Flagged: ${on.join(" + ")}` : "Flags cleared");
+      setFlagFor(null);
       load();
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to update");
-    } finally { setBusy(p => ({ ...p, [row.order_id]: false })); }
+    } finally { setBusy(p => ({ ...p, [flagFor.order_id]: false })); }
   };
 
   const exportCsv = () => {
     if (!data?.rows?.length) return toast.error("Nothing to export");
     const head = ["Date", "Order", "Customer", "Docket", "Courier", "Service", "Zone", "Weight(kg)",
-                  "Boxes", "Base", "Fuel%", "Fuel", "Base+Fuel", "GST", "Total", "Damaged"];
+                  "Boxes", "Base", "Fuel%", "Fuel", "Base+Fuel", "GST", "Total", "Damaged", "RTO"];
     const lines = [head.join(",")].concat(data.rows.map(r => [
       r.date, r.order_number, `"${(r.customer_name || "").replace(/"/g, "'")}"`, r.docket_no || "", r.courier,
       r.service || "", r.zone || "", r.weight_kg, r.num_boxes,
-      r.base, r.fuel_percent, r.fuel, r.base_plus_fuel, r.gst, r.total, r.damaged ? "YES" : "",
+      r.base, r.fuel_percent, r.fuel, r.base_plus_fuel, r.gst, r.total, r.damaged ? "YES" : "", r.rto ? "YES" : "",
     ].join(",")));
     const blob = new Blob([lines.join("\n")], { type: "text/csv" });
     const a = document.createElement("a");
@@ -244,6 +255,12 @@ export default function CourierExpenses() {
                 {data.damaged_count} damaged · {money(data.damaged_total)}
               </p>
             ) : null}
+            {data?.rto_count ? (
+              <p className="text-xs text-amber-600 flex items-center gap-1">
+                <RotateCcw className="w-3 h-3" />
+                {data.rto_count} RTO · {money(data.rto_total)}
+              </p>
+            ) : null}
           </CardContent>
         </Card>
       </div>
@@ -272,7 +289,7 @@ export default function CourierExpenses() {
                   <TableHead className="whitespace-nowrap text-right">Base + Fuel</TableHead>
                   {showBreakdown && <TableHead className="whitespace-nowrap text-right">GST</TableHead>}
                   <TableHead className="whitespace-nowrap text-right">Total (incl. GST)</TableHead>
-                  <TableHead className="whitespace-nowrap">Status / Damage</TableHead>
+                  <TableHead className="whitespace-nowrap">Status / Flags</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -319,18 +336,25 @@ export default function CourierExpenses() {
                           <CourierStatusDialog orderId={r.order_id} orderNumber={r.order_number}
                             courier={r.courier} docket={r.docket_no} />
                         )}
-                        {r.damaged ? (
-                          <Badge className="bg-red-100 text-red-800 text-[10px] cursor-pointer"
-                            title={r.damaged_note || "Received damaged"}
-                            onClick={() => toggleDamaged(r, false)} data-testid={`damaged-${r.order_id}`}>
-                            <AlertTriangle className="w-2.5 h-2.5 mr-0.5" /> Damaged
-                          </Badge>
+                        {(r.damaged || r.rto) ? (
+                          <button onClick={() => openFlags(r)} className="flex flex-wrap gap-1"
+                            title={r.issue_note || "Edit flags"} data-testid={`flags-${r.order_id}`}>
+                            {r.damaged && (
+                              <Badge className="bg-red-100 text-red-800 text-[10px]">
+                                <AlertTriangle className="w-2.5 h-2.5 mr-0.5" /> Damaged
+                              </Badge>
+                            )}
+                            {r.rto && (
+                              <Badge className="bg-amber-100 text-amber-800 text-[10px]">
+                                <RotateCcw className="w-2.5 h-2.5 mr-0.5" /> RTO
+                              </Badge>
+                            )}
+                          </button>
                         ) : (
                           <Button variant="ghost" size="sm" className="h-7 text-xs px-2 text-muted-foreground"
-                            disabled={!!busy[r.order_id]}
-                            onClick={() => { setDamageFor(r); setDamageNote(""); }}
-                            data-testid={`mark-damaged-${r.order_id}`}>
-                            Mark damaged
+                            disabled={!!busy[r.order_id]} onClick={() => openFlags(r)}
+                            data-testid={`flag-${r.order_id}`}>
+                            Flag
                           </Button>
                         )}
                       </div>
@@ -343,25 +367,45 @@ export default function CourierExpenses() {
         </CardContent>
       </Card>
 
-      {/* Mark damaged */}
-      <Dialog open={!!damageFor} onOpenChange={(v) => { if (!v) setDamageFor(null); }}>
+      {/* Consignment issue flags — damaged and/or RTO */}
+      <Dialog open={!!flagFor} onOpenChange={(v) => { if (!v) setFlagFor(null); }}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Mark as Received Damaged</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Flag Consignment</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground">
-            {damageFor?.order_number} · {damageFor?.customer_name} · docket {damageFor?.docket_no || "—"}
+            {flagFor?.order_number} · {flagFor?.customer_name} · docket {flagFor?.docket_no || "—"}
           </p>
-          <div>
-            <Label className="text-xs">What was damaged? (optional)</Label>
-            <Input value={damageNote} onChange={e => setDamageNote(e.target.value)}
-              placeholder="e.g. box crushed, 2 bottles leaked" className="mt-1" data-testid="damage-note" />
+          <div className="space-y-3 py-1">
+            <div className="flex items-start gap-2">
+              <Checkbox id="flagDamaged" checked={flagDamaged}
+                onCheckedChange={(v) => setFlagDamaged(!!v)} data-testid="flag-damaged" />
+              <div>
+                <Label htmlFor="flagDamaged" className="cursor-pointer">Received damaged</Label>
+                <p className="text-xs text-muted-foreground">Parcel arrived damaged or short.</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-2">
+              <Checkbox id="flagRto" checked={flagRto}
+                onCheckedChange={(v) => setFlagRto(!!v)} data-testid="flag-rto" />
+              <div>
+                <Label htmlFor="flagRto" className="cursor-pointer">RTO (returned to origin)</Label>
+                <p className="text-xs text-muted-foreground">Undelivered and sent back to us.</p>
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">Note (optional)</Label>
+              <Input value={flagNote} onChange={e => setFlagNote(e.target.value)}
+                placeholder="e.g. box crushed, 2 bottles leaked / address not found"
+                className="mt-1" data-testid="flag-note" />
+            </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            The shipment stays in the payable total; it is flagged so accounts can raise it with the courier.
+            Flagged shipments stay in the payable total and are counted separately so accounts
+            can raise them with the courier. Untick both to clear.
           </p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDamageFor(null)}>Cancel</Button>
-            <Button onClick={() => toggleDamaged(damageFor, true, damageNote)} data-testid="confirm-damaged">
-              Mark Damaged
+            <Button variant="outline" onClick={() => setFlagFor(null)}>Cancel</Button>
+            <Button onClick={saveFlags} disabled={!!busy[flagFor?.order_id]} data-testid="save-flags">
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>

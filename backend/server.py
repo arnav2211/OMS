@@ -5093,8 +5093,9 @@ def compute_order_expense(order: dict, periods: list) -> Optional[dict]:
         "state": sa.get("state"),
         "pincode": sa.get("pincode"),
         "damaged": bool(order.get("damaged")),
-        "damaged_note": order.get("damaged_note") or "",
-        "damaged_by": order.get("damaged_by") or "",
+        "rto": bool(order.get("rto")),
+        "issue_note": order.get("issue_note") or order.get("damaged_note") or "",
+        "issue_by": order.get("issue_by") or order.get("damaged_by") or "",
     }
 
     if courier == "Anjani":
@@ -5139,26 +5140,30 @@ def compute_order_expense(order: dict, periods: list) -> Optional[dict]:
     return row
 
 
-class DamagedRequest(BaseModel):
+class OrderFlagsRequest(BaseModel):
     order_id: str
-    damaged: bool = True
+    damaged: bool = False
+    rto: bool = False
     note: Optional[str] = ""
 
 
-@api_router.put("/orders/{order_id}/damaged")
-async def mark_order_damaged(order_id: str, req: DamagedRequest, user=Depends(get_current_user)):
-    """Flag a consignment as received damaged, so accounts can raise it with the courier."""
+@api_router.put("/orders/{order_id}/flags")
+async def set_order_flags(order_id: str, req: OrderFlagsRequest, user=Depends(get_current_user)):
+    """Consignment issue flags — damaged and/or RTO — so accounts can raise them
+    with the courier. Either, both, or neither (clearing the flags)."""
     if user["role"] not in ["admin", "accounts", "dispatch", "packaging"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     now = datetime.now(timezone.utc).isoformat()
+    any_flag = bool(req.damaged or req.rto)
     update = {
         "damaged": bool(req.damaged),
-        "damaged_note": (req.note or "").strip() if req.damaged else "",
-        "damaged_by": user["name"] if req.damaged else "",
-        "damaged_at": now if req.damaged else "",
+        "rto": bool(req.rto),
+        "issue_note": (req.note or "").strip() if any_flag else "",
+        "issue_by": user["name"] if any_flag else "",
+        "issue_at": now if any_flag else "",
         "updated_at": now,
     }
     await db.orders.update_one({"id": order_id}, {"$set": update})
@@ -5330,6 +5335,7 @@ async def courier_expenses(date_from: str = "", date_to: str = "",
             "shipments": 0, "weight_kg": 0.0, "base": 0.0, "fuel": 0.0,
             "base_plus_fuel": 0.0, "gst": 0.0, "total": 0.0,
             "damaged_count": 0, "damaged_total": 0.0,
+            "rto_count": 0, "rto_total": 0.0,
         })
         s["shipments"] += 1
         s["weight_kg"] = round(s["weight_kg"] + r["weight_kg"], 3)
@@ -5338,6 +5344,9 @@ async def courier_expenses(date_from: str = "", date_to: str = "",
         if r.get("damaged"):
             s["damaged_count"] += 1
             s["damaged_total"] = round(s["damaged_total"] + r["total"], 2)
+        if r.get("rto"):
+            s["rto_count"] += 1
+            s["rto_total"] = round(s["rto_total"] + r["total"], 2)
     grand = round(sum(v["total"] for v in summary.values()), 2)
     damaged_total = round(sum(v["damaged_total"] for v in summary.values()), 2)
     return {
@@ -5346,6 +5355,8 @@ async def courier_expenses(date_from: str = "", date_to: str = "",
         "rows": rows, "summary": summary, "grand_total": grand,
         "damaged_total": damaged_total,
         "damaged_count": sum(v["damaged_count"] for v in summary.values()),
+        "rto_total": round(sum(v["rto_total"] for v in summary.values()), 2),
+        "rto_count": sum(v["rto_count"] for v in summary.values()),
         "count": len(rows), "unpriced": skipped,
     }
 
