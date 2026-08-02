@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { Search, RefreshCw, Printer, PackageCheck, FileSpreadsheet } from "lucide-react";
 import DTDCExportDialog from "@/components/DTDCExportDialog";
 import CourierStatusDialog from "@/components/CourierStatusDialog";
+import { supportsLiveTracking } from "@/lib/courierTracking";
 
 const STATUS_COLORS = {
   new: "bg-blue-100 text-blue-800",
@@ -487,7 +488,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
                               </Badge>
                             )}
                             {/* Live status is only meaningful once a docket exists */}
-                            {(o.dispatch?.lr_no || o.dtdc_shipment?.awb || o.amazon_shipment?.tracking_id) && (
+                            {supportsLiveTracking(o.dispatch?.courier_name || o.courier_name) && (o.dispatch?.lr_no || o.dtdc_shipment?.awb || o.amazon_shipment?.tracking_id) && (
                               <CourierStatusDialog
                                 orderId={o.id}
                                 orderNumber={o.order_number}

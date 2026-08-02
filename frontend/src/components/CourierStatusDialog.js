@@ -2,7 +2,8 @@ import { useState } from "react";
 import api from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Loader2, Activity } from "lucide-react";
+import { Loader2, Activity, ExternalLink } from "lucide-react";
+import { getTrackingUrl } from "@/lib/courierTracking";
 
 /**
  * Live courier status for one order, via /courier-status/{id}.
@@ -101,7 +102,21 @@ export default function CourierStatusDialog({ orderId, orderNumber, courier, doc
             </div>
           )}
 
-          <DialogFooter>
+          <DialogFooter className="gap-2 sm:justify-between">
+            {(() => {
+              // Link out to the courier's own tracking page as well.
+              const cn = data?.courier || courier;
+              const dn = data?.docket || docket;
+              const url = getTrackingUrl(cn, dn);
+              return url ? (
+                <a href={url} target="_blank" rel="noopener noreferrer" className="sm:mr-auto">
+                  <Button variant="outline" size="sm" data-testid="open-courier-site">
+                    <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
+                    Open on {cn}
+                  </Button>
+                </a>
+              ) : <span />;
+            })()}
             <Button variant="outline" onClick={() => setOpen(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>

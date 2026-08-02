@@ -31,8 +31,18 @@ export const COURIER_LR_PATTERNS = {
 const TRACKING_URLS = {
   DTDC: (lr) => `https://txk.dtdc.com/ctbs-tracking/customerInterface.tr?submitName=showCITrackingDetails&cType=Consignment&cnNo=${lr}`,
   Anjani: (lr) => `https://shreeanjani.co.in/tracking?awb=${lr}`,
+  Amazon: (lr) => `https://track.amazon.in/tracking/${lr}`,
   "India Post": (lr) => `https://www.indiapost.gov.in`,
 };
+
+// Couriers we can pull live status from via /courier-status.
+export const LIVE_TRACKING_COURIERS = ["DTDC", "Anjani", "Amazon"];
+
+/** Does this courier support in-app live tracking? Free-text tolerant. */
+export function supportsLiveTracking(courierName) {
+  const n = String(courierName || "").trim().toLowerCase();
+  return n.startsWith("dtdc") || n.startsWith("anjani") || n.startsWith("amazon");
+}
 
 /**
  * Validate LR number against courier-specific regex

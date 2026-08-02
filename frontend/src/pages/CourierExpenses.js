@@ -3,6 +3,7 @@ import api from "@/lib/api";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import CourierStatusDialog from "@/components/CourierStatusDialog";
+import { supportsLiveTracking } from "@/lib/courierTracking";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -314,8 +315,10 @@ export default function CourierExpenses() {
                     <TableCell className="text-sm font-mono text-right font-semibold">{money(r.total)}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        <CourierStatusDialog orderId={r.order_id} orderNumber={r.order_number}
-                          courier={r.courier} docket={r.docket_no} />
+                        {supportsLiveTracking(r.courier) && r.docket_no && (
+                          <CourierStatusDialog orderId={r.order_id} orderNumber={r.order_number}
+                            courier={r.courier} docket={r.docket_no} />
+                        )}
                         {r.damaged ? (
                           <Badge className="bg-red-100 text-red-800 text-[10px] cursor-pointer"
                             title={r.damaged_note || "Received damaged"}

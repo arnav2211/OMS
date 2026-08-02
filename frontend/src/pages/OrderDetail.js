@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { mobilePrintPdf } from "@/lib/mobilePrint";
 import { SlipScanner } from "@/components/SlipScanner";
-import { validateLrNumber, getTrackingUrl, extractPorterLink, isLrMandatory, COURIER_LR_PATTERNS, isOtherCourier } from "@/lib/courierTracking";
+import { validateLrNumber, getTrackingUrl, extractPorterLink, isLrMandatory, COURIER_LR_PATTERNS, isOtherCourier, supportsLiveTracking } from "@/lib/courierTracking";
 import CourierSelect from "@/components/CourierSelect";
 import CourierStatusDialog from "@/components/CourierStatusDialog";
 
@@ -1017,13 +1017,15 @@ export default function OrderDetail() {
                         </a>
                       ) : null;
                     })()}
-                    <CourierStatusDialog
-                      orderId={id}
-                      orderNumber={order.order_number}
-                      courier={order.dispatch?.courier_name || order.courier_name}
-                      docket={order.dispatch?.lr_no}
-                      variant="button"
-                    />
+                    {supportsLiveTracking(order.dispatch?.courier_name || order.courier_name) && (
+                      <CourierStatusDialog
+                        orderId={id}
+                        orderNumber={order.order_number}
+                        courier={order.dispatch?.courier_name || order.courier_name}
+                        docket={order.dispatch?.lr_no}
+                        variant="button"
+                      />
+                    )}
                   </div>
                 )}
                 {order.dispatch?.porter_link && (
