@@ -155,6 +155,16 @@ export default function PackagingDashboard() {
       if (!checkedBy.length) return toast.error("Select who checked the order");
       if (isCourier && !String(weightKg).trim()) return toast.error("Enter the parcel weight (KG) before marking packed — it's needed to book the courier");
     }
+    // Typos here are expensive: the weight drives the courier charge.
+    const wt = parseFloat(weightKg);
+    if (Number.isFinite(wt) && wt > 50) {
+      const ok = window.confirm(
+        `The weight is ${wt} KG, which is unusually high.\n\n` +
+        `Please confirm this is correct — it decides what the courier charges us.\n\n` +
+        `OK to continue, Cancel to correct it.`
+      );
+      if (!ok) return;
+    }
     try {
       const payload = {
         item_images: itemImages,

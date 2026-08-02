@@ -4982,6 +4982,228 @@ async def dtdc_track(order_id: str, user=Depends(get_current_user)):
     return {"ok": True, "tracking": r.json()}
 
 
+# ─── Courier Expense Calculation (what we pay DTDC / Anjani) ─────────────
+# Separate from the customer-facing DTDC calculator above: these are cost rates.
+# DTDC = base rate + fuel surcharge + 18% GST. Nothing is rounded — the paise
+# matter when reconciling a monthly invoice.
+DTDC_EXPENSE_GROUND = {          # up to 3 kg, then per additional kg
+    "Within City":         {"base": 59,  "per_kg": 15},
+    "Within State":        {"base": 71,  "per_kg": 18},
+    "Within Zone":         {"base": 85,  "per_kg": 23},
+    "Metros":              {"base": 108, "per_kg": 28},
+    "Rest of India":       {"base": 117, "per_kg": 31},
+    "Special destination": {"base": 165, "per_kg": 44},
+}
+DTDC_EXPENSE_STANDARD = {        # up to 500 g, then per additional 500 g
+    "Within City":         {"base": 18, "per_500g": 12},
+    "Within State":        {"base": 26, "per_500g": 15},
+    "Within Zone":         {"base": 28, "per_500g": 22},
+    "Metros":              {"base": 48, "per_500g": 43},
+    "Rest of India":       {"base": 53, "per_500g": 44},
+    "Special destination": {"base": 75, "per_500g": 68},
+}
+DTDC_EXPENSE_GST_PERCENT = 18.0
+DEFAULT_FUEL_SURCHARGE = 15.0
+EXPENSE_START_DATE = os.environ.get("EXPENSE_START_DATE", "2026-08-01")
+
+ANJANI_RATE_MAHARASHTRA = float(os.environ.get("ANJANI_RATE_MH", "40"))
+ANJANI_RATE_REST = float(os.environ.get("ANJANI_RATE_REST", "50"))
+
+
+def dtdc_expense_base(category: str, weight: float, service: str) -> float:
+    """DTDC base freight before fuel surcharge and GST."""
+    if service == "GROUND EXPRESS":
+        rate = DTDC_EXPENSE_GROUND.get(category)
+        if not rate:
+            return 0.0
+        if weight <= 3:
+            return float(rate["base"])
+        return float(rate["base"] + math.ceil(weight - 3) * rate["per_kg"])
+    rate = DTDC_EXPENSE_STANDARD.get(category)
+    if not rate:
+        return 0.0
+    if weight <= 0.5:
+        return float(rate["base"])
+    return float(rate["base"] + math.ceil((weight - 0.5) / 0.5) * rate["per_500g"])
+
+
+async def _fuel_surcharge_periods() -> list:
+    """Effective-dated fuel surcharge, newest first. DTDC revises this often."""
+    rows = await db.fuel_surcharges.find({}, {"_id": 0}).sort("from_date", -1).to_list(200)
+    if not rows:
+        rows = [{"id": "default", "from_date": EXPENSE_START_DATE,
+                 "percent": DEFAULT_FUEL_SURCHARGE, "note": "default"}]
+    return rows
+
+
+def _fuel_percent_on(periods: list, when: str) -> float:
+    """Surcharge in force on a given date (periods are newest-first)."""
+    day = (when or "")[:10]
+    for p in periods:
+        if day >= str(p.get("from_date", ""))[:10]:
+            return float(p.get("percent", DEFAULT_FUEL_SURCHARGE))
+    return float(periods[-1].get("percent", DEFAULT_FUEL_SURCHARGE)) if periods else DEFAULT_FUEL_SURCHARGE
+
+
+def _expense_date(order: dict) -> str:
+    d = (order.get("dispatch") or {}).get("dispatched_at")
+    if not d:
+        d = (order.get("packaging") or {}).get("packed_at")
+    return (d or order.get("created_at") or "")[:10]
+
+
+def _order_courier(order: dict) -> str:
+    name = str(order.get("courier_name") or "").strip().lower()
+    if name.startswith("dtdc"):
+        return "DTDC"
+    if name.startswith("anjani") or "anjani" in name:
+        return "Anjani"
+    return ""
+
+
+def compute_order_expense(order: dict, periods: list) -> Optional[dict]:
+    """Per-order courier cost. None when it cannot be costed."""
+    courier = _order_courier(order)
+    if not courier:
+        return None
+    pkg = order.get("packaging") or {}
+    try:
+        weight = float(str(pkg.get("weight_kg", "")).strip() or 0)
+    except (TypeError, ValueError):
+        return None
+    if weight <= 0:
+        return None
+    sa = order.get("shipping_address") or {}
+    when = _expense_date(order)
+    row = {
+        "order_id": order.get("id"),
+        "order_number": order.get("order_number"),
+        "customer_name": order.get("customer_name"),
+        "date": when,
+        "courier": courier,
+        "weight_kg": weight,
+        "num_boxes": pkg.get("num_boxes") or "1",
+        "city": sa.get("city"),
+        "state": sa.get("state"),
+        "pincode": sa.get("pincode"),
+    }
+
+    if courier == "Anjani":
+        in_mh = "maharashtra" in str(sa.get("state") or "").strip().lower()
+        base = ANJANI_RATE_MAHARASHTRA if in_mh else ANJANI_RATE_REST
+        row.update({"zone": "Maharashtra" if in_mh else "Rest of India",
+                    "service": "Anjani", "base": base, "fuel_percent": 0.0,
+                    "fuel": 0.0, "gst_percent": 0.0, "gst": 0.0, "total": base})
+        return row
+
+    info = _dtdc_pincodes.get(str(sa.get("pincode") or "").strip())
+    if not info:
+        row.update({"zone": None, "service": None, "base": 0.0, "fuel_percent": 0.0,
+                    "fuel": 0.0, "gst_percent": 0.0, "gst": 0.0, "total": 0.0,
+                    "error": "Pincode not in the DTDC zone list"})
+        return row
+    category = info["category"]
+    # Use the service actually booked when we have it, else the cheaper option
+    # (the same rule the booking flow applies).
+    booked = (order.get("dtdc_shipment") or {}).get("service_type")
+    if booked in ("GROUND EXPRESS", "STD EXP-A"):
+        service = booked
+    else:
+        g = dtdc_expense_base(category, weight, "GROUND EXPRESS")
+        s = dtdc_expense_base(category, weight, "STD EXP-A")
+        service = "GROUND EXPRESS" if g <= s else "STD EXP-A"
+    base = dtdc_expense_base(category, weight, service)
+    fuel_pct = _fuel_percent_on(periods, when)
+    fuel = base * fuel_pct / 100.0
+    gst = (base + fuel) * DTDC_EXPENSE_GST_PERCENT / 100.0
+    row.update({
+        "zone": category, "service": service,
+        "base": round(base, 2), "fuel_percent": fuel_pct, "fuel": round(fuel, 2),
+        "gst_percent": DTDC_EXPENSE_GST_PERCENT, "gst": round(gst, 2),
+        "total": round(base + fuel + gst, 2),
+    })
+    return row
+
+
+@api_router.get("/courier-expenses/fuel-surcharges")
+async def list_fuel_surcharges(user=Depends(get_current_user)):
+    if user["role"] == "telecaller":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return await _fuel_surcharge_periods()
+
+
+@api_router.post("/courier-expenses/fuel-surcharges")
+async def add_fuel_surcharge(body: dict, admin=Depends(require_admin)):
+    from_date = str(body.get("from_date") or "")[:10]
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", from_date):
+        raise HTTPException(status_code=400, detail="from_date must be YYYY-MM-DD")
+    try:
+        percent = float(body.get("percent"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="percent must be a number")
+    if percent < 0 or percent > 100:
+        raise HTTPException(status_code=400, detail="percent must be between 0 and 100")
+    doc = {"id": str(uuid.uuid4()), "from_date": from_date, "percent": percent,
+           "note": str(body.get("note") or ""), "created_at": datetime.now(timezone.utc).isoformat(),
+           "created_by": admin["name"]}
+    await db.fuel_surcharges.update_one({"from_date": from_date}, {"$set": doc}, upsert=True)
+    return doc
+
+
+@api_router.delete("/courier-expenses/fuel-surcharges/{surcharge_id}")
+async def delete_fuel_surcharge(surcharge_id: str, admin=Depends(require_admin)):
+    res = await db.fuel_surcharges.delete_one({"id": surcharge_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"message": "Deleted"}
+
+
+@api_router.get("/courier-expenses")
+async def courier_expenses(date_from: str = "", date_to: str = "",
+                           courier: str = "all", user=Depends(get_current_user)):
+    """Courier cost per shipment for a period, with per-courier totals."""
+    if user["role"] == "telecaller":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    start = (date_from or EXPENSE_START_DATE)[:10]
+    end = (date_to or datetime.now(timezone.utc).astimezone(IST).strftime("%Y-%m-%d"))[:10]
+    periods = await _fuel_surcharge_periods()
+
+    orders = await db.orders.find({
+        "status": {"$ne": "cancelled"},
+        "courier_name": {"$regex": r"^\s*(dtdc|anjani)", "$options": "i"},
+        "packaging.weight_kg": {"$nin": ["", None]},
+    }, {"_id": 0}).to_list(5000)
+
+    rows, skipped = [], 0
+    for o in orders:
+        row = compute_order_expense(o, periods)
+        if not row:
+            skipped += 1
+            continue
+        if not (start <= (row["date"] or "") <= end):
+            continue
+        if courier != "all" and row["courier"].lower() != courier.lower():
+            continue
+        rows.append(row)
+
+    rows.sort(key=lambda r: (r["date"], r.get("order_number") or ""))
+    summary = {}
+    for r in rows:
+        s = summary.setdefault(r["courier"], {"shipments": 0, "weight_kg": 0.0, "base": 0.0,
+                                              "fuel": 0.0, "gst": 0.0, "total": 0.0})
+        s["shipments"] += 1
+        s["weight_kg"] = round(s["weight_kg"] + r["weight_kg"], 3)
+        for k in ("base", "fuel", "gst", "total"):
+            s[k] = round(s[k] + r[k], 2)
+    grand = round(sum(v["total"] for v in summary.values()), 2)
+    return {
+        "date_from": start, "date_to": end,
+        "fuel_surcharges": periods,
+        "rows": rows, "summary": summary, "grand_total": grand,
+        "count": len(rows), "unpriced": skipped,
+    }
+
+
 # ─── Shree Anjani Serviceability Checker ─────────────────────────────────
 
 @api_router.get("/anjani/check/{pincode}")

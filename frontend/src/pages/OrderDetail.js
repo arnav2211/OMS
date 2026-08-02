@@ -1739,11 +1739,20 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving, onDirtyChan
 
       <DialogFooter>
         <Button variant="outline" onClick={onCancel}>Cancel</Button>
-        <Button onClick={() => onSave({
-          item_packed_by: itemPackedBy, box_packed_by: boxPackedBy, checked_by: checkedBy,
-          item_images: itemImages, order_images: orderImages, packed_box_images: packedBoxImages,
-          weight_kg: String(weightKg).trim(), num_boxes: String(numBoxes).trim() || "1",
-        })} disabled={saving || uploading}>
+        <Button onClick={() => {
+          // Weight drives the courier charge, so flag improbable entries.
+          const wt = parseFloat(weightKg);
+          if (Number.isFinite(wt) && wt > 50 && !window.confirm(
+            `The weight is ${wt} KG, which is unusually high.\n\n` +
+            `Please confirm this is correct — it decides what the courier charges us.\n\n` +
+            `OK to continue, Cancel to correct it.`
+          )) return;
+          onSave({
+            item_packed_by: itemPackedBy, box_packed_by: boxPackedBy, checked_by: checkedBy,
+            item_images: itemImages, order_images: orderImages, packed_box_images: packedBoxImages,
+            weight_kg: String(weightKg).trim(), num_boxes: String(numBoxes).trim() || "1",
+          });
+        }} disabled={saving || uploading}>
           {saving ? "Saving..." : "Save Packaging"}
         </Button>
       </DialogFooter>
