@@ -6079,6 +6079,349 @@ async def amazon_label_pdf(order_id: str, token: str = "", user=None):
                              headers={"Content-Disposition": f"inline; filename={fname}"})
 
 
+# ─── India Post (Department of Posts / CEPT) ─────────────────────────────
+# Two contracts are held: one for small articles (Speed Post) and one for
+# heavier ones (Business Parcel). Both are quoted for every shipment and the
+# cheaper one wins — that is the whole point of the rate calculator.
+#
+# Unlike DTDC and Amazon, India Post does NOT allocate the tracking number:
+# each customer is allotted a barcode series and generates article numbers
+# itself (UPU S10 - 2 letters, 8-digit serial, check digit, "IN").
+
+INDIAPOST_BASE = os.environ.get(
+    "INDIAPOST_BASE_URL", "https://test.cept.gov.in/beextcustomer").rstrip("/")
+INDIAPOST_MASTER = os.environ.get(
+    "INDIAPOST_MASTER_URL", "https://test.cept.gov.in/bemasterdata").rstrip("/")
+
+INDIAPOST_PATH_LOGIN = "/v1/access/login"
+INDIAPOST_PATH_OFFICES = "/v1/offices/limited-details"          # on MASTER
+INDIAPOST_PATH_TARIFF_SP = "/v1/speed-post/tariffs"
+INDIAPOST_PATH_TARIFF_BP = "/v1/business-parcel-tariff/calculate"
+INDIAPOST_PATH_BOOK = "/process-articles"                       # + /{customer_id}
+INDIAPOST_PATH_LABEL = "/v1/label/create/domestic"
+INDIAPOST_PATH_TRACK = "/v1/tracking/bulk"
+
+# Article types and the envelope each is valid in. Weights are grams, dims cm.
+# Straight from the DoP approach document's dimension tables.
+INDIAPOST_PRODUCTS = {
+    "SP_INLAND_DOC": {
+        "label": "Speed Post Document", "service": "SP",
+        "w_min": 1, "w_max": 500,
+        "l": (1, 42), "b": (1, 29), "h": (1, 2),
+        "path": INDIAPOST_PATH_TARIFF_SP, "code": "SP", "shape": "DOC",
+    },
+    "SP_INLAND_PARCEL": {
+        "label": "Speed Post Parcel", "service": "SP",
+        "w_min": 501, "w_max": 35000,
+        "l": (14, 150), "b": (9, 150), "h": (1, 150),
+        "path": INDIAPOST_PATH_TARIFF_SP, "code": "SP", "shape": "NROL",
+    },
+    "BUSINESS_PARCEL": {
+        "label": "Business Parcel", "service": "BP",
+        "w_min": 1, "w_max": 35000,
+        "l": (14, 150), "b": (9, 150), "h": (1, 150),
+        "path": INDIAPOST_PATH_TARIFF_BP, "code": "BP", "shape": "NROL",
+    },
+}
+
+# Accounts. "small" and "large" are our names for the two contracts; each may
+# serve several product codes, and every eligible product is quoted.
+INDIAPOST_ACCOUNTS = {
+    "small": {
+        "label": os.environ.get("INDIAPOST_SMALL_LABEL", "India Post — Speed Post"),
+        "username": os.environ.get("INDIAPOST_SMALL_USERNAME", ""),
+        "password": os.environ.get("INDIAPOST_SMALL_PASSWORD", ""),
+        "customer_id": os.environ.get("INDIAPOST_SMALL_CUSTOMER_ID", ""),
+        "contract_id": os.environ.get("INDIAPOST_SMALL_CONTRACT_ID", ""),
+        "products": [p.strip() for p in os.environ.get(
+            "INDIAPOST_SMALL_PRODUCTS", "SP_INLAND_DOC,SP_INLAND_PARCEL").split(",") if p.strip()],
+        "series_prefix": os.environ.get("INDIAPOST_SMALL_SERIES_PREFIX", ""),
+        "series_start": os.environ.get("INDIAPOST_SMALL_SERIES_START", ""),
+        "series_end": os.environ.get("INDIAPOST_SMALL_SERIES_END", ""),
+    },
+    "large": {
+        "label": os.environ.get("INDIAPOST_LARGE_LABEL", "India Post — Business Parcel"),
+        "username": os.environ.get("INDIAPOST_LARGE_USERNAME", ""),
+        "password": os.environ.get("INDIAPOST_LARGE_PASSWORD", ""),
+        "customer_id": os.environ.get("INDIAPOST_LARGE_CUSTOMER_ID", ""),
+        "contract_id": os.environ.get("INDIAPOST_LARGE_CONTRACT_ID", ""),
+        "products": [p.strip() for p in os.environ.get(
+            "INDIAPOST_LARGE_PRODUCTS", "BUSINESS_PARCEL").split(",") if p.strip()],
+        "series_prefix": os.environ.get("INDIAPOST_LARGE_SERIES_PREFIX", ""),
+        "series_start": os.environ.get("INDIAPOST_LARGE_SERIES_START", ""),
+        "series_end": os.environ.get("INDIAPOST_LARGE_SERIES_END", ""),
+    },
+}
+
+INDIAPOST_ORIGIN_PINCODE = os.environ.get("INDIAPOST_ORIGIN_PINCODE", "440025")
+INDIAPOST_MAX_WEIGHT_G = 35000
+
+
+def _indiapost_configured() -> bool:
+    return any(a["username"] and a["password"] for a in INDIAPOST_ACCOUNTS.values())
+
+
+def _s10_check_digit(serial8: str) -> str:
+    """UPU S10 check digit — weighting factors 8,6,4,2,3,5,9,7 over modulus 11."""
+    weights = (8, 6, 4, 2, 3, 5, 9, 7)
+    total = sum(int(d) * w for d, w in zip(serial8, weights))
+    remainder = total % 11
+    if remainder == 0:
+        return "5"
+    if remainder == 1:
+        return "0"
+    return str(11 - remainder)
+
+
+def indiapost_barcode(prefix: str, serial: int) -> str:
+    """e.g. ('ET', 21433001) -> 'ET214330015IN'."""
+    s8 = f"{int(serial):08d}"
+    return f"{prefix.upper()}{s8}{_s10_check_digit(s8)}IN"
+
+
+# access_token lives 900s; refresh a minute early rather than racing expiry.
+_INDIAPOST_TOKENS: dict = {}
+
+
+async def _indiapost_token(account_key: str) -> str:
+    acct = INDIAPOST_ACCOUNTS.get(account_key) or {}
+    if not (acct.get("username") and acct.get("password")):
+        raise HTTPException(status_code=503,
+                            detail=f"India Post '{account_key}' account is not configured")
+    cached = _INDIAPOST_TOKENS.get(account_key)
+    now = datetime.now(timezone.utc).timestamp()
+    if cached and cached["expires_at"] > now:
+        return cached["token"]
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(
+            f"{INDIAPOST_BASE}{INDIAPOST_PATH_LOGIN}",
+            json={"username": acct["username"], "password": acct["password"]},
+            headers={"Content-Type": "application/json", "accept": "application/json"})
+    if r.status_code != 200:
+        logging.error(f"India Post login failed ({account_key}): {r.status_code} {r.text[:300]}")
+        raise HTTPException(status_code=502, detail="India Post login failed")
+    data = (r.json() or {}).get("data") or {}
+    token = data.get("access_token")
+    if not token:
+        raise HTTPException(status_code=502, detail="India Post returned no access token")
+    _INDIAPOST_TOKENS[account_key] = {
+        "token": token,
+        "expires_at": now + max(60, int(data.get("expires_in") or 900) - 60),
+    }
+    return token
+
+
+async def _indiapost_get(path: str, params: dict, account_key: str, base: str = "") -> dict:
+    token = await _indiapost_token(account_key)
+    async with httpx.AsyncClient(timeout=45) as client:
+        r = await client.get(f"{base or INDIAPOST_BASE}{path}", params=params,
+                             headers={"Authorization": f"Bearer {token}",
+                                      "accept": "application/json"})
+    if r.status_code != 200:
+        return {"ok": False, "status": r.status_code, "body": r.text[:400]}
+    try:
+        return {"ok": True, "data": r.json()}
+    except ValueError:
+        return {"ok": False, "status": r.status_code, "body": r.text[:400]}
+
+
+async def indiapost_offices(pincode: str, account_key: str = "") -> list:
+    """Post offices under a pincode. Booking needs an 8-digit office_id."""
+    key = account_key or next(
+        (k for k, a in INDIAPOST_ACCOUNTS.items() if a["username"]), "")
+    if not key:
+        raise HTTPException(status_code=503, detail="India Post is not configured")
+    res = await _indiapost_get(INDIAPOST_PATH_OFFICES,
+                               {"pincode": pincode, "limit": 50, "office-type": "post"},
+                               key, base=INDIAPOST_MASTER)
+    if not res.get("ok"):
+        return []
+    data = res["data"]
+    return data if isinstance(data, list) else (data.get("data") or [])
+
+
+async def indiapost_delivery_office(pincode: str) -> Optional[dict]:
+    """The office a parcel to this pincode would be delivered from.
+
+    Doc rule: delivery_office_flag true and office_type_code not BPO.
+    Serviceability is exactly "does such an office exist".
+    """
+    for o in await indiapost_offices(pincode):
+        if o.get("delivery_office_flag") and (o.get("office_type_code") or "").upper() != "BPO":
+            return o
+    return None
+
+
+def _indiapost_eligible(product: str, weight_g: int, dims: dict) -> Optional[str]:
+    """None if the article may go by this product, else why not."""
+    spec = INDIAPOST_PRODUCTS.get(product)
+    if not spec:
+        return "unknown product"
+    if weight_g < spec["w_min"] or weight_g > spec["w_max"]:
+        return f"weight outside {spec['w_min']}–{spec['w_max']} g"
+    for axis, key in (("l", "length"), ("b", "breadth"), ("h", "height")):
+        val = float(dims.get(key) or 0)
+        if val <= 0:
+            continue          # dims are optional; tariff then goes on weight alone
+        lo, hi = spec[axis]
+        if val < lo or val > hi:
+            return f"{key} outside {lo}–{hi} cm"
+    return None
+
+
+async def indiapost_quote_product(account_key: str, product: str, weight_g: int,
+                                  dst_pin: str, dims: dict, insurance: float = 0,
+                                  pod: bool = False) -> dict:
+    """One tariff call. Returns a normalised quote or an error dict."""
+    spec = INDIAPOST_PRODUCTS[product]
+    params = {
+        "product-code": spec["code"],
+        "weight": int(weight_g),                 # grams, whole numbers only
+        "source-pincode": INDIAPOST_ORIGIN_PINCODE,
+        "destination-pincode": str(dst_pin),
+        "length": int(float(dims.get("length") or 0)),
+        "width": int(float(dims.get("breadth") or 0)),
+        "height": int(float(dims.get("height") or 0)),
+    }
+    if insurance and insurance > 0:
+        params["INS" if spec["code"] == "SP" else "ins"] = int(insurance)
+    if pod and spec["code"] == "SP":
+        params["POD"] = "YES"
+
+    res = await _indiapost_get(spec["path"], params, account_key)
+    if not res.get("ok"):
+        return {"ok": False, "product": product, "account": account_key,
+                "error": f"HTTP {res.get('status')}", "detail": res.get("body", "")[:200]}
+    d = res["data"] or {}
+    if not d.get("success"):
+        return {"ok": False, "product": product, "account": account_key,
+                "error": d.get("message") or "tariff refused"}
+
+    vas = d.get("vas_charges")
+    vas_total = (sum(float(v or 0) for v in vas.values()) if isinstance(vas, dict)
+                 else float(vas or 0))
+    return {
+        "ok": True,
+        "account": account_key,
+        "account_label": INDIAPOST_ACCOUNTS[account_key]["label"],
+        "product": d.get("product_code") or product,
+        "product_label": spec["label"],
+        "service": spec["service"],
+        "weight_g": int(weight_g),
+        "chargeable_weight_g": d.get("chargeable_weight") or weight_g,
+        "volumetric_weight_g": d.get("volumetric_weight"),
+        "base_tariff": float(d.get("base_tariff") or 0),
+        "vas_charges": round(vas_total, 2),
+        "tax": float(d.get("total_tax") or 0),
+        "total": float(d.get("final_amount") or 0),      # GST already included
+        "distance_km": d.get("distance_km"),
+        "delivery_type": d.get("delivery_type"),
+        "assured_delivery": d.get("assured_delivery_day"),
+    }
+
+
+async def indiapost_compare(weight_g: int, dst_pin: str, dims: dict,
+                            insurance: float = 0, pod: bool = False) -> dict:
+    """Quote every eligible product on both contracts; cheapest wins."""
+    if weight_g <= 0:
+        raise HTTPException(status_code=400, detail="Weight must be greater than zero")
+    if weight_g > INDIAPOST_MAX_WEIGHT_G:
+        return {"ok": False, "serviceable": False,
+                "message": f"India Post caps articles at {INDIAPOST_MAX_WEIGHT_G/1000:g} kg"}
+
+    office = await indiapost_delivery_office(str(dst_pin))
+    if not office:
+        return {"ok": False, "serviceable": False,
+                "message": f"No India Post delivery office serves {dst_pin}"}
+
+    tasks, meta, skipped = [], [], []
+    for key, acct in INDIAPOST_ACCOUNTS.items():
+        if not acct["username"]:
+            continue
+        for product in acct["products"]:
+            why = _indiapost_eligible(product, weight_g, dims)
+            if why:
+                skipped.append({"account": key, "product": product, "reason": why})
+                continue
+            tasks.append(indiapost_quote_product(key, product, weight_g, dst_pin,
+                                                 dims, insurance, pod))
+            meta.append((key, product))
+
+    if not tasks:
+        return {"ok": False, "serviceable": True, "office": office,
+                "message": "No India Post product accepts this weight/size",
+                "skipped": skipped}
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    quotes = [r for r in results if isinstance(r, dict) and r.get("ok")]
+    errors = [r for r in results if isinstance(r, dict) and not r.get("ok")]
+    if not quotes:
+        return {"ok": False, "serviceable": True, "office": office,
+                "message": "India Post returned no usable tariff",
+                "errors": errors, "skipped": skipped}
+
+    quotes.sort(key=lambda q: q["total"])
+    cheapest = quotes[0]
+    return {
+        "ok": True, "serviceable": True,
+        "cheapest": cheapest,
+        "quotes": quotes,
+        "savings": round(quotes[-1]["total"] - cheapest["total"], 2) if len(quotes) > 1 else 0.0,
+        "office": {"office_id": office.get("office_id"), "office_name": office.get("office_name"),
+                   "city": office.get("city_name"), "state": office.get("state_name")},
+        "errors": errors, "skipped": skipped,
+    }
+
+
+@api_router.get("/indiapost/status")
+async def indiapost_status(user=Depends(get_current_user)):
+    """Which contracts are wired up — drives the UI's setup hints."""
+    return {
+        "configured": _indiapost_configured(),
+        "base_url": INDIAPOST_BASE,
+        "sandbox": "test.cept.gov.in" in INDIAPOST_BASE,
+        "max_weight_kg": INDIAPOST_MAX_WEIGHT_G / 1000,
+        "accounts": [{
+            "key": k, "label": a["label"], "products": a["products"],
+            "ready": bool(a["username"] and a["password"] and a["customer_id"]
+                          and a["contract_id"]),
+            "can_book": bool(a["series_prefix"] and a["series_start"] and a["series_end"]),
+        } for k, a in INDIAPOST_ACCOUNTS.items()],
+    }
+
+
+@api_router.get("/indiapost/check/{pincode}")
+async def indiapost_check_pincode(pincode: str, user=Depends(get_current_user)):
+    if not re.fullmatch(r"\d{6}", str(pincode or "").strip()):
+        raise HTTPException(status_code=400, detail="Pincode must be 6 digits")
+    office = await indiapost_delivery_office(pincode)
+    return {"pincode": pincode, "serviceable": bool(office), "office": office}
+
+
+class IndiaPostRateRequest(BaseModel):
+    pincode: str
+    weight_kg: float
+    length: Optional[float] = 0
+    breadth: Optional[float] = 0
+    height: Optional[float] = 0
+    insurance: Optional[float] = 0
+    pod: Optional[bool] = False
+
+
+@api_router.post("/indiapost/rate")
+async def indiapost_rate(req: IndiaPostRateRequest, user=Depends(get_current_user)):
+    """Rate calculator — both contracts quoted, cheapest returned."""
+    if user["role"] == "telecaller":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not re.fullmatch(r"\d{6}", str(req.pincode or "").strip()):
+        raise HTTPException(status_code=400, detail="Pincode must be 6 digits")
+    # The API only accepts whole grams; round up so we never under-quote.
+    weight_g = int(math.ceil(float(req.weight_kg or 0) * 1000))
+    dims = {"length": req.length, "breadth": req.breadth, "height": req.height}
+    return await indiapost_compare(weight_g, req.pincode.strip(), dims,
+                                   float(req.insurance or 0), bool(req.pod))
+
+
 # ─── Admin Alert / Urgent Notification System ────────────────────────────
 
 @api_router.get("/admin/alerts/other-users")
