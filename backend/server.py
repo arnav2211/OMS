@@ -5074,6 +5074,7 @@ def compute_order_expense(order: dict, periods: list) -> Optional[dict]:
     if weight <= 0:
         return None
     sa = order.get("shipping_address") or {}
+    dispatch = order.get("dispatch") or {}
     when = _expense_date(order)
     row = {
         "order_id": order.get("id"),
@@ -5081,6 +5082,11 @@ def compute_order_expense(order: dict, periods: list) -> Optional[dict]:
         "customer_name": order.get("customer_name"),
         "date": when,
         "courier": courier,
+        # Docket / LR / consignment number on the dispatch slip, for reconciling
+        # each line against the courier's invoice.
+        "docket_no": (dispatch.get("lr_no")
+                      or (order.get("dtdc_shipment") or {}).get("awb")
+                      or ""),
         "weight_kg": weight,
         "num_boxes": pkg.get("num_boxes") or "1",
         "city": sa.get("city"),

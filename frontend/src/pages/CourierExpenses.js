@@ -91,10 +91,10 @@ export default function CourierExpenses() {
 
   const exportCsv = () => {
     if (!data?.rows?.length) return toast.error("Nothing to export");
-    const head = ["Date", "Order", "Customer", "Courier", "Service", "Zone", "Weight(kg)",
+    const head = ["Date", "Order", "Customer", "Docket", "Courier", "Service", "Zone", "Weight(kg)",
                   "Boxes", "Base", "Fuel%", "Fuel", "GST", "Total"];
     const lines = [head.join(",")].concat(data.rows.map(r => [
-      r.date, r.order_number, `"${(r.customer_name || "").replace(/"/g, "'")}"`, r.courier,
+      r.date, r.order_number, `"${(r.customer_name || "").replace(/"/g, "'")}"`, r.docket_no || "", r.courier,
       r.service || "", r.zone || "", r.weight_kg, r.num_boxes,
       r.base, r.fuel_percent, r.fuel, r.gst, r.total,
     ].join(",")));
@@ -227,6 +227,7 @@ export default function CourierExpenses() {
                   <TableHead className="whitespace-nowrap">Date</TableHead>
                   <TableHead className="whitespace-nowrap">Order</TableHead>
                   <TableHead className="whitespace-nowrap">Customer</TableHead>
+                  <TableHead className="whitespace-nowrap">Docket / Slip No.</TableHead>
                   <TableHead className="whitespace-nowrap">Courier</TableHead>
                   <TableHead className="whitespace-nowrap">Service / Zone</TableHead>
                   <TableHead className="whitespace-nowrap text-right">Wt</TableHead>
@@ -238,7 +239,7 @@ export default function CourierExpenses() {
               </TableHeader>
               <TableBody>
                 {(data?.rows || []).length === 0 && (
-                  <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground py-10">
+                  <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground py-10">
                     No courier shipments with a weight in this period.
                   </TableCell></TableRow>
                 )}
@@ -247,6 +248,9 @@ export default function CourierExpenses() {
                     <TableCell className="text-sm whitespace-nowrap">{r.date}</TableCell>
                     <TableCell className="font-mono text-sm">{r.order_number}</TableCell>
                     <TableCell className="text-sm max-w-[180px] truncate">{r.customer_name}</TableCell>
+                    <TableCell className="font-mono text-xs whitespace-nowrap" data-testid={`docket-${r.order_id}`}>
+                      {r.docket_no || <span className="text-muted-foreground">—</span>}
+                    </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="text-xs">{r.courier}</Badge>
                     </TableCell>
