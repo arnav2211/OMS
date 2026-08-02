@@ -1,0 +1,17 @@
+---
+name: vps-deploy
+description: How the CitSpray OMS is deployed on the production VPS
+metadata:
+  type: reference
+---
+
+Production VPS: `root@80.241.220.128` (Ubuntu). Domain `https://oms.mangalamagro.in`.
+
+- App repo lives at `/root/OMS` (origin = github.com/arnav2211/OMS). `/var/www/crm` is a *different* project (WhatsApp CRM) — leave it alone.
+- **Backend**: Docker via `/root/OMS/docker-compose.yml` — services `mongo` (mongo:7) + `backend` (built from `./backend/Dockerfile`, code COPIED into image, only `./backend/uploads` is bind-mounted). Runs on port 8000; nginx proxies `/api/` → `127.0.0.1:8000`. Because code is baked into the image, a backend code change REQUIRES `docker-compose up -d --build backend` — which recreates the container = a few seconds of backend downtime. True zero-downtime would need bind-mounting the code or a blue-green swap.
+- **Frontend**: `npm run build` in `/root/OMS/frontend` (uses **npm**, NOT yarn; `.env.production` sets `REACT_APP_BACKEND_URL=https://oms.mangalamagro.in`), then `cp -r build/* /var/www/oms/`; nginx serves `/var/www/oms`. Build is memory-hungry — use `NODE_OPTIONS=--max-old-space-size=2048 CI=false`. Frontend deploy does NOT touch the backend; `systemctl reload nginx` is graceful.
+- **USE `/root/deploy-guarded.sh` for backend deploys.** It does the blue-green swap with verification at every step and only removes green after the public URL is proven healthy on blue. Written after an outage (2026-08-02) where an unverified `sed` left nginx pointing at :8001 while green was deleted — every API call 502'd and All Orders showed "0 orders". The lesson: `systemctl reload nginx` returning 0 proves nothing about whether the sed actually changed the file; always grep the config and curl the public URL before tearing anything down.
+- Backend image builds were slow (~5 min) because `backend/uploads` (1.1 GB, 12k files) was in the build context. Fixed with `backend/.dockerignore` — uploads is bind-mounted at runtime so it never belonged in the image.
+- Old script `/root/deploy-oms.sh` (pull → docker rebuild → npm build → copy → restart nginx) has a few-second backend gap during container recreate — NOT zero-downtime.
+- **Zero-downtime backend deploy (blue-green, proven 2026-07):** 1) `docker-compose build backend` (old container keeps serving). 2) `docker run -d --name backend_green --network oms_default --env-file backend/.env -v /root/OMS/backend/uploads:/app/uploads -p 127.0.0.1:8001:8000 oms_backend:latest`; health-check `:8001/api/auth/me`. 3) flip nginx: `CONF=$(readlink -f /etc/nginx/sites-enabled/oms); sed -i 's#127.0.0.1:8000#127.0.0.1:8001#g' "$CONF"; nginx -t && systemctl reload nginx` (use readlink -f so sed doesn't clobber the sites-available symlink). 4) `docker rm -f backend` then `docker-compose up -d backend` (recreates blue on :8000 with new image; traffic is on green so the gap is invisible) — NOTE compose errors with a name conflict unless you `docker rm -f backend` first. 5) flip nginx back to :8000, reload, `docker rm -f backend_green`. Health-check the public API at each step.
+- **Divergence gotcha**: files get edited directly on the VPS and never committed (e.g. `/customers/count` endpoint, debounced customer search in PIBuilder/CreateOrder, customer-count in Customers.js). A raw `git diff` looks huge due to CRLF/LF — use `git diff --ignore-cr-at-eol -w` to see real changes. Always check `git status` on the VPS and reconcile before `git pull`, or the pull aborts / clobbers live hotfixes. See [[field-tracking]].

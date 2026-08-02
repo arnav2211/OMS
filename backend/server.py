@@ -6324,6 +6324,7 @@ async def indiapost_quote_product(account_key: str, product: str, weight_g: int,
         "ok": True,
         "account": account_key,
         "account_label": INDIAPOST_ACCOUNTS[account_key]["label"],
+        "requested_product": product,
         "product": d.get("product_code") or product,
         "product_label": spec["label"],
         "service": spec["service"],
@@ -6354,18 +6355,22 @@ async def indiapost_compare(weight_g: int, dst_pin: str, dims: dict,
         return {"ok": False, "serviceable": False,
                 "message": f"No India Post delivery office serves {dst_pin}"}
 
-    tasks, meta, skipped = [], [], []
-    for key, acct in INDIAPOST_ACCOUNTS.items():
-        if not acct["username"]:
+    # Tariffs are India Post's published rates, identical whichever contract
+    # asks — the contract only decides who may *book* the product. So quote
+    # every product once on any working login, then label each quote with the
+    # contract that would carry it.
+    auth_key = next((k for k, a in INDIAPOST_ACCOUNTS.items() if a["username"]), "")
+    if not auth_key:
+        raise HTTPException(status_code=503, detail="No India Post login is configured")
+
+    tasks, skipped = [], []
+    for product in INDIAPOST_PRODUCTS:
+        why = _indiapost_eligible(product, weight_g, dims)
+        if why:
+            skipped.append({"product": product, "reason": why})
             continue
-        for product in acct["products"]:
-            why = _indiapost_eligible(product, weight_g, dims)
-            if why:
-                skipped.append({"account": key, "product": product, "reason": why})
-                continue
-            tasks.append(indiapost_quote_product(key, product, weight_g, dst_pin,
-                                                 dims, insurance, pod))
-            meta.append((key, product))
+        tasks.append(indiapost_quote_product(auth_key, product, weight_g, dst_pin,
+                                             dims, insurance, pod))
 
     if not tasks:
         return {"ok": False, "serviceable": True, "office": office,
@@ -6379,6 +6384,16 @@ async def indiapost_compare(weight_g: int, dst_pin: str, dims: dict,
         return {"ok": False, "serviceable": True, "office": office,
                 "message": "India Post returned no usable tariff",
                 "errors": errors, "skipped": skipped}
+
+    for q in quotes:
+        # The API may resolve a request to a narrower code (SP -> SP_INLAND_DOC),
+        # so match a contract on either the returned or the requested product.
+        book_key = next((k for k, a in INDIAPOST_ACCOUNTS.items()
+                         if q["product"] in a["products"]
+                         or q["requested_product"] in a["products"]), "")
+        q["book_account"] = book_key
+        q["book_account_label"] = INDIAPOST_ACCOUNTS[book_key]["label"] if book_key else ""
+        q["bookable"] = bool(book_key and INDIAPOST_ACCOUNTS[book_key]["contract_id"])
 
     quotes.sort(key=lambda q: q["total"])
     cheapest = quotes[0]

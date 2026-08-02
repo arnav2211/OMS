@@ -1,0 +1,4 @@
+- [Field Tracking](field-tracking.md) — how field-executive location tracking works in the OMS (role lockdown, endpoints, Android app)
+- [VPS Deploy](vps-deploy.md) — production VPS topology, docker/nginx layout, and the direct-edit divergence gotcha
+- [DTDC Booking](dtdc-booking.md) — Excel export/account routing (RL1386/1387/1423) and the plan to auto-book via DTDC API
+- [India Post API](indiapost-api.md) — the two contracts, self-allocated barcodes, and why booking is still blocked
