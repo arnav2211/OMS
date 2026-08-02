@@ -6226,18 +6226,32 @@ async def _indiapost_get(path: str, params: dict, account_key: str, base: str = 
 
 
 async def indiapost_offices(pincode: str, account_key: str = "") -> list:
-    """Post offices under a pincode. Booking needs an 8-digit office_id."""
+    """Post offices under a pincode. Booking needs an 8-digit office_id.
+
+    The masterdata host serves this without a token, so serviceability works
+    even before the contract logins are configured. The doc says Bearer is
+    required, so fall back to an authenticated call if that ever starts biting.
+    """
+    params = {"pincode": pincode, "limit": 50, "office-type": "post"}
+    url = f"{INDIAPOST_MASTER}{INDIAPOST_PATH_OFFICES}"
+
+    def _unwrap(data):
+        return data if isinstance(data, list) else (data.get("data") or [])
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(url, params=params, headers={"accept": "application/json"})
+        if r.status_code == 200:
+            return _unwrap(r.json())
+    except Exception as e:
+        logging.warning(f"India Post office lookup (anonymous) failed: {e}")
+
     key = account_key or next(
         (k for k, a in INDIAPOST_ACCOUNTS.items() if a["username"]), "")
     if not key:
-        raise HTTPException(status_code=503, detail="India Post is not configured")
-    res = await _indiapost_get(INDIAPOST_PATH_OFFICES,
-                               {"pincode": pincode, "limit": 50, "office-type": "post"},
-                               key, base=INDIAPOST_MASTER)
-    if not res.get("ok"):
         return []
-    data = res["data"]
-    return data if isinstance(data, list) else (data.get("data") or [])
+    res = await _indiapost_get(INDIAPOST_PATH_OFFICES, params, key, base=INDIAPOST_MASTER)
+    return _unwrap(res["data"]) if res.get("ok") else []
 
 
 async def indiapost_delivery_office(pincode: str) -> Optional[dict]:
