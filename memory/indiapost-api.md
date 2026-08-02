@@ -34,5 +34,24 @@ endpoint this genuinely discriminates (999999 correctly returns nothing).
 Cap is **35 kg**, well past the Amazon 22 kg limit. Tariff weights must be
 whole grams. `final_amount` is already GST-inclusive, so no surcharge maths.
 
-Still needed before booking can work: `contract_id` (8 digits) per account and
-the allotted barcode series. Contact: integrations.cept@indiapost.gov.in
+**Barcode prefixes** (confirmed by the user, both check digits validate against
+our S10 generator): **1000061167 (small) books EM…IN**, e.g. EM299481938IN;
+**1000061169 (large) books CM…IN**, e.g. CM640588294IN. The allotted serial
+*ranges* are still unknown — only the prefixes are.
+
+Sandbox logins are separate identities from the portal customer IDs:
+1000061169 -> **9999365217**, 1000061167 -> 9999496326 (the latter would not
+authenticate as of 2 Aug 2026 and needs chasing).
+
+Four domestic tariff APIs are subscribed, not the two the document's booking
+section implies: speed-post, business-parcel, **letter-tariff** and
+**parcel-tariff**. Letter and Parcel often undercut Business Parcel at low
+weight but cannot be booked via process-articles, so they are quote-only.
+Letter/Parcel use a different response schema (`basic_charge`,
+`cgst`/`sgst`/`igst`, `total_amount`) than SP/BP (`base_tariff`, `total_tax`,
+`final_amount`).
+
+Still needed before booking can work: `contract_id` (8 digits) per account,
+linked to the customer and carrying a `service_type` — tested with the sandbox
+id, the production id, and the document's demo contract, all rejected — plus
+the allotted serial range. Contact: integrations.cept@indiapost.gov.in
