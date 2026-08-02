@@ -40,10 +40,12 @@ export default function CourierStatusDialog({ orderId, orderNumber, courier, doc
   return (
     <>
       {variant === "icon" ? (
-        <Button variant="ghost" size="icon" className={`h-7 w-7 ${className}`}
+        // Outline + label: a bare ghost icon was too easy to miss in the table.
+        <Button variant="outline" size="sm"
+          className={`h-6 px-1.5 text-[10px] gap-1 shrink-0 ${className}`}
           onClick={(e) => { e.stopPropagation(); e.preventDefault(); fetchStatus(); }}
           title="Live courier status" data-testid={`live-status-${orderId}`}>
-          <Activity className="w-3.5 h-3.5" />
+          <Activity className="w-3 h-3" /> Track
         </Button>
       ) : (
         <Button variant="outline" size="sm" className={`h-7 text-xs ${className}`}
