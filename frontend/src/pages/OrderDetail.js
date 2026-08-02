@@ -22,6 +22,7 @@ import { mobilePrintPdf } from "@/lib/mobilePrint";
 import { SlipScanner } from "@/components/SlipScanner";
 import { validateLrNumber, getTrackingUrl, extractPorterLink, isLrMandatory, COURIER_LR_PATTERNS, isOtherCourier } from "@/lib/courierTracking";
 import CourierSelect from "@/components/CourierSelect";
+import CourierStatusDialog from "@/components/CourierStatusDialog";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 
@@ -1016,6 +1017,13 @@ export default function OrderDetail() {
                         </a>
                       ) : null;
                     })()}
+                    <CourierStatusDialog
+                      orderId={id}
+                      orderNumber={order.order_number}
+                      courier={order.dispatch?.courier_name || order.courier_name}
+                      docket={order.dispatch?.lr_no}
+                      variant="button"
+                    />
                   </div>
                 )}
                 {order.dispatch?.porter_link && (

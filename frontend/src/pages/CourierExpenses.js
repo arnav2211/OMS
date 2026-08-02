@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import api from "@/lib/api";
+import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import CourierStatusDialog from "@/components/CourierStatusDialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, RefreshCw, Fuel, IndianRupee, Package, Plus, Trash2, Download, AlertTriangle, Activity } from "lucide-react";
+import { Loader2, RefreshCw, Fuel, IndianRupee, Package, Plus, Trash2, Download, AlertTriangle } from "lucide-react";
 
 const money = (n) => (n == null ? "—" : `₹${Number(n).toFixed(2)}`);
 const monthOptions = () => {
@@ -41,8 +43,6 @@ export default function CourierExpenses() {
   const [loading, setLoading] = useState(true);
   // DTDC invoices read as (freight + fuel) then GST, so that is the default view.
   const [showBreakdown, setShowBreakdown] = useState(false);
-  const [statusFor, setStatusFor] = useState(null);
-  const [statusData, setStatusData] = useState(null);
   const [damageFor, setDamageFor] = useState(null);
   const [damageNote, setDamageNote] = useState("");
   const [busy, setBusy] = useState({});
@@ -95,16 +95,6 @@ export default function CourierExpenses() {
       await api.delete(`/courier-expenses/fuel-surcharges/${id}`);
       toast.success("Removed"); load();
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
-  };
-
-  const viewStatus = async (row) => {
-    setStatusFor(row); setStatusData(null);
-    try {
-      const res = await api.get(`/courier-status/${row.order_id}`);
-      setStatusData(res.data);
-    } catch (err) {
-      setStatusData({ ok: false, message: err.response?.data?.detail || "Failed to fetch status" });
-    }
   };
 
   const toggleDamaged = async (row, damaged, note) => {
@@ -293,7 +283,13 @@ export default function CourierExpenses() {
                 {(data?.rows || []).map(r => (
                   <TableRow key={r.order_id} data-testid={`expense-row-${r.order_id}`}>
                     <TableCell className="text-sm whitespace-nowrap">{r.date}</TableCell>
-                    <TableCell className="font-mono text-sm">{r.order_number}</TableCell>
+                    <TableCell>
+                      <Link to={`/orders/${r.order_id}`}
+                        className="font-mono text-sm text-primary hover:underline"
+                        data-testid={`expense-order-link-${r.order_id}`}>
+                        {r.order_number}
+                      </Link>
+                    </TableCell>
                     <TableCell className="text-sm max-w-[180px] truncate">{r.customer_name}</TableCell>
                     <TableCell className="font-mono text-xs whitespace-nowrap" data-testid={`docket-${r.order_id}`}>
                       {r.docket_no || <span className="text-muted-foreground">—</span>}
@@ -318,10 +314,8 @@ export default function CourierExpenses() {
                     <TableCell className="text-sm font-mono text-right font-semibold">{money(r.total)}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        <Button variant="ghost" size="sm" className="h-7 text-xs px-2"
-                          onClick={() => viewStatus(r)} title="Live courier status" data-testid={`status-${r.order_id}`}>
-                          <Activity className="w-3 h-3" />
-                        </Button>
+                        <CourierStatusDialog orderId={r.order_id} orderNumber={r.order_number}
+                          courier={r.courier} docket={r.docket_no} />
                         {r.damaged ? (
                           <Badge className="bg-red-100 text-red-800 text-[10px] cursor-pointer"
                             title={r.damaged_note || "Received damaged"}
@@ -345,59 +339,6 @@ export default function CourierExpenses() {
           )}
         </CardContent>
       </Card>
-
-      {/* Live courier status */}
-      <Dialog open={!!statusFor} onOpenChange={(v) => { if (!v) { setStatusFor(null); setStatusData(null); } }}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Courier Status — {statusFor?.order_number}</DialogTitle></DialogHeader>
-          {!statusData ? (
-            <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin" /></div>
-          ) : !statusData.ok ? (
-            <p className="text-sm text-muted-foreground py-3">{statusData.message}</p>
-          ) : (
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between border-b pb-1">
-                <span className="text-muted-foreground">Courier</span><span>{statusData.courier}</span>
-              </div>
-              <div className="flex justify-between border-b pb-1">
-                <span className="text-muted-foreground">Docket</span>
-                <span className="font-mono">{statusData.docket}</span>
-              </div>
-              <div className="flex justify-between border-b pb-1">
-                <span className="text-muted-foreground">Status</span>
-                <span className="font-semibold">{statusData.status}</span>
-              </div>
-              {statusData.from && (
-                <div className="flex justify-between border-b pb-1">
-                  <span className="text-muted-foreground">Route</span>
-                  <span>{statusData.from} → {statusData.to}</span>
-                </div>
-              )}
-              {statusData.hub && (
-                <div className="flex justify-between border-b pb-1">
-                  <span className="text-muted-foreground">Hub</span><span>{statusData.hub}</span>
-                </div>
-              )}
-              {(statusData.events || []).length > 0 && (
-                <div className="pt-2">
-                  <p className="text-xs font-semibold mb-1">Recent events</p>
-                  <div className="space-y-1 max-h-44 overflow-y-auto">
-                    {statusData.events.map((e, i) => (
-                      <div key={i} className="text-xs border-l-2 border-primary/40 pl-2">
-                        <span className="font-medium">{e.customer_update || e.type}</span>
-                        {e.hub_name ? <span className="text-muted-foreground"> · {e.hub_name}</span> : null}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setStatusFor(null); setStatusData(null); }}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Mark damaged */}
       <Dialog open={!!damageFor} onOpenChange={(v) => { if (!v) setDamageFor(null); }}>

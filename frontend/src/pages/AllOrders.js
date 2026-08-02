@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { toast } from "sonner";
 import { Search, RefreshCw, Printer, PackageCheck, FileSpreadsheet } from "lucide-react";
 import DTDCExportDialog from "@/components/DTDCExportDialog";
+import CourierStatusDialog from "@/components/CourierStatusDialog";
 
 const STATUS_COLORS = {
   new: "bg-blue-100 text-blue-800",
@@ -484,6 +485,15 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
                               <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0" title={`Weighed: ${o.packaging?.weight_kg || "?"} KG · ${o.packaging?.num_boxes || 1} box(es)`}>
                                 Ready to Book
                               </Badge>
+                            )}
+                            {/* Live status is only meaningful once a docket exists */}
+                            {(o.dispatch?.lr_no || o.dtdc_shipment?.awb) && (
+                              <CourierStatusDialog
+                                orderId={o.id}
+                                orderNumber={o.order_number}
+                                courier={o.courier_name}
+                                docket={o.dispatch?.lr_no || o.dtdc_shipment?.awb}
+                              />
                             )}
                           </div>
                         </TableCell>
