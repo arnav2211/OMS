@@ -6438,9 +6438,15 @@ async def indiapost_compare(weight_g: int, dst_pin: str, dims: dict,
 
     quotes.sort(key=lambda q: q["total"])
     cheapest = quotes[0]
+    # The outright cheapest may be a product India Post won't let us book
+    # (Letter and Parcel are quote-only), so surface the cheapest we can
+    # actually dispatch as well rather than quoting a rate we cannot use.
+    bookable = [q for q in quotes if q["bookable"]]
+    cheapest_bookable = bookable[0] if bookable else None
     return {
         "ok": True, "serviceable": True,
         "cheapest": cheapest,
+        "cheapest_bookable": cheapest_bookable,
         "quotes": quotes,
         "savings": round(quotes[-1]["total"] - cheapest["total"], 2) if len(quotes) > 1 else 0.0,
         "office": {"office_id": office.get("office_id"), "office_name": office.get("office_name"),

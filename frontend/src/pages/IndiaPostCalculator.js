@@ -265,8 +265,18 @@ export default function IndiaPostCalculator() {
                         {result.quotes.map((q, i) => (
                           <tr key={i} className={`border-t ${i === 0 ? "bg-emerald-50/50 dark:bg-emerald-950/20" : ""}`}>
                             <td className="px-4 py-2">
-                              <div className="font-medium">{q.product_label}</div>
-                              <div className="text-xs text-muted-foreground">{q.account_label}</div>
+                              <div className="font-medium flex items-center gap-1.5">
+                                {q.product_label}
+                                {!q.bookable && (
+                                  <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 font-normal">
+                                    quote only
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                {q.bookable ? q.book_account_label || q.account_label
+                                            : "cannot be booked through the API"}
+                              </div>
                             </td>
                             <td className="text-right px-4 py-2">
                               {gramsLabel(q.chargeable_weight_g)}
@@ -284,6 +294,31 @@ export default function IndiaPostCalculator() {
                   </div>
                 </CardContent>
               </Card>
+
+              {result.cheapest_bookable &&
+               result.cheapest_bookable.product !== result.cheapest.product && (
+                <Card className="border-amber-500/50">
+                  <CardContent className="pt-4 flex gap-3 text-sm">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <p>
+                      {result.cheapest.product_label} is cheapest at{" "}
+                      {money(result.cheapest.total)} but cannot be booked through the
+                      API. The cheapest you can actually dispatch is{" "}
+                      <span className="font-medium">
+                        {result.cheapest_bookable.product_label}
+                      </span>{" "}
+                      at {money(result.cheapest_bookable.total)}.
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
+
+              {!result.cheapest_bookable && (
+                <p className="text-xs text-muted-foreground">
+                  None of these can be booked through the API yet — the contract ID is
+                  still outstanding.
+                </p>
+              )}
 
               {(result.skipped || []).length > 0 && (
                 <p className="text-xs text-muted-foreground">
