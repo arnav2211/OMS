@@ -1499,6 +1499,12 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
         packaging["checked_by"] = updates["checked_by"]
     if "num_boxes" in updates:
         packaging["num_boxes"] = updates["num_boxes"]
+    # Box dimensions in cm. Optional for DTDC/Amazon, but India Post prices on
+    # the greater of actual and volumetric weight and rejects parcels booked
+    # without them, so packing can record them at the same time as the weight.
+    for dim in ("length_cm", "breadth_cm", "height_cm"):
+        if dim in updates:
+            packaging[dim] = updates[dim]
     if "weight_kg" in updates:
         packaging["weight_kg"] = updates["weight_kg"]
         # Saving a weight means the box is sealed and weighed. That alone releases
@@ -6420,6 +6426,74 @@ class IndiaPostRateRequest(BaseModel):
     height: Optional[float] = 0
     insurance: Optional[float] = 0
     pod: Optional[bool] = False
+
+
+class IndiaPostCardRequest(BaseModel):
+    pincodes: Optional[List[str]] = None
+    weights_g: Optional[List[int]] = None
+
+
+# Sensible default grid: our own city plus one destination per broad zone.
+INDIAPOST_CARD_PINCODES = ["440001", "400001", "110001", "500051", "781001"]
+INDIAPOST_CARD_WEIGHTS = [250, 500, 1000, 2000, 5000, 10000, 20000, 35000]
+
+
+def _card_dims(weight_g: int) -> dict:
+    """Representative box for each weight band, so volumetric weight is realistic."""
+    if weight_g <= 1000:
+        return {"length": 20, "breadth": 15, "height": 10}
+    if weight_g <= 5000:
+        return {"length": 30, "breadth": 25, "height": 20}
+    return {"length": 45, "breadth": 35, "height": 30}
+
+
+@api_router.post("/indiapost/rate-card")
+async def indiapost_rate_card(req: IndiaPostCardRequest, user=Depends(get_current_user)):
+    """Weight x destination grid across both contracts, cheapest marked.
+
+    Quoted live, so it always reflects the contracted rates rather than a
+    table that silently goes stale when India Post revises tariffs.
+    """
+    if user["role"] == "telecaller":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    pincodes = [p for p in (req.pincodes or INDIAPOST_CARD_PINCODES)
+                if re.fullmatch(r"\d{6}", str(p).strip())][:8]
+    weights = [int(w) for w in (req.weights_g or INDIAPOST_CARD_WEIGHTS)
+               if 0 < int(w) <= INDIAPOST_MAX_WEIGHT_G][:12]
+    if not pincodes or not weights:
+        raise HTTPException(status_code=400, detail="Give at least one pincode and weight")
+
+    offices = await asyncio.gather(*[indiapost_delivery_office(p) for p in pincodes],
+                                   return_exceptions=True)
+    columns = [{"pincode": p,
+                "office": (o.get("office_name") if isinstance(o, dict) else None),
+                "city": (o.get("city_name") if isinstance(o, dict) else None),
+                "serviceable": isinstance(o, dict) and bool(o)}
+               for p, o in zip(pincodes, offices)]
+
+    # Cap concurrency: this is up to 12 x 8 x 2 upstream calls.
+    sem = asyncio.Semaphore(6)
+
+    async def cell(weight_g: int, pincode: str) -> dict:
+        async with sem:
+            res = await indiapost_compare(weight_g, pincode, _card_dims(weight_g))
+        if not res.get("ok"):
+            return {"ok": False, "reason": res.get("message")}
+        by_product = {q["product_label"]: q["total"] for q in res["quotes"]}
+        return {"ok": True, "cheapest": res["cheapest"]["product_label"],
+                "cheapest_account": res["cheapest"]["account"],
+                "total": res["cheapest"]["total"],
+                "savings": res["savings"], "by_product": by_product}
+
+    rows = []
+    for w in weights:
+        cells = await asyncio.gather(*[cell(w, p) for p in pincodes])
+        rows.append({"weight_g": w, "cells": cells})
+
+    return {"ok": True, "origin_pincode": INDIAPOST_ORIGIN_PINCODE,
+            "columns": columns, "rows": rows,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "sandbox": "test.cept.gov.in" in INDIAPOST_BASE}
 
 
 @api_router.post("/indiapost/rate")

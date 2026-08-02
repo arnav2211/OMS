@@ -11,7 +11,7 @@ import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
   FileText, TrendingUp, Bell, ShoppingBag, Calculator, MapPinCheck, Megaphone,
-  ChevronDown, Layers, Navigation, IndianRupee,
+  ChevronDown, Layers, Navigation, IndianRupee, Mail,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -39,6 +39,7 @@ const NAV_ITEMS = {
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
+    { label: "India Post", icon: Mail, path: "/indiapost" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
   dispatch: [
@@ -49,6 +50,7 @@ const NAV_ITEMS = {
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
+    { label: "India Post", icon: Mail, path: "/indiapost" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
   admin: [
@@ -75,6 +77,7 @@ const NAV_ITEMS = {
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
+    { label: "India Post", icon: Mail, path: "/indiapost" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
   accounts: [
@@ -84,6 +87,7 @@ const NAV_ITEMS = {
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
+    { label: "India Post", icon: Mail, path: "/indiapost" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
 };
