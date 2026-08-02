@@ -4360,31 +4360,23 @@ def calc_standard(category: str, weight_kg: float) -> int:
 def ceil_to_10(value: int) -> int:
     return math.ceil(value / 10) * 10
 
-@api_router.post("/dtdc/calculate")
-async def dtdc_calculate(body: dict):
-    pincode = str(body.get("pincode", "")).strip()
-    kg = float(body.get("kg", 0))
-    grams = float(body.get("grams", 0))
-    total_weight = (kg * 1000 + grams) / 1000
+def dtdc_quote_for(pincode: str, total_weight: float) -> Optional[dict]:
+    """Cheaper of Ground Express / Standard for a pincode, and the series that implies.
 
+    Shared by the /dtdc/calculate endpoint and the API booking flow so both route
+    to exactly the same account.
+    """
+    pincode = str(pincode or "").strip()
     if pincode not in _dtdc_pincodes:
-        return {"serviceable": False, "message": "This pincode is not serviceable by DTDC."}
-
+        return None
     info = _dtdc_pincodes[pincode]
     category = info["category"]
-
     ground_cost = calc_ground_express(category, total_weight)
     standard_cost = calc_standard(category, total_weight)
-
     if ground_cost <= standard_cost:
-        final_cost = ceil_to_10(ground_cost)
-        series = "D-Series"
-        selected_method = "Ground Express"
+        final_cost, series, selected_method = ceil_to_10(ground_cost), "D-Series", "Ground Express"
     else:
-        final_cost = ceil_to_10(standard_cost)
-        series = "M-Series"
-        selected_method = "Standard"
-
+        final_cost, series, selected_method = ceil_to_10(standard_cost), "M-Series", "Standard"
     return {
         "serviceable": True,
         "pincode": pincode,
@@ -4398,6 +4390,18 @@ async def dtdc_calculate(body: dict):
         "series": series,
         "final_charge": final_cost,
     }
+
+
+@api_router.post("/dtdc/calculate")
+async def dtdc_calculate(body: dict):
+    pincode = str(body.get("pincode", "")).strip()
+    kg = float(body.get("kg", 0))
+    grams = float(body.get("grams", 0))
+    total_weight = (kg * 1000 + grams) / 1000
+    result = dtdc_quote_for(pincode, total_weight)
+    if not result:
+        return {"serviceable": False, "message": "This pincode is not serviceable by DTDC."}
+    return result
 
 @api_router.post("/dtdc/carrier-risk")
 async def dtdc_carrier_risk(body: dict):
@@ -4429,9 +4433,322 @@ async def dtdc_check_pincode(pincode: str):
     return {"serviceable": False, "message": "This pincode is not serviceable by DTDC."}
 
 
-# ─── Shree Anjani Serviceability Checker ─────────────────────────────────
-
+# ─── DTDC Consignment Booking API (Shipsy-hosted) ────────────────────────
+# Replaces the manual Excel softdata upload. Three accounts with different
+# booking conditions, mirroring the rules the Excel export used:
+#   D-Series (Ground Express cheaper)  -> RL1386, GROUND EXPRESS
+#   M-Series (Standard cheaper)        -> RL1423, STD EXP-A
+#   Carrier risk ticked                -> RL1387, same service type, risk ON
 import httpx
+
+DTDC_BASE_URL = os.environ.get("DTDC_BASE_URL", "https://app.shipsy.in").rstrip("/")
+DTDC_PATH_BOOK = "/api/customer/integration/consignment/upload/softdata/v2"
+DTDC_PATH_TRACK = "/api/customer/integration/consignment/track"
+DTDC_PATH_LABEL = "/api/customer/integration/consignment/shippinglabel/stream"
+DTDC_PATH_CANCEL = "/api/customer/integration/consignment/cancel"
+
+# Service type strings. DTDC's own Excel template used these names; they are
+# env-overridable because the API may expect different service codes.
+DTDC_SERVICE_GROUND = os.environ.get("DTDC_SERVICE_GROUND", "GROUND EXPRESS")
+DTDC_SERVICE_STD = os.environ.get("DTDC_SERVICE_STD", "STD EXP-A")
+
+DTDC_ACCOUNTS = {
+    "RL1386": {
+        "api_key": os.environ.get("DTDC_API_KEY_RL1386", ""),
+        "customer_code": os.environ.get("DTDC_CUSTOMER_CODE_RL1386", "RL1386"),
+    },
+    "RL1387": {
+        "api_key": os.environ.get("DTDC_API_KEY_RL1387", ""),
+        "customer_code": os.environ.get("DTDC_CUSTOMER_CODE_RL1387", "RL1387"),
+    },
+    "RL1423": {
+        "api_key": os.environ.get("DTDC_API_KEY_RL1423", ""),
+        "customer_code": os.environ.get("DTDC_CUSTOMER_CODE_RL1423", "RL1423"),
+    },
+}
+
+
+def _dtdc_configured() -> bool:
+    return any(a["api_key"] for a in DTDC_ACCOUNTS.values())
+
+
+def _dtdc_route(order: dict, series: str) -> tuple:
+    """(account_key, service_type_id, risk_surcharge) for an order."""
+    service = DTDC_SERVICE_GROUND if series == "D-Series" else DTDC_SERVICE_STD
+    if order.get("carrier_risk_applicable"):
+        # Carrier-risk consignments always book on RL1387 with the surcharge on;
+        # the service type still follows the detected series.
+        return "RL1387", service, True
+    return ("RL1386" if series == "D-Series" else "RL1423"), service, False
+
+
+def _dtdc_party_origin() -> dict:
+    return {
+        "name": COMPANY["name"],
+        "phone": _to_local_phone(COMPANY["mobile"]),
+        "address_line_1": "B Wing, Poonam Heights, Pandey Layout, Khamla",
+        "address_line_2": "Nagpur",
+        "pincode": os.environ.get("DTDC_ORIGIN_PINCODE", "440025"),
+        "city": "Nagpur",
+        "district": "Nagpur",
+        "state": "Maharashtra",
+        "country": "India",
+    }
+
+
+def _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phone) -> dict:
+    sa = order.get("shipping_address") or {}
+    declared = _declared_value(order)
+    created = (order.get("created_at") or datetime.now(timezone.utc).isoformat())[:10]
+    per_piece = round(weight / max(1, boxes), 3)
+    return {
+        "action_type": "single_pickup",
+        "consignment_type": "forward",
+        "movement_type": "forward",
+        "load_type": "NON-DOCUMENT",
+        "description": "Aroma products",
+        "customer_code": account["customer_code"],
+        "reference_number": order.get("order_number") or order["id"][:20],
+        "customer_reference_number": order.get("order_number") or "",
+        "service_type_id": service,
+        "is_risk_surcharge_applicable": bool(risk),
+        "dimension_unit": "cm",
+        "length": "5", "width": "5", "height": "5",
+        "weight_unit": "kg",
+        "weight": str(weight),
+        "num_pieces": boxes,
+        "declared_value": declared,
+        "declared_value_without_tax": declared,
+        "invoice_number": order.get("order_number") or "",
+        "invoice_date": created,
+        "tax_details": [{"sender_gstin": COMPANY["gstin"]}],
+        "origin_details": _dtdc_party_origin(),
+        "destination_details": {
+            "name": sa.get("address_name") or order.get("customer_name") or "Customer",
+            "phone": phone,
+            "address_line_1": (sa.get("address_line") or "")[:120],
+            "address_line_2": "",
+            "pincode": sa.get("pincode") or "",
+            "city": sa.get("city") or "",
+            "district": sa.get("city") or "",
+            "state": sa.get("state") or "",
+            "country": "India",
+        },
+        "pieces_detail": [{
+            "description": "Aroma products",
+            "declared_value": str(round(declared / max(1, boxes), 2)),
+            "weight": str(per_piece),
+            "length": "5", "width": "5", "height": "5",
+            "weight_unit": "kg",
+            "dimension_unit": "cm",
+        } for _ in range(max(1, boxes))],
+    }
+
+
+async def _dtdc_prepare(order: dict) -> dict:
+    """Resolve weight, series, account and payload for an order — books nothing."""
+    pkg = order.get("packaging") or {}
+    raw_weight = str(pkg.get("weight_kg", "")).strip()
+    if not raw_weight:
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+    weight = float(raw_weight)
+    if weight <= 0:
+        raise HTTPException(status_code=400, detail="Weight must be greater than zero")
+    try:
+        boxes = max(1, int(float(pkg.get("num_boxes") or 1)))
+    except (TypeError, ValueError):
+        boxes = 1
+    sa = order.get("shipping_address") or {}
+    quote = dtdc_quote_for(sa.get("pincode"), weight)
+    if not quote:
+        raise HTTPException(status_code=400, detail="This pincode is not serviceable by DTDC")
+    acct_key, service, risk = _dtdc_route(order, quote["series"])
+    account = DTDC_ACCOUNTS[acct_key]
+    if not account["api_key"]:
+        raise HTTPException(status_code=400, detail=f"DTDC account {acct_key} has no API key configured")
+    phone = await _order_recipient_phone(order)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Customer has no valid phone number — add one before booking")
+    return {
+        "account_key": acct_key, "account": account, "service": service, "risk": risk,
+        "quote": quote, "weight": weight, "boxes": boxes,
+        "payload": _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phone),
+    }
+
+
+@api_router.get("/dtdc/bookable")
+async def dtdc_bookable_orders(user=Depends(get_current_user)):
+    """DTDC orders packing has weighed, with the account each would book on."""
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    orders = await db.orders.find({
+        "courier_name": {"$regex": r"^\s*dtdc", "$options": "i"},
+        "status": {"$nin": ["cancelled", "dispatched"]},
+        "packaging.weight_kg": {"$nin": ["", None]},
+    }, {"_id": 0}).sort("created_at", -1).to_list(300)
+    out = []
+    for o in orders:
+        pkg = o.get("packaging") or {}
+        sa = o.get("shipping_address") or {}
+        try:
+            weight = float(str(pkg.get("weight_kg", "")).strip() or 0)
+        except ValueError:
+            continue
+        if weight <= 0:
+            continue
+        quote = dtdc_quote_for(sa.get("pincode"), weight)
+        acct_key, service, risk = _dtdc_route(o, quote["series"]) if quote else ("", "", False)
+        out.append({
+            "id": o["id"], "order_number": o.get("order_number"),
+            "customer_name": o.get("customer_name"), "status": o.get("status"),
+            "weight_kg": pkg.get("weight_kg"), "num_boxes": pkg.get("num_boxes") or "1",
+            "shipping_address": {"city": sa.get("city"), "pincode": sa.get("pincode")},
+            "carrier_risk": bool(o.get("carrier_risk_applicable")),
+            "serviceable": bool(quote),
+            "series": (quote or {}).get("series"),
+            "est_charge": (quote or {}).get("final_charge"),
+            "account": acct_key, "service_type": service, "risk_surcharge": risk,
+            "dtdc_shipment": o.get("dtdc_shipment"),
+        })
+    return out
+
+
+class DtdcBookRequest(BaseModel):
+    order_id: str
+
+
+@api_router.post("/dtdc/preview")
+async def dtdc_preview(req: DtdcBookRequest, user=Depends(get_current_user)):
+    """Exactly what would be booked — account, service, charge. Books nothing."""
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    p = await _dtdc_prepare(order)
+    return {
+        "ok": True, "account": p["account_key"], "service_type": p["service"],
+        "risk_surcharge": p["risk"], "series": p["quote"]["series"],
+        "est_charge": p["quote"]["final_charge"], "city": p["quote"]["city"],
+        "weight_kg": p["weight"], "num_boxes": p["boxes"],
+        "declared_value": p["payload"]["declared_value"],
+    }
+
+
+@api_router.post("/dtdc/book")
+async def dtdc_book(req: DtdcBookRequest, user=Depends(get_current_user)):
+    """BOOKS a real DTDC consignment on the routed account."""
+    if user["role"] not in ["admin", "dispatch", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized to book")
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if (order.get("dtdc_shipment") or {}).get("reference_number"):
+        raise HTTPException(status_code=400, detail="This order is already booked with DTDC")
+    p = await _dtdc_prepare(order)
+    async with httpx.AsyncClient(timeout=45) as c:
+        r = await c.post(f"{DTDC_BASE_URL}{DTDC_PATH_BOOK}",
+                         headers={"api-key": p["account"]["api_key"], "content-type": "application/json"},
+                         json=p["payload"])
+    try:
+        data = r.json()
+    except Exception:
+        data = {"raw": r.text[:500]}
+    if r.status_code not in (200, 201) or data.get("success") is False:
+        logging.error(f"DTDC booking failed ({p['account_key']}): {r.status_code} {r.text[:400]}")
+        raise HTTPException(status_code=400, detail=f"DTDC booking failed: {str(data)[:300]}")
+
+    # DTDC echoes the consignment/AWB number; shape varies, so look in likely spots.
+    payload = data.get("data") if isinstance(data.get("data"), dict) else data
+    awb = ""
+    for key in ("reference_number", "consignment_number", "cn_number", "awb", "awb_number"):
+        val = (payload or {}).get(key)
+        if isinstance(val, str) and val.strip():
+            awb = val.strip()
+            break
+    if not awb and isinstance(data.get("data"), list) and data["data"]:
+        first = data["data"][0]
+        if isinstance(first, dict):
+            awb = str(first.get("reference_number") or first.get("consignment_number") or "").strip()
+    reference = p["payload"]["reference_number"]
+
+    shipment = {
+        "account": p["account_key"],
+        "customer_code": p["account"]["customer_code"],
+        "service_type": p["service"],
+        "risk_surcharge": p["risk"],
+        "series": p["quote"]["series"],
+        "reference_number": reference,
+        "awb": awb,
+        "est_charge": p["quote"]["final_charge"],
+        "weight_kg": p["weight"],
+        "num_boxes": p["boxes"],
+        "declared_value": p["payload"]["declared_value"],
+        "recipient_phone": p["payload"]["destination_details"]["phone"],
+        "booked_by": user["name"],
+        "booked_at": datetime.now(timezone.utc).isoformat(),
+        "raw_response": str(data)[:1000],
+    }
+    await db.orders.update_one({"id": req.order_id}, {"$set": {
+        "dtdc_shipment": shipment,
+        "courier_name": "DTDC",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    safe = {k: v for k, v in shipment.items() if k != "raw_response"}
+    return {"ok": True, "shipment": safe}
+
+
+@api_router.get("/dtdc/label/{order_id}")
+async def dtdc_label(order_id: str, token: str = "", user=None):
+    """Stream the DTDC shipping label for a booked consignment."""
+    if token:
+        user = await get_user_from_token_param(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    sh = order.get("dtdc_shipment") or {}
+    ref = sh.get("awb") or sh.get("reference_number")
+    if not ref:
+        raise HTTPException(status_code=404, detail="This order is not booked with DTDC")
+    account = DTDC_ACCOUNTS.get(sh.get("account") or "", {})
+    if not account.get("api_key"):
+        raise HTTPException(status_code=400, detail="DTDC API key not configured for this account")
+    async with httpx.AsyncClient(timeout=45) as c:
+        r = await c.get(f"{DTDC_BASE_URL}{DTDC_PATH_LABEL}",
+                        params={"reference_number": ref},
+                        headers={"api-key": account["api_key"]})
+    if r.status_code != 200:
+        raise HTTPException(status_code=400, detail=f"DTDC label failed: {r.text[:300]}")
+    media = r.headers.get("content-type", "application/pdf").split(";")[0]
+    ext = "pdf" if "pdf" in media else ("png" if "png" in media else "bin")
+    return StreamingResponse(
+        io.BytesIO(r.content), media_type=media,
+        headers={"Content-Disposition": f"inline; filename=dtdc-label-{ref}.{ext}"},
+    )
+
+
+@api_router.get("/dtdc/track/{order_id}")
+async def dtdc_track(order_id: str, user=Depends(get_current_user)):
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    sh = order.get("dtdc_shipment") or {}
+    ref = sh.get("awb") or sh.get("reference_number")
+    if not ref:
+        raise HTTPException(status_code=404, detail="This order is not booked with DTDC")
+    account = DTDC_ACCOUNTS.get(sh.get("account") or "", {})
+    async with httpx.AsyncClient(timeout=25) as c:
+        r = await c.get(f"{DTDC_BASE_URL}{DTDC_PATH_TRACK}",
+                        params={"reference_number": ref},
+                        headers={"api-key": account.get("api_key", "")})
+    if r.status_code != 200:
+        return {"ok": False, "message": f"HTTP {r.status_code}", "detail": r.text[:300]}
+    return {"ok": True, "tracking": r.json()}
+
+
+# ─── Shree Anjani Serviceability Checker ─────────────────────────────────
 
 @api_router.get("/anjani/check/{pincode}")
 async def anjani_check_pincode(pincode: str):
@@ -4624,7 +4941,7 @@ def _to_local_phone(raw) -> str:
     return digits[-10:] if len(digits) >= 10 else ""
 
 
-def _amazon_declared_value(order: dict) -> float:
+def _declared_value(order: dict) -> float:
     """Declared (insured) value for Amazon.
 
     GST invoices already carry tax in the grand total, so it is declared as-is.
@@ -4756,7 +5073,7 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
         "phoneNumber": phone or AMAZON_SHIP["origin_phone"],
     }
     token = await _amazon_access_token()
-    body = _amazon_rates_body(ship_to, pkg.get("weight_kg"), _amazon_declared_value(order), order.get("order_number") or "ord")
+    body = _amazon_rates_body(ship_to, pkg.get("weight_kg"), _declared_value(order), order.get("order_number") or "ord")
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/rates",
                          headers={"x-amz-access-token": token, "content-type": "application/json"}, json=body)
@@ -4823,7 +5140,7 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
     async with httpx.AsyncClient(timeout=40) as c:
         rr = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/rates",
                           headers=headers,
-                          json=_amazon_rates_body(ship_to, pkg.get("weight_kg"), _amazon_declared_value(order), ref))
+                          json=_amazon_rates_body(ship_to, pkg.get("weight_kg"), _declared_value(order), ref))
         if rr.status_code != 200:
             raise HTTPException(status_code=400, detail=f"Amazon rates failed: {rr.text[:300]}")
         payload = rr.json().get("payload") or rr.json()
