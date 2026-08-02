@@ -6103,6 +6103,8 @@ INDIAPOST_PATH_LOGIN = "/v1/access/login"
 INDIAPOST_PATH_OFFICES = "/v1/offices/limited-details"          # on MASTER
 INDIAPOST_PATH_TARIFF_SP = "/v1/speed-post/tariffs"
 INDIAPOST_PATH_TARIFF_BP = "/v1/business-parcel-tariff/calculate"
+INDIAPOST_PATH_TARIFF_LETTER = "/v1/letter-tariff/calculate"
+INDIAPOST_PATH_TARIFF_PARCEL = "/v1/parcel-tariff/calculate"
 INDIAPOST_PATH_BOOK = "/process-articles"                       # + /{customer_id}
 INDIAPOST_PATH_LABEL = "/v1/label/create/domestic"
 INDIAPOST_PATH_TRACK = "/v1/tracking/bulk"
@@ -6128,7 +6130,26 @@ INDIAPOST_PRODUCTS = {
         "l": (14, 150), "b": (9, 150), "h": (1, 150),
         "path": INDIAPOST_PATH_TARIFF_BP, "code": "BP", "shape": "NROL",
     },
+    # These two are subscribed on the account but absent from the approach
+    # document's booking section, so they are quotable but not (yet) bookable.
+    # Envelopes are left wide because DoP publishes no limits for them here;
+    # an out-of-range article simply comes back as a refused quote.
+    "LETTER": {
+        "label": "Registered Letter", "service": "LETTER",
+        "w_min": 1, "w_max": 2000,
+        "l": (1, 60), "b": (1, 60), "h": (1, 60),
+        "path": INDIAPOST_PATH_TARIFF_LETTER, "code": "LETTER", "shape": "DOC",
+    },
+    "PARCEL": {
+        "label": "Parcel", "service": "PARCEL",
+        "w_min": 1, "w_max": 35000,
+        "l": (1, 150), "b": (1, 150), "h": (1, 150),
+        "path": INDIAPOST_PATH_TARIFF_PARCEL, "code": "PARCEL", "shape": "NROL",
+    },
 }
+
+# Products India Post will actually let us book through process-articles.
+INDIAPOST_BOOKABLE_PRODUCTS = {"SP_INLAND_DOC", "SP_INLAND_PARCEL", "BUSINESS_PARCEL"}
 
 # Accounts. "small" and "large" are our names for the two contracts; each may
 # serve several product codes, and every eligible product is quoted.
@@ -6317,9 +6338,25 @@ async def indiapost_quote_product(account_key: str, product: str, weight_g: int,
         return {"ok": False, "product": product, "account": account_key,
                 "error": d.get("message") or "tariff refused"}
 
+    # Speed Post and Business Parcel answer with base_tariff/total_tax/final_amount;
+    # Letter and Parcel use basic_charge/cgst+sgst+igst/total_amount. Normalise.
     vas = d.get("vas_charges")
     vas_total = (sum(float(v or 0) for v in vas.values()) if isinstance(vas, dict)
                  else float(vas or 0))
+    for extra in ("registration_charge", "acknowledgment_charge", "insurance_charge",
+                  "vpp_charge", "otp_charges", "door_delivery_charge", "cod_charge"):
+        vas_total += float(d.get(extra) or 0)
+
+    base = d.get("base_tariff")
+    if base is None:
+        base = d.get("basic_charge", d.get("total_before_tax", 0))
+    tax = d.get("total_tax")
+    if tax is None:
+        tax = sum(float(d.get(k) or 0) for k in ("cgst", "sgst", "igst"))
+    total = d.get("final_amount")
+    if total is None:
+        total = d.get("total_amount", 0)
+
     return {
         "ok": True,
         "account": account_key,
@@ -6329,13 +6366,16 @@ async def indiapost_quote_product(account_key: str, product: str, weight_g: int,
         "product_label": spec["label"],
         "service": spec["service"],
         "weight_g": int(weight_g),
-        "chargeable_weight_g": d.get("chargeable_weight") or weight_g,
-        "volumetric_weight_g": d.get("volumetric_weight"),
-        "base_tariff": float(d.get("base_tariff") or 0),
+        "chargeable_weight_g": (d.get("chargeable_weight") or d.get("applicable_weight")
+                                or weight_g),
+        "volumetric_weight_g": d.get("volumetric_weight") or d.get("dimensional_weight"),
+        "base_tariff": round(float(base or 0), 2),
         "vas_charges": round(vas_total, 2),
-        "tax": float(d.get("total_tax") or 0),
-        "total": float(d.get("final_amount") or 0),      # GST already included
+        "tax": round(float(tax or 0), 2),
+        "total": round(float(total or 0), 2),            # GST already included
         "distance_km": d.get("distance_km"),
+        "zone": d.get("zone_description") or d.get("zone"),
+        "weight_slab": d.get("weight_slab"),
         "delivery_type": d.get("delivery_type"),
         "assured_delivery": d.get("assured_delivery_day"),
     }
@@ -6393,7 +6433,8 @@ async def indiapost_compare(weight_g: int, dst_pin: str, dims: dict,
                          or q["requested_product"] in a["products"]), "")
         q["book_account"] = book_key
         q["book_account_label"] = INDIAPOST_ACCOUNTS[book_key]["label"] if book_key else ""
-        q["bookable"] = bool(book_key and INDIAPOST_ACCOUNTS[book_key]["contract_id"])
+        q["bookable"] = bool(book_key and INDIAPOST_ACCOUNTS[book_key]["contract_id"]
+                             and q["product"] in INDIAPOST_BOOKABLE_PRODUCTS)
 
     quotes.sort(key=lambda q: q["total"])
     cheapest = quotes[0]
