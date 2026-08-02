@@ -4926,14 +4926,10 @@ async def _dtdc_sync_all() -> list:
         try:
             sh = o.get("dtdc_shipment") or {}
             ref = sh.get("awb") or sh.get("reference_number")
-            account = DTDC_ACCOUNTS.get(sh.get("account") or "", {})
-            if not ref or not account.get("api_key"):
+            if not ref:
                 continue
-            async with httpx.AsyncClient(timeout=25) as c:
-                r = await c.get(f"{DTDC_BASE_URL}{DTDC_PATH_TRACK}",
-                                params={"reference_number": ref},
-                                headers={"api-key": account["api_key"]})
-            if r.status_code != 200:
+            r = await _dtdc_track_any(ref, sh.get("account"))
+            if r is None or r.status_code != 200:
                 continue
             picked = _dtdc_pickup_time(r.json())
             if not picked:
@@ -4978,11 +4974,9 @@ async def dtdc_track(order_id: str, user=Depends(get_current_user)):
     ref = sh.get("awb") or sh.get("reference_number")
     if not ref:
         raise HTTPException(status_code=404, detail="This order is not booked with DTDC")
-    account = DTDC_ACCOUNTS.get(sh.get("account") or "", {})
-    async with httpx.AsyncClient(timeout=25) as c:
-        r = await c.get(f"{DTDC_BASE_URL}{DTDC_PATH_TRACK}",
-                        params={"reference_number": ref},
-                        headers={"api-key": account.get("api_key", "")})
+    r = await _dtdc_track_any(ref, sh.get("account"))
+    if r is None:
+        return {"ok": False, "message": "No DTDC API key configured"}
     if r.status_code != 200:
         return {"ok": False, "message": f"HTTP {r.status_code}", "detail": r.text[:300]}
     return {"ok": True, "tracking": r.json()}
@@ -5190,6 +5184,52 @@ async def _anjani_track(docket: str) -> Optional[dict]:
     return None
 
 
+def _dtdc_account_for_docket(docket: str) -> str:
+    """Which account a docket most likely belongs to, from its series.
+
+    Mirrors _dtdc_route: D-series books on RL1386, M-series on RL1423. Only a
+    hint — carrier-risk consignments of either series sit on RL1387 — so the
+    caller still falls back to the other keys.
+    """
+    first = (str(docket or "").strip()[:1] or "").upper()
+    return {"D": "RL1386", "M": "RL1423"}.get(first, "")
+
+
+async def _dtdc_track_any(docket: str, preferred: str = ""):
+    """Track a docket, trying the account that owns it.
+
+    DTDC's tracking API is account-scoped: a consignment booked on RL1423
+    returns 400 "Reference number is not valid" from any other key. Orders
+    booked through the Excel flow carry no dtdc_shipment, so the account has
+    to be inferred from the series and then confirmed by trying the rest.
+    Returns the first 200, else the last response, or None if unconfigured.
+    """
+    order_keys, seen = [], set()
+    for k in (preferred, _dtdc_account_for_docket(docket)):
+        if k and k in DTDC_ACCOUNTS and k not in seen:
+            order_keys.append(k)
+            seen.add(k)
+    order_keys += [k for k in DTDC_ACCOUNTS if k not in seen]
+
+    last = None
+    async with httpx.AsyncClient(timeout=25) as c:
+        for name in order_keys:
+            key = DTDC_ACCOUNTS[name].get("api_key")
+            if not key:
+                continue
+            try:
+                r = await c.get(f"{DTDC_BASE_URL}{DTDC_PATH_TRACK}",
+                                params={"reference_number": docket},
+                                headers={"api-key": key})
+            except Exception as e:
+                logging.warning(f"DTDC track {docket} on {name} failed: {e}")
+                continue
+            if r.status_code == 200:
+                return r
+            last = r
+    return last
+
+
 @api_router.get("/courier-status/{order_id}")
 async def courier_status(order_id: str, user=Depends(get_current_user)):
     """Live status from the courier for a dispatched order (DTDC or Anjani).
@@ -5253,15 +5293,9 @@ async def courier_status(order_id: str, user=Depends(get_current_user)):
 
     if courier == "DTDC":
         sh = order.get("dtdc_shipment") or {}
-        account = DTDC_ACCOUNTS.get(sh.get("account") or "", {})
-        key = account.get("api_key") or next(
-            (a["api_key"] for a in DTDC_ACCOUNTS.values() if a["api_key"]), "")
-        if not key:
+        r = await _dtdc_track_any(docket, sh.get("account"))
+        if r is None:
             return {"ok": False, "message": "No DTDC API key configured"}
-        async with httpx.AsyncClient(timeout=25) as c:
-            r = await c.get(f"{DTDC_BASE_URL}{DTDC_PATH_TRACK}",
-                            params={"reference_number": docket},
-                            headers={"api-key": key})
         if r.status_code != 200:
             return {"ok": False, "courier": courier, "docket": docket,
                     "message": f"DTDC returned HTTP {r.status_code}", "detail": r.text[:200]}
