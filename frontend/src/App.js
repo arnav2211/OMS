@@ -85,7 +85,7 @@ function AppRoutes() {
       <Route path="/dtdc" element={<ProtectedRoute><DTDCCalculator /></ProtectedRoute>} />
       <Route path="/anjani" element={<ProtectedRoute><AnjaniChecker /></ProtectedRoute>} />
       <Route path="/amazon-check" element={<ProtectedRoute><AmazonChecker /></ProtectedRoute>} />
-      <Route path="/indiapost" element={<ProtectedRoute allowedRoles={["admin","dispatch","packaging","accounts"]}><IndiaPostCalculator /></ProtectedRoute>} />
+      <Route path="/indiapost" element={<ProtectedRoute allowedRoles={["admin"]}><IndiaPostCalculator /></ProtectedRoute>} />
       <Route path="/courier-expenses" element={<ProtectedRoute allowedRoles={["admin","dispatch","packaging","accounts"]}><CourierExpenses /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

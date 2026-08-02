@@ -6478,6 +6478,8 @@ async def indiapost_compare(weight_g: int, dst_pin: str, dims: dict,
 @api_router.get("/indiapost/status")
 async def indiapost_status(user=Depends(get_current_user)):
     """Which contracts are wired up — drives the UI's setup hints."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
     return {
         "configured": _indiapost_configured(),
         "base_url": INDIAPOST_BASE,
@@ -6494,6 +6496,8 @@ async def indiapost_status(user=Depends(get_current_user)):
 
 @api_router.get("/indiapost/check/{pincode}")
 async def indiapost_check_pincode(pincode: str, user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
     if not re.fullmatch(r"\d{6}", str(pincode or "").strip()):
         raise HTTPException(status_code=400, detail="Pincode must be 6 digits")
     office = await indiapost_delivery_office(pincode)
@@ -6640,7 +6644,7 @@ async def indiapost_rate_card(req: IndiaPostCardRequest, user=Depends(get_curren
     Quoted live, so it always reflects the contracted rates rather than a
     table that silently goes stale when India Post revises tariffs.
     """
-    if user["role"] == "telecaller":
+    if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
     pincodes = [p for p in (req.pincodes or INDIAPOST_CARD_PINCODES)
                 if re.fullmatch(r"\d{6}", str(p).strip())][:8]
@@ -6685,7 +6689,7 @@ async def indiapost_rate_card(req: IndiaPostCardRequest, user=Depends(get_curren
 @api_router.post("/indiapost/rate")
 async def indiapost_rate(req: IndiaPostRateRequest, user=Depends(get_current_user)):
     """Rate calculator — both contracts quoted, cheapest returned."""
-    if user["role"] == "telecaller":
+    if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
     if not re.fullmatch(r"\d{6}", str(req.pincode or "").strip()):
         raise HTTPException(status_code=400, detail="Pincode must be 6 digits")

@@ -39,7 +39,6 @@ const NAV_ITEMS = {
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
-    { label: "India Post", icon: Mail, path: "/indiapost" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
   dispatch: [
@@ -50,7 +49,6 @@ const NAV_ITEMS = {
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
-    { label: "India Post", icon: Mail, path: "/indiapost" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
   admin: [
@@ -87,7 +85,6 @@ const NAV_ITEMS = {
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
-    { label: "India Post", icon: Mail, path: "/indiapost" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
 };
