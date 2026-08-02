@@ -487,12 +487,12 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
                               </Badge>
                             )}
                             {/* Live status is only meaningful once a docket exists */}
-                            {(o.dispatch?.lr_no || o.dtdc_shipment?.awb) && (
+                            {(o.dispatch?.lr_no || o.dtdc_shipment?.awb || o.amazon_shipment?.tracking_id) && (
                               <CourierStatusDialog
                                 orderId={o.id}
                                 orderNumber={o.order_number}
                                 courier={o.courier_name}
-                                docket={o.dispatch?.lr_no || o.dtdc_shipment?.awb}
+                                docket={o.dispatch?.lr_no || o.dtdc_shipment?.awb || o.amazon_shipment?.tracking_id}
                               />
                             )}
                           </div>

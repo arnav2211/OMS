@@ -5188,10 +5188,42 @@ async def courier_status(order_id: str, user=Depends(get_current_user)):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     courier = _order_courier(order)
+    amazon = order.get("amazon_shipment") or {}
+    if not courier and (amazon.get("tracking_id")
+                        or str(order.get("courier_name") or "").strip().lower().startswith("amazon")):
+        courier = "Amazon"
     docket = (order.get("dispatch") or {}).get("lr_no") or \
-             (order.get("dtdc_shipment") or {}).get("awb") or ""
+             (order.get("dtdc_shipment") or {}).get("awb") or \
+             amazon.get("tracking_id") or ""
     if not docket:
         return {"ok": False, "message": "No docket number on this order"}
+
+    if courier == "Amazon":
+        if not _amazon_configured():
+            return {"ok": False, "courier": courier, "docket": docket,
+                    "message": "Amazon Shipping API is not configured"}
+        payload = await _amazon_track(docket, amazon.get("carrier_id") or "ATS")
+        if not payload:
+            return {"ok": False, "courier": courier, "docket": docket,
+                    "message": "Amazon returned no tracking data for this shipment"}
+        events = []
+        for ev in (payload.get("eventHistory") or []):
+            loc = ev.get("location") or {}
+            events.append({
+                "type": ev.get("eventCode"),
+                "customer_update": ev.get("eventCode"),
+                "hub_name": " ".join(x for x in (loc.get("city"), loc.get("postalCode")) if x) or None,
+                "event_time": ev.get("eventTime"),
+            })
+        events.reverse()          # newest first, matching the DTDC shape
+        promised = payload.get("promisedDeliveryDate")
+        return {
+            "ok": True, "courier": courier, "docket": docket,
+            "status": (payload.get("summary") or {}).get("status") or "-",
+            "promised_delivery": promised,
+            "last_event": (events[0] if events else None),
+            "events": events[:12],
+        }
 
     if courier == "Anjani":
         data = await _anjani_track(docket)

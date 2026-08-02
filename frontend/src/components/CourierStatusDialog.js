@@ -6,8 +6,8 @@ import { Loader2, Activity } from "lucide-react";
 
 /**
  * Live courier status for one order, via /courier-status/{id}.
- * Works for DTDC (tracking API) and Anjani (public AWB API).
- * Shared by All Orders, Order Detail and Courier Expenses so the three stay consistent.
+ * Works for DTDC (tracking API), Anjani (public AWB API) and Amazon Shipping.
+ * Shared by All Orders, Order Detail and Courier Expenses so they stay consistent.
  */
 export default function CourierStatusDialog({ orderId, orderNumber, courier, docket,
                                               variant = "icon", className = "" }) {
@@ -76,6 +76,7 @@ export default function CourierStatusDialog({ orderId, orderNumber, courier, doc
               <Row label="Route" value={data.from ? `${data.from} → ${data.to}` : null} />
               <Row label="Hub" value={data.hub} />
               <Row label="Booked" value={data.booking_date ? new Date(data.booking_date).toLocaleDateString("en-IN") : null} />
+              <Row label="Promised delivery" value={data.promised_delivery ? new Date(data.promised_delivery).toLocaleDateString("en-IN") : null} />
 
               {(data.events || []).length > 0 && (
                 <div className="pt-2">
