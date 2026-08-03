@@ -204,6 +204,11 @@ def calc_carrier_risk(base_value: float, gst_percent: int = CARRIER_RISK_GST_PER
     }
 
 
+# Only this OMS user may attach an order-level discount, and only its orders
+# skip the grand-total round-up. Telecallers have no discount field at all.
+WEBSITE_USERNAME = "website"
+
+
 def build_additional_charges(raw_charges, gst_applicable: bool, carrier_risk_applicable: bool, base_value: float):
     """Normalise additional charges, appending the derived carrier risk row when applicable.
 
@@ -267,6 +272,8 @@ class OrderCreate(BaseModel):
     is_cod: bool = False
     cod_amount: float = 0          # blank means collect whatever is outstanding
     amount_paid: float = 0
+    discount: float = 0            # ex-GST discount; ONLY honoured for the website user
+    discount_label: str = ""       # e.g. "Discount (WELCOME10)"
     payment_screenshots: List[str] = []
     mode_of_payment: str = ""
     payment_mode_details: str = ""
@@ -826,7 +833,29 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
     )
 
     raw_total = subtotal + total_gst + req.shipping_charge + shipping_gst + total_additional + total_additional_gst
-    grand_total = math.ceil(raw_total)
+
+    # Website-only order discount. Telecallers cannot send this: the field is
+    # ignored for every other user, so there is nothing to abuse from the UI.
+    is_website = str(user.get("username") or "").strip().lower() == WEBSITE_USERNAME
+    discount = 0.0
+    discount_gst = 0.0
+    if is_website and float(req.discount or 0) > 0 and subtotal > 0:
+        discount = min(round(float(req.discount), 2), round(subtotal, 2))
+        if req.gst_applicable and total_gst > 0:
+            discount_gst = round(total_gst * (discount / subtotal), 2)
+        # Emitted as a negative additional-charge row so the existing invoice
+        # and order screens render it with no frontend change.
+        additional_charges.append({
+            "name": (req.discount_label or "Discount").strip(),
+            "amount": -discount,
+            "gst_percent": 0,
+            "gst_amount": -discount_gst,
+        })
+        raw_total -= discount + discount_gst
+
+    # Website orders must match the amount the customer actually paid online,
+    # so they are never rounded up. Manual orders keep the round-to-rupee.
+    grand_total = round(raw_total, 2) if is_website else math.ceil(raw_total)
 
     shipping_method = req.shipping_method
     courier_name = req.courier_name
@@ -855,8 +884,10 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "additional_charges": additional_charges,
         "carrier_risk_applicable": req.carrier_risk_applicable,
         "subtotal": round(subtotal, 2),
-        "total_gst": round(total_gst + shipping_gst + total_additional_gst, 2),
+        "total_gst": round(total_gst + shipping_gst + total_additional_gst - discount_gst, 2),
         "grand_total": grand_total,
+        "discount": discount,
+        "discount_gst": discount_gst,
         "remark": req.remark,
         "status": "new",
         "payment_status": req.payment_status,
