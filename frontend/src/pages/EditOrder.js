@@ -410,6 +410,7 @@ export default function EditOrder() {
   const [carrierRiskApplicable, setCarrierRiskApplicable] = useState(false);
   const [remark, setRemark] = useState("");
   const [paymentStatus, setPaymentStatus] = useState("unpaid");
+  const [isCod, setIsCod] = useState(false);
   const [amountPaid, setAmountPaid] = useState(0);
   const [modeOfPayment, setModeOfPayment] = useState("");
   const [paymentModeDetails, setPaymentModeDetails] = useState("");
@@ -451,6 +452,7 @@ export default function EditOrder() {
       setCarrierRiskApplicable(resolveCarrierRiskFlag(o));
       setRemark(o.remark || "");
       setPaymentStatus(o.payment_status || "unpaid");
+      setIsCod(!!o.is_cod);
       setAmountPaid(o.amount_paid || 0);
       setModeOfPayment(o.mode_of_payment || "");
       setPaymentModeDetails(o.payment_mode_details || "");
@@ -633,6 +635,7 @@ export default function EditOrder() {
         grand_total: grandTotal,
         remark,
         payment_status: paymentStatus,
+        is_cod: isCod,
         amount_paid: paymentStatus === "full" ? grandTotal : amountPaid,
         balance_amount: balanceAmount,
         mode_of_payment: modeOfPayment,
@@ -977,6 +980,14 @@ export default function EditOrder() {
                     <SelectTrigger data-testid="edit-payment-status"><SelectValue /></SelectTrigger>
                     <SelectContent><SelectItem value="unpaid">Unpaid</SelectItem><SelectItem value="partial">Partial</SelectItem><SelectItem value="full">Full</SelectItem></SelectContent>
                   </Select>
+                  {paymentStatus !== "full" && (
+                    <label className="flex items-center gap-2 mt-2 cursor-pointer text-xs">
+                      <input type="checkbox" checked={isCod}
+                             onChange={(e) => setIsCod(e.target.checked)}
+                             data-testid="edit-is-cod" />
+                      Cash on delivery — courier collects the balance
+                    </label>
+                  )}
                 </div>
                 <div><Label>Mode of Payment</Label>
                   <Select value={modeOfPayment} onValueChange={setModeOfPayment}>

@@ -125,7 +125,14 @@ export default function AmazonBookPanel() {
                   return (
                     <TableRow key={o.id} data-testid={`amz-book-row-${o.id}`}>
                       <TableCell className="font-mono text-sm">{o.order_number}</TableCell>
-                      <TableCell className="text-sm">{o.customer_name}</TableCell>
+                      <TableCell className="text-sm">
+                        {o.customer_name}
+                        {o.is_cod && (
+                          <Badge className="ml-1.5 bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 text-[10px] px-1 py-0 align-middle">
+                            COD ₹{Number(o.cod_amount || 0).toFixed(0)}
+                          </Badge>
+                        )}
+                      </TableCell>
                       <TableCell className="text-sm">
                         {sa.city || "—"}{sa.pincode ? ` · ${sa.pincode}` : ""}
                       </TableCell>
@@ -172,11 +179,26 @@ export default function AmazonBookPanel() {
             </DialogDescription>
           </DialogHeader>
 
-          {confirm?.isCod && (
-            <div className="rounded-md border border-amber-500/60 bg-amber-50/60 dark:bg-amber-950/20 px-3 py-2 text-sm">
-              <span className="font-semibold">Cash on delivery</span> — Amazon will collect{" "}
-              <b>₹{Number(confirm.codAmount || 0).toFixed(2)}</b> from the customer and remit it
-              to you. The rates below already include Amazon's COD fee.
+          {/* Always state the payment mode — never let prepaid be an assumption. */}
+          {confirm?.isCod ? (
+            <div className="rounded-md border-2 border-amber-500 bg-amber-50/70 dark:bg-amber-950/30 px-3 py-2.5 text-sm">
+              <div className="font-bold text-amber-700 dark:text-amber-400 tracking-wide">
+                BOOKING AS: CASH ON DELIVERY
+              </div>
+              <div className="mt-0.5">
+                Amazon will collect <b>₹{Number(confirm.codAmount || 0).toFixed(2)}</b> from the
+                customer and remit it to you. Rates below include Amazon's COD fee.
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-md border-2 border-sky-500/70 bg-sky-50/60 dark:bg-sky-950/25 px-3 py-2.5 text-sm">
+              <div className="font-bold text-sky-700 dark:text-sky-400 tracking-wide">
+                BOOKING AS: PREPAID
+              </div>
+              <div className="mt-0.5">
+                Nothing will be collected on delivery. If this order is COD, close this and tick
+                <b> Cash on delivery</b> on the order first.
+              </div>
             </div>
           )}
 

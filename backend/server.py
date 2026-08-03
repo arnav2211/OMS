@@ -5750,6 +5750,7 @@ async def amazon_bookable_orders(user=Depends(get_current_user)):
     }, {
         "_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1,
         "shipping_address": 1, "packaging": 1, "amazon_shipment": 1, "status": 1,
+        "is_cod": 1, "cod_amount": 1, "grand_total": 1, "amount_paid": 1,
     }).sort("created_at", -1).to_list(300)
     out = []
     for o in orders:
@@ -5767,6 +5768,8 @@ async def amazon_bookable_orders(user=Depends(get_current_user)):
             "weight_kg": pkg.get("weight_kg"), "num_boxes": pkg.get("num_boxes") or "1",
             "shipping_address": o.get("shipping_address") or {},
             "amazon_shipment": o.get("amazon_shipment"),
+            "is_cod": bool(o.get("is_cod")),
+            "cod_amount": _amazon_cod_amount(o),
         })
     return out
 
