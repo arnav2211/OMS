@@ -5771,26 +5771,26 @@ def _amazon_cod_amount(order: dict) -> float:
     return round(max(0.0, due), 2)
 
 
-AMAZON_DEFAULT_BOX = {"length": 20, "width": 15, "height": 10}
+# Amazon bills the greater of actual and volumetric weight, where volumetric is
+# (L x W x H) / 5000 kg. We do not measure parcels, so rather than send an
+# invented box that can silently bill above the real weight, derive a cube whose
+# volume sits under the weight — the actual weight then always governs.
+AMAZON_VOLUMETRIC_DIVISOR = 5000
+AMAZON_BOX_HEADROOM = 0.85          # stay clear of the slab edge
+AMAZON_MIN_SIDE_CM = 1
 
 
 def _amazon_box(order: dict) -> dict:
-    """The parcel's real dimensions in cm, falling back to a default box.
-
-    Amazon prices on volumetric weight ((LxWxH)/5000 kg) when that exceeds the
-    actual weight, so an invented box size changes the bill: 0.234 kg quotes
-    Rs36 in a 10x10x10 box and Rs65 in 20x15x10. Use what packing measured.
-    """
+    """A box whose volumetric weight is below the parcel's actual weight."""
     pkg = order.get("packaging") or {}
-    box = {}
-    for key, field in (("length", "length_cm"), ("width", "breadth_cm"), ("height", "height_cm")):
-        try:
-            v = float(str(pkg.get(field, "")).strip() or 0)
-        except ValueError:
-            v = 0
-        if v > 0:
-            box[key] = v
-    return {**AMAZON_DEFAULT_BOX, **box} if len(box) == 3 else dict(AMAZON_DEFAULT_BOX)
+    try:
+        w = float(str(pkg.get("weight_kg", "")).strip() or 0)
+    except ValueError:
+        w = 0
+    w = max(0.01, w)
+    side = (AMAZON_VOLUMETRIC_DIVISOR * w * AMAZON_BOX_HEADROOM) ** (1.0 / 3.0)
+    side = max(AMAZON_MIN_SIDE_CM, int(side))       # floor, never round up
+    return {"length": side, "width": side, "height": side}
 
 
 def _amazon_rates_body(ship_to: dict, weight_kg: float, declared_value: float, ref: str,
