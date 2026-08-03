@@ -22,6 +22,9 @@ export default function AmazonBookPanel() {
   const [loading, setLoading] = useState(true);
   const [quoting, setQuoting] = useState({});
   const [booking, setBooking] = useState(false);
+  // Explicit payment mode for this booking. Defaults to prepaid so COD is
+  // never applied by omission, and never inferred silently from the order.
+  const [payMode, setPayMode] = useState("prepaid");
   // { order, rates } — the confirmation step before any money is spent
   const [confirm, setConfirm] = useState(null);
   const [selectedRate, setSelectedRate] = useState(null);
@@ -40,10 +43,12 @@ export default function AmazonBookPanel() {
 
   useEffect(() => { load(); }, [load]);
 
-  const getRates = async (order) => {
+  const getRates = async (order, mode) => {
+    const useMode = mode || (order.is_cod ? "cod" : "prepaid");
+    setPayMode(useMode);
     setQuoting(p => ({ ...p, [order.id]: true }));
     try {
-      const res = await api.post("/amazon/quote", { order_id: order.id });
+      const res = await api.post("/amazon/quote", { order_id: order.id, payment_mode: useMode });
       if (!res.data.ok) {
         toast.error(res.data.message || "No rates available");
         if (res.data.detail) toast.error(res.data.detail, { duration: 7000 });
@@ -66,6 +71,7 @@ export default function AmazonBookPanel() {
       const res = await api.post("/amazon/book", {
         order_id: confirm.order.id,
         service_id: selectedRate.service_id || selectedRate.rate_id,
+        payment_mode: payMode,
       });
       toast.success(`Booked! Tracking: ${res.data.shipment?.tracking_id || "—"}`, { duration: 8000 });
       setConfirm(null);
@@ -179,28 +185,38 @@ export default function AmazonBookPanel() {
             </DialogDescription>
           </DialogHeader>
 
-          {/* Always state the payment mode — never let prepaid be an assumption. */}
-          {confirm?.isCod ? (
-            <div className="rounded-md border-2 border-amber-500 bg-amber-50/70 dark:bg-amber-950/30 px-3 py-2.5 text-sm">
-              <div className="font-bold text-amber-700 dark:text-amber-400 tracking-wide">
-                BOOKING AS: CASH ON DELIVERY
-              </div>
-              <div className="mt-0.5">
-                Amazon will collect <b>₹{Number(confirm.codAmount || 0).toFixed(2)}</b> from the
+          {/* Chosen explicitly for every booking; prepaid unless switched. */}
+          <div className="rounded-md border-2 px-3 py-2.5 space-y-2"
+               style={{ borderColor: payMode === "cod" ? "rgb(245 158 11)" : "rgb(14 165 233)" }}>
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              How is this shipment paid?
+            </div>
+            <div className="flex gap-2">
+              {[["prepaid", "Prepaid"], ["cod", "Cash on delivery"]].map(([m, label]) => (
+                <button key={m} type="button" disabled={booking}
+                        onClick={() => confirm?.order && getRates(confirm.order, m)}
+                        data-testid={`amz-paymode-${m}`}
+                        className={`flex-1 rounded-md border px-3 py-2 text-sm transition ${
+                          payMode === m
+                            ? (m === "cod"
+                                ? "border-amber-500 bg-amber-100 dark:bg-amber-900/40 font-semibold"
+                                : "border-sky-500 bg-sky-100 dark:bg-sky-900/40 font-semibold")
+                            : "border-border hover:bg-muted"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {payMode === "cod" ? (
+              <p className="text-sm">
+                Amazon will collect <b>₹{Number(confirm?.codAmount || 0).toFixed(2)}</b> from the
                 customer and remit it to you. Rates below include Amazon's COD fee.
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-md border-2 border-sky-500/70 bg-sky-50/60 dark:bg-sky-950/25 px-3 py-2.5 text-sm">
-              <div className="font-bold text-sky-700 dark:text-sky-400 tracking-wide">
-                BOOKING AS: PREPAID
-              </div>
-              <div className="mt-0.5">
-                Nothing will be collected on delivery. If this order is COD, close this and tick
-                <b> Cash on delivery</b> on the order first.
-              </div>
-            </div>
-          )}
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Nothing will be collected on delivery.
+              </p>
+            )}
+          </div>
 
           <div className="space-y-2">
             {confirm?.rates?.map((r, i) => {
@@ -245,7 +261,11 @@ export default function AmazonBookPanel() {
           <DialogFooter>
             <Button variant="outline" onClick={() => { setConfirm(null); setSelectedRate(null); }} disabled={booking}>Cancel</Button>
             <Button onClick={doBook} disabled={booking || !selectedRate} data-testid="amz-confirm-book">
-              {booking ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Booking…</> : "Confirm & Book"}
+              {booking
+                ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Booking…</>
+                : payMode === "cod"
+                  ? `Book as COD — collect ₹${Number(confirm?.codAmount || 0).toFixed(2)}`
+                  : "Book as Prepaid"}
             </Button>
           </DialogFooter>
         </DialogContent>

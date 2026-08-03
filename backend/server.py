@@ -5808,6 +5808,9 @@ def _amazon_rates_body(ship_to: dict, weight_kg: float, declared_value: float, r
 class AmazonBookRequest(BaseModel):
     order_id: str
     service_id: Optional[str] = None   # which quoted service to buy; cheapest if omitted
+    # Payment mode is chosen explicitly at booking and defaults to prepaid, so a
+    # COD shipment is never booked by omission. None falls back to the order flag.
+    payment_mode: Optional[str] = None          # "prepaid" | "cod"
 
 
 # Couriers are free text ("Amazon", "Amazon shipping", ...), so match loosely.
@@ -5874,7 +5877,13 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
         "phoneNumber": phone or AMAZON_SHIP["origin_phone"],
     }
     token = await _amazon_access_token()
-    cod = _amazon_cod_amount(order)
+    mode = (req.payment_mode or "").strip().lower()
+    if mode == "prepaid":
+        cod = 0.0
+    elif mode == "cod":
+        cod = _amazon_cod_amount({**order, "is_cod": True})
+    else:
+        cod = _amazon_cod_amount(order)
     body = _amazon_rates_body(ship_to, pkg.get("weight_kg"), _declared_value(order),
                               order.get("order_number") or "ord", cod)
     async with httpx.AsyncClient(timeout=30) as c:
@@ -5942,7 +5951,16 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
     headers = {"x-amz-access-token": token, "content-type": "application/json"}
 
     async with httpx.AsyncClient(timeout=40) as c:
-        cod = _amazon_cod_amount(order)
+        mode = (req.payment_mode or "").strip().lower()
+        if mode == "prepaid":
+            cod = 0.0
+        elif mode == "cod":
+            cod = _amazon_cod_amount({**order, "is_cod": True})
+            if cod <= 0:
+                raise HTTPException(status_code=400,
+                                    detail="Nothing left to collect — this order is fully paid.")
+        else:
+            cod = _amazon_cod_amount(order)     # no explicit choice: use the order
         rr = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/rates",
                           headers=headers,
                           json=_amazon_rates_body(ship_to, pkg.get("weight_kg"),
@@ -6016,6 +6034,7 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         "recipient_phone": phone,
         "is_cod": bool(cod),
         "cod_amount": cod,          # what Amazon collects, to reconcile remittances
+        "payment_mode": "cod" if cod else "prepaid",
         "booked_by": user["name"],
         "booked_at": datetime.now(timezone.utc).isoformat(),
     }
