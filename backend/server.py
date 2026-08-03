@@ -5183,9 +5183,15 @@ def compute_order_expense(order: dict, periods: list) -> Optional[dict]:
 
     if courier == "Anjani":
         in_mh = "maharashtra" in str(sa.get("state") or "").strip().lower()
-        base = ANJANI_RATE_MAHARASHTRA if in_mh else ANJANI_RATE_REST
+        # Rs40/kg within Maharashtra, Rs50/kg elsewhere, charged per started
+        # kilogram — 2.619 kg bills as 3 kg. No GST on Anjani.
+        rate = ANJANI_RATE_MAHARASHTRA if in_mh else ANJANI_RATE_REST
+        chargeable = max(1, int(math.ceil(weight)))
+        base = round(rate * chargeable, 2)
         row.update({"zone": "Maharashtra" if in_mh else "Rest of India",
-                    "service": "Anjani", "base": base, "fuel_percent": 0.0,
+                    "service": "Anjani", "rate_per_kg": rate,
+                    "chargeable_weight_kg": chargeable,
+                    "base": base, "fuel_percent": 0.0,
                     "fuel": 0.0, "base_plus_fuel": base,
                     "gst_percent": 0.0, "gst": 0.0, "total": base})
         return row

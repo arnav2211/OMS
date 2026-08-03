@@ -126,10 +126,11 @@ export default function CourierExpenses() {
   const exportCsv = () => {
     if (!data?.rows?.length) return toast.error("Nothing to export");
     const head = ["Date", "Order", "Customer", "Docket", "Courier", "Service", "Zone", "Weight(kg)",
-                  "Boxes", "Base", "Fuel%", "Fuel", "Base+Fuel", "GST", "Total", "Damaged", "RTO"];
+                  "BilledWeight(kg)", "Rate/kg", "Boxes", "Base", "Fuel%", "Fuel", "Base+Fuel",
+                  "GST", "Total", "Damaged", "RTO"];
     const lines = [head.join(",")].concat(data.rows.map(r => [
       r.date, r.order_number, `"${(r.customer_name || "").replace(/"/g, "'")}"`, r.docket_no || "", r.courier,
-      r.service || "", r.zone || "", r.weight_kg, r.num_boxes,
+      r.service || "", r.zone || "", r.weight_kg, r.chargeable_weight_kg || "", r.rate_per_kg || "", r.num_boxes,
       r.base, r.fuel_percent, r.fuel, r.base_plus_fuel, r.gst, r.total, r.damaged ? "YES" : "", r.rto ? "YES" : "",
     ].join(",")));
     const blob = new Blob([lines.join("\n")], { type: "text/csv" });
@@ -320,7 +321,14 @@ export default function CourierExpenses() {
                         <>{r.service}<br /><span className="text-muted-foreground">{r.zone}</span></>
                       )}
                     </TableCell>
-                    <TableCell className="text-sm font-mono text-right whitespace-nowrap">{r.weight_kg}</TableCell>
+                    <TableCell className="text-sm font-mono text-right whitespace-nowrap">
+                      {r.weight_kg}
+                      {r.chargeable_weight_kg && Number(r.chargeable_weight_kg) !== Number(r.weight_kg) && (
+                        <span className="block text-[10px] text-amber-600">
+                          billed {r.chargeable_weight_kg} kg
+                        </span>
+                      )}
+                    </TableCell>
                     {showBreakdown && <TableCell className="text-sm font-mono text-right">{money(r.base)}</TableCell>}
                     {showBreakdown && (
                       <TableCell className="text-sm font-mono text-right">
