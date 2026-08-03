@@ -5606,7 +5606,10 @@ async def amazon_check_pincode(pincode: str, weight: float = 1.0):
                 "phoneNumber": "9999999999",
             },
             "packages": [{
-                "dimensions": {"length": 10, "width": 10, "height": 10, "unit": "CENTIMETER"},
+                # Same default box the booking path uses, so the quote shown here
+                # matches what is actually charged. Amazon bills on volumetric
+                # weight, so a smaller assumed box quietly under-quotes.
+                "dimensions": {**AMAZON_DEFAULT_BOX, "unit": "CENTIMETER"},
                 "weight": {"unit": "KILOGRAM", "value": pkg_weight},
                 "insuredValue": {"value": 100, "unit": "INR"},
                 "packageClientReferenceId": "svc-check-1",
@@ -5768,8 +5771,30 @@ def _amazon_cod_amount(order: dict) -> float:
     return round(max(0.0, due), 2)
 
 
+AMAZON_DEFAULT_BOX = {"length": 20, "width": 15, "height": 10}
+
+
+def _amazon_box(order: dict) -> dict:
+    """The parcel's real dimensions in cm, falling back to a default box.
+
+    Amazon prices on volumetric weight ((LxWxH)/5000 kg) when that exceeds the
+    actual weight, so an invented box size changes the bill: 0.234 kg quotes
+    Rs36 in a 10x10x10 box and Rs65 in 20x15x10. Use what packing measured.
+    """
+    pkg = order.get("packaging") or {}
+    box = {}
+    for key, field in (("length", "length_cm"), ("width", "breadth_cm"), ("height", "height_cm")):
+        try:
+            v = float(str(pkg.get(field, "")).strip() or 0)
+        except ValueError:
+            v = 0
+        if v > 0:
+            box[key] = v
+    return {**AMAZON_DEFAULT_BOX, **box} if len(box) == 3 else dict(AMAZON_DEFAULT_BOX)
+
+
 def _amazon_rates_body(ship_to: dict, weight_kg: float, declared_value: float, ref: str,
-                       cod_amount: float = 0) -> dict:
+                       cod_amount: float = 0, box: Optional[dict] = None) -> dict:
     """Shared getRates payload. items + root taxDetails are mandatory for IN accounts.
 
     COD must sit at the root as valueAddedServices.collectOnDelivery — Amazon
@@ -5782,7 +5807,7 @@ def _amazon_rates_body(ship_to: dict, weight_kg: float, declared_value: float, r
         "shipFrom": _amazon_ship_from(),
         "shipTo": ship_to,
         "packages": [{
-            "dimensions": {"length": 20, "width": 15, "height": 10, "unit": "CENTIMETER"},
+            "dimensions": {**(box or AMAZON_DEFAULT_BOX), "unit": "CENTIMETER"},
             "weight": {"unit": "KILOGRAM", "value": w},
             "insuredValue": {"value": val, "unit": "INR"},
             "packageClientReferenceId": ref,
@@ -5885,7 +5910,7 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
     else:
         cod = _amazon_cod_amount(order)
     body = _amazon_rates_body(ship_to, pkg.get("weight_kg"), _declared_value(order),
-                              order.get("order_number") or "ord", cod)
+                              order.get("order_number") or "ord", cod, _amazon_box(order))
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/rates",
                          headers={"x-amz-access-token": token, "content-type": "application/json"}, json=body)
@@ -5903,6 +5928,14 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
             "rate_id": x.get("rateId"), "service_id": x.get("serviceId"),
             "service": x.get("serviceName"), "amount": ch.get("value"), "currency": ch.get("unit"),
             "promise": x.get("promise"),
+            # Amazon bills the greater of actual and volumetric weight, and
+            # itemises the COD charge — both drive the price, so show them.
+            "billed_weight": (x.get("billedWeight") or {}).get("value"),
+            "billed_weight_unit": (x.get("billedWeight") or {}).get("unit"),
+            "charges": [{"id": it.get("rateItemID"),
+                         "label": it.get("rateItemNameLocalization"),
+                         "amount": (it.get("rateItemCharge") or {}).get("value")}
+                        for it in (x.get("rateItemList") or [])],
         })
     if not rates:
         reason = ""
@@ -5912,7 +5945,8 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
             break
         return {"ok": False, "message": "Amazon Shipping does not serve this address.", "detail": reason}
     return {"ok": True, "rates": rates, "request_token": payload.get("requestToken"),
-            "cod_amount": cod, "is_cod": bool(cod)}
+            "cod_amount": cod, "is_cod": bool(cod), "box_cm": _amazon_box(order),
+            "box_measured": bool((order.get("packaging") or {}).get("length_cm"))}
 
 
 @api_router.post("/amazon/book")
@@ -5964,7 +5998,8 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         rr = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/rates",
                           headers=headers,
                           json=_amazon_rates_body(ship_to, pkg.get("weight_kg"),
-                                                  _declared_value(order), ref, cod))
+                                                  _declared_value(order), ref, cod,
+                                                  _amazon_box(order)))
         if rr.status_code != 200:
             raise HTTPException(status_code=400, detail=f"Amazon rates failed: {rr.text[:300]}")
         payload = rr.json().get("payload") or rr.json()

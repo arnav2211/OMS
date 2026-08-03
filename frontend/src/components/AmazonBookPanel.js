@@ -56,7 +56,8 @@ export default function AmazonBookPanel() {
       }
       setSelectedRate(res.data.rates[0] || null);
       setConfirm({ order, rates: res.data.rates,
-                   isCod: res.data.is_cod, codAmount: res.data.cod_amount });
+                   isCod: res.data.is_cod, codAmount: res.data.cod_amount,
+                   box_cm: res.data.box_cm, boxMeasured: res.data.box_measured });
     } catch (err) {
       toast.error(err.response?.data?.detail || "Could not fetch rates");
     } finally {
@@ -235,6 +236,23 @@ export default function AmazonBookPanel() {
                       <div className="text-[11px] text-muted-foreground font-mono">{fmtAmazonRateBreakdown(r.amount, r.currency)}</div>
                     </div>
                   </div>
+                  {(r.charges || []).length > 1 && (
+                    <div className="text-[11px] text-muted-foreground mt-1 font-mono">
+                      {r.charges.map((c) => `${c.label}: ₹${Number(c.amount).toFixed(2)}`).join("  ·  ")}
+                    </div>
+                  )}
+                  {r.billed_weight ? (
+                    <div className="text-[11px] text-muted-foreground mt-0.5">
+                      Billed weight {r.billed_weight} {(r.billed_weight_unit || "KG").toLowerCase()}
+                      {confirm?.order?.weight_kg &&
+                       Number(r.billed_weight) > Number(confirm.order.weight_kg) && (
+                        <span className="text-amber-600">
+                          {" "}— volumetric, from the {confirm?.box_cm?.length}×{confirm?.box_cm?.width}×{confirm?.box_cm?.height} cm box
+                          {confirm?.boxMeasured === false && " (assumed — not measured)"}
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
                   {fmtWindow(r.promise?.pickupWindow) && (
                     <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-1 flex items-center gap-1">
                       <PackageCheck className="w-3 h-3" /> Pickup: {fmtWindow(r.promise.pickupWindow)}
