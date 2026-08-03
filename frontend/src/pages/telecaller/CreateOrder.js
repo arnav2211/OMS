@@ -133,6 +133,7 @@ export default function CreateOrder() {
   const [carrierRiskApplicable, setCarrierRiskApplicable] = useState(false);
   const [remark, setRemark] = useState("");
   const [paymentStatus, setPaymentStatus] = useState("unpaid");
+  const [isCod, setIsCod] = useState(false);
   const [amountPaid, setAmountPaid] = useState(0);
   const [paymentScreenshots, setPaymentScreenshots] = useState([]);
   const [submitting, setSubmitting] = useState(false);
@@ -451,6 +452,8 @@ export default function CreateOrder() {
         carrier_risk_applicable: carrierRiskApplicable,
         remark,
         payment_status: paymentStatus,
+        is_cod: isCod,
+        cod_amount: 0,          // 0 = collect whatever is still outstanding
         amount_paid: paymentStatus === "full" ? grandTotal : amountPaid,
         payment_screenshots: paymentScreenshots,
         mode_of_payment: modeOfPayment,
@@ -759,6 +762,19 @@ export default function CreateOrder() {
                   <SelectItem value="full">Full Paid</SelectItem>
                 </SelectContent>
               </Select>
+              {paymentStatus !== "full" && (
+                <label className="flex items-start gap-2 mt-2 cursor-pointer">
+                  <input type="checkbox" className="mt-0.5" checked={isCod}
+                         onChange={(e) => setIsCod(e.target.checked)}
+                         data-testid="order-is-cod" />
+                  <span className="text-xs">
+                    Cash on delivery
+                    <span className="block text-muted-foreground">
+                      The courier collects the balance from the customer on delivery.
+                    </span>
+                  </span>
+                </label>
+              )}
             </div>
             <div>
               <Label>Mode of Payment</Label>

@@ -50,7 +50,8 @@ export default function AmazonBookPanel() {
         return;
       }
       setSelectedRate(res.data.rates[0] || null);
-      setConfirm({ order, rates: res.data.rates });
+      setConfirm({ order, rates: res.data.rates,
+                   isCod: res.data.is_cod, codAmount: res.data.cod_amount });
     } catch (err) {
       toast.error(err.response?.data?.detail || "Could not fetch rates");
     } finally {
@@ -170,6 +171,14 @@ export default function AmazonBookPanel() {
               Order {confirm?.order?.order_number} · {confirm?.order?.customer_name} · {confirm?.order?.weight_kg} kg
             </DialogDescription>
           </DialogHeader>
+
+          {confirm?.isCod && (
+            <div className="rounded-md border border-amber-500/60 bg-amber-50/60 dark:bg-amber-950/20 px-3 py-2 text-sm">
+              <span className="font-semibold">Cash on delivery</span> — Amazon will collect{" "}
+              <b>₹{Number(confirm.codAmount || 0).toFixed(2)}</b> from the customer and remit it
+              to you. The rates below already include Amazon's COD fee.
+            </div>
+          )}
 
           <div className="space-y-2">
             {confirm?.rates?.map((r, i) => {

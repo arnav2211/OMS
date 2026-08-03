@@ -3512,6 +3512,8 @@ async def convert_pi_to_order(pi_id: str, body: dict, user=Depends(get_current_u
         "remark": body.get("remark", pi.get("remark", "")),
         "status": "new",
         "payment_status": body.get("payment_status", "unpaid"),
+        "is_cod": bool(body.get("is_cod", False)),
+        "cod_amount": round(float(body.get("cod_amount") or 0), 2),
         "amount_paid": body.get("amount_paid", 0),
         "balance_amount": round(pi["grand_total"] - body.get("amount_paid", 0), 2),
         "payment_screenshots": [],
