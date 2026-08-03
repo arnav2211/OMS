@@ -264,6 +264,8 @@ class OrderCreate(BaseModel):
     carrier_risk_applicable: bool = False
     remark: str = ""
     payment_status: str = "unpaid"
+    is_cod: bool = False
+    cod_amount: float = 0          # blank means collect whatever is outstanding
     amount_paid: float = 0
     payment_screenshots: List[str] = []
     mode_of_payment: str = ""
@@ -858,6 +860,8 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "remark": req.remark,
         "status": "new",
         "payment_status": req.payment_status,
+        "is_cod": bool(req.is_cod),
+        "cod_amount": round(float(req.cod_amount or 0), 2),
         "amount_paid": req.amount_paid if req.payment_status != "unpaid" else 0,
         "balance_amount": round(grand_total - (req.amount_paid if req.payment_status == "partial" else (grand_total if req.payment_status == "full" else 0)), 2),
         "payment_screenshots": req.payment_screenshots,
@@ -5670,11 +5674,32 @@ def _amazon_ship_from() -> dict:
     }
 
 
-def _amazon_rates_body(ship_to: dict, weight_kg: float, declared_value: float, ref: str) -> dict:
-    """Shared getRates payload. items + root taxDetails are mandatory for IN accounts."""
+def _amazon_cod_amount(order: dict) -> float:
+    """What Amazon should collect on delivery, or 0 for a prepaid shipment.
+
+    An order is COD when it is still unpaid; the courier collects whatever is
+    outstanding rather than the full total, so part-paid orders work too.
+    """
+    if not order.get("is_cod"):
+        return 0.0
+    explicit = float(order.get("cod_amount") or 0)
+    if explicit > 0:
+        return round(explicit, 2)
+    due = float(order.get("grand_total") or 0) - float(order.get("amount_paid") or 0)
+    return round(max(0.0, due), 2)
+
+
+def _amazon_rates_body(ship_to: dict, weight_kg: float, declared_value: float, ref: str,
+                       cod_amount: float = 0) -> dict:
+    """Shared getRates payload. items + root taxDetails are mandatory for IN accounts.
+
+    COD must sit at the root as valueAddedServices.collectOnDelivery — Amazon
+    silently ignores it if placed on the package and quotes the prepaid rate,
+    which would book a COD parcel that collects nothing.
+    """
     w = max(0.1, float(weight_kg or 1))
     val = max(1, int(round(float(declared_value or 100))))
-    return {
+    body = {
         "shipFrom": _amazon_ship_from(),
         "shipTo": ship_to,
         "packages": [{
@@ -5693,6 +5718,12 @@ def _amazon_rates_body(ship_to: dict, weight_kg: float, declared_value: float, r
         "channelDetails": {"channelType": "EXTERNAL"},
         "taxDetails": [{"taxType": "GST", "taxRegistrationNumber": COMPANY["gstin"]}],
     }
+    if cod_amount and cod_amount > 0:
+        body["valueAddedServices"] = {
+            "collectOnDelivery": {"amount": {"value": round(float(cod_amount), 2),
+                                             "unit": "INR"}}
+        }
+    return body
 
 
 class AmazonBookRequest(BaseModel):
@@ -5761,7 +5792,9 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
         "phoneNumber": phone or AMAZON_SHIP["origin_phone"],
     }
     token = await _amazon_access_token()
-    body = _amazon_rates_body(ship_to, pkg.get("weight_kg"), _declared_value(order), order.get("order_number") or "ord")
+    cod = _amazon_cod_amount(order)
+    body = _amazon_rates_body(ship_to, pkg.get("weight_kg"), _declared_value(order),
+                              order.get("order_number") or "ord", cod)
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/rates",
                          headers={"x-amz-access-token": token, "content-type": "application/json"}, json=body)
@@ -5787,7 +5820,8 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
             reason = rs.get("message") or rs.get("code") or ""
             break
         return {"ok": False, "message": "Amazon Shipping does not serve this address.", "detail": reason}
-    return {"ok": True, "rates": rates, "request_token": payload.get("requestToken")}
+    return {"ok": True, "rates": rates, "request_token": payload.get("requestToken"),
+            "cod_amount": cod, "is_cod": bool(cod)}
 
 
 @api_router.post("/amazon/book")
@@ -5826,9 +5860,11 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
     headers = {"x-amz-access-token": token, "content-type": "application/json"}
 
     async with httpx.AsyncClient(timeout=40) as c:
+        cod = _amazon_cod_amount(order)
         rr = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/rates",
                           headers=headers,
-                          json=_amazon_rates_body(ship_to, pkg.get("weight_kg"), _declared_value(order), ref))
+                          json=_amazon_rates_body(ship_to, pkg.get("weight_kg"),
+                                                  _declared_value(order), ref, cod))
         if rr.status_code != 200:
             raise HTTPException(status_code=400, detail=f"Amazon rates failed: {rr.text[:300]}")
         payload = rr.json().get("payload") or rr.json()
@@ -5840,6 +5876,19 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
             chosen = next((x for x in rates if x.get("serviceId") == req.service_id or x.get("rateId") == req.service_id), None)
         if not chosen:
             chosen = min(rates, key=lambda x: (x.get("totalCharge") or {}).get("value", 1e9))
+
+        if cod:
+            # Amazon returns the COD group with isRequired true; the purchase is
+            # rejected, or silently books prepaid, unless it is echoed back.
+            groups = chosen.get("availableValueAddedServiceGroups") or []
+            cod_ids = [vas.get("id") for g in groups
+                       if (g.get("groupId") or "") == "CollectOnDelivery"
+                       for vas in (g.get("valueAddedServices") or []) if vas.get("id")]
+            if not cod_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Amazon did not offer Collect on Delivery for this shipment. "
+                           "Book it through another courier, or mark the order prepaid.")
 
         purchase = {
             "requestToken": payload.get("requestToken"),
@@ -5853,6 +5902,8 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
                 "requestedDocumentTypes": ["LABEL"],
             },
         }
+        if cod:
+            purchase["requestedValueAddedServices"] = [{"id": i} for i in cod_ids]
         pr = await c.post(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments",
                           headers=headers, json=purchase)
     if pr.status_code not in (200, 201):
@@ -5881,6 +5932,8 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         "label_format": label_fmt,
         "label_base64": label_b64,
         "recipient_phone": phone,
+        "is_cod": bool(cod),
+        "cod_amount": cod,          # what Amazon collects, to reconcile remittances
         "booked_by": user["name"],
         "booked_at": datetime.now(timezone.utc).isoformat(),
     }
