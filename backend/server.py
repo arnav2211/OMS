@@ -1283,6 +1283,52 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
     updates.pop("id", None)
     updates.pop("order_number", None)
 
+    # Discounts are website-only and cannot be created or altered by an edit.
+    # Every negative charge the client sent is dropped, then the order's own
+    # stored discount is re-attached, so a routine edit can neither invent a
+    # discount nor silently delete the one the customer already received.
+    stored_disc = round(float(order.get("discount") or 0), 2)
+    stored_disc_gst = round(float(order.get("discount_gst") or 0), 2)
+    if "additional_charges" in updates:
+        cleaned = [c for c in (updates.get("additional_charges") or [])
+                   if float(c.get("amount") or 0) >= 0]
+        if stored_disc > 0:
+            cleaned.append({
+                "name": order.get("discount_label") or "Discount",
+                "amount": -stored_disc,
+                "gst_percent": 0,
+                "gst_amount": -stored_disc_gst,
+            })
+        updates["additional_charges"] = cleaned
+
+    if stored_disc > 0:
+        # The edit screen rounds the grand total up and cannot see the
+        # protected discount, so the authoritative figure is rebuilt here and
+        # left at exact paise to match what was paid on the website.
+        updates["discount"] = stored_disc
+        updates["discount_gst"] = stored_disc_gst
+        charges = updates.get("additional_charges") or order.get("additional_charges") or []
+        line_items = updates.get("items") or order.get("items") or []
+        sub_amt = round(sum(float(i.get("amount") or 0) for i in line_items), 2)
+        item_gst = round(sum(float(i.get("gst_amount") or 0) for i in line_items), 2)
+        ship = float(updates.get("shipping_charge", order.get("shipping_charge") or 0) or 0)
+        ship_gst = float(updates.get("shipping_gst", order.get("shipping_gst") or 0) or 0)
+        add_amt = round(sum(float(c.get("amount") or 0) for c in charges), 2)
+        add_gst = round(sum(float(c.get("gst_amount") or 0) for c in charges), 2)
+        gt = round(sub_amt + item_gst + ship + ship_gst + add_amt + add_gst, 2)
+        updates["subtotal"] = sub_amt
+        updates["total_gst"] = round(item_gst + ship_gst + add_gst, 2)
+        updates["grand_total"] = gt
+        pstatus = updates.get("payment_status", order.get("payment_status"))
+        paid = float(updates.get("amount_paid", order.get("amount_paid") or 0) or 0)
+        if pstatus == "full":
+            updates["amount_paid"] = gt
+            updates["balance_amount"] = 0
+        elif pstatus == "partial":
+            updates["balance_amount"] = round(max(0.0, gt - paid), 2)
+        else:
+            updates["balance_amount"] = gt
+
     # CRITICAL: Preserve formulations when items are updated
     if "items" in updates:
         existing_items = order.get("items", [])

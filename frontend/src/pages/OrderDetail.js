@@ -731,10 +731,19 @@ export default function OrderDetail() {
             {order.gst_applicable && <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-mono">{"\u20B9"}{order.total_gst?.toFixed(2)}</span></div>}
             {order.shipping_charge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping</span><span className="font-mono">{"\u20B9"}{order.shipping_charge?.toFixed(2)}</span></div>}
             {order.shipping_gst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST</span><span className="font-mono">{"\u20B9"}{order.shipping_gst?.toFixed(2)}</span></div>}
-            {order.additional_charges?.filter(c => c.amount > 0).map((c, i) => (
+            {order.additional_charges?.filter(c => c.amount).map((c, i) => (
               <div key={i}>
-                <div className="flex justify-between"><span className="text-muted-foreground">{c.name || "Charge"}</span><span className="font-mono">{"\u20B9"}{c.amount?.toFixed(2)}</span></div>
-                {c.gst_amount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">{c.name} GST ({c.gst_percent}%)</span><span className="font-mono">{"\u20B9"}{c.gst_amount?.toFixed(2)}</span></div>}
+                {c.amount < 0 ? (
+                  /* A discount shows as one ex-GST line: its GST share is
+                     already netted off the GST figure above, so adding the
+                     inclusive value here would deduct the tax twice. */
+                  <div className="flex justify-between"><span className="text-muted-foreground">{c.name || "Discount"}</span><span className="font-mono text-emerald-500">{"-\u20B9"}{Math.abs(c.amount).toFixed(2)}</span></div>
+                ) : (
+                  <>
+                    <div className="flex justify-between"><span className="text-muted-foreground">{c.name || "Charge"}</span><span className="font-mono">{"\u20B9"}{c.amount?.toFixed(2)}</span></div>
+                    {c.gst_amount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">{c.name} GST ({c.gst_percent}%)</span><span className="font-mono">{"\u20B9"}{c.gst_amount?.toFixed(2)}</span></div>}
+                  </>
+                )}
               </div>
             ))}
             <Separator />

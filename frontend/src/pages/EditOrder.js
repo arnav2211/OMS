@@ -448,7 +448,9 @@ export default function EditOrder() {
       setTransporterName(o.transporter_name || "");
       setShippingCharge(o.shipping_charge || 0);
       // Carrier risk is a derived row, so it is kept out of the editable list.
-      setAdditionalCharges(stripCarrierRisk(o.additional_charges));
+      // The website discount is protected: it is held on the order itself and
+      // re-applied by the backend, so it never enters the editable list.
+      setAdditionalCharges(stripCarrierRisk(o.additional_charges).filter(c => (c.amount || 0) >= 0));
       setCarrierRiskApplicable(resolveCarrierRiskFlag(o));
       setRemark(o.remark || "");
       setPaymentStatus(o.payment_status || "unpaid");
@@ -493,8 +495,8 @@ export default function EditOrder() {
     }));
   }, [gstApplicable]);
 
-  const subtotal = items.reduce((s, i) => s + i.amount, 0);
-  const totalItemGst = items.reduce((s, i) => s + i.gst_amount, 0);
+  const subtotal = items.reduce((s, i) => s + (i.amount || 0), 0);
+  const totalItemGst = items.reduce((s, i) => s + (i.gst_amount || 0), 0);
   const shippingGst = gstApplicable && shippingCharge > 0 ? +(shippingCharge * 0.18).toFixed(2) : 0;
   const totalAdditional = additionalCharges.reduce((s, c) => s + (c.amount || 0), 0);
   const totalAdditionalGst = additionalCharges.reduce((s, c) => {
@@ -506,7 +508,14 @@ export default function EditOrder() {
   const carrierRisk = carrierRiskApplicable
     ? resolveCarrierRiskCharge(carrierRiskBase, gstApplicable)
     : null;
-  const grandTotal = Math.ceil(carrierRiskBase + (carrierRisk ? carrierRisk.total : 0));
+  // A protected website discount is netted off last. Those orders keep exact
+  // paise so the total still matches what the customer paid online.
+  const protectedDiscount = +(order?.discount || 0);
+  const protectedDiscountGst = +(order?.discount_gst || 0);
+  const preDiscountTotal = carrierRiskBase + (carrierRisk ? carrierRisk.total : 0);
+  const grandTotal = protectedDiscount > 0
+    ? +(preDiscountTotal - protectedDiscount - protectedDiscountGst).toFixed(2)
+    : Math.ceil(preDiscountTotal);
   const balanceAmount = paymentStatus === "full" ? 0 : paymentStatus === "partial" ? Math.max(0, grandTotal - amountPaid) : grandTotal;
 
   // Carrier risk is a DTDC charge, so selecting DTDC turns it on by default.
@@ -850,8 +859,8 @@ export default function EditOrder() {
                           <SelectContent>{GST_RATES.map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}</SelectContent>
                         </Select>
                       </div>
-                      <div><Label className="text-xs">GST Amt</Label><p className="text-sm font-mono mt-1">₹{item.gst_amount.toFixed(2)}</p></div>
-                      <div><Label className="text-xs">Total</Label><p className="text-sm font-mono font-medium mt-1">₹{item.total.toFixed(2)}</p></div>
+                      <div><Label className="text-xs">GST Amt</Label><p className="text-sm font-mono mt-1">₹{(item.gst_amount || 0).toFixed(2)}</p></div>
+                      <div><Label className="text-xs">Total</Label><p className="text-sm font-mono font-medium mt-1">₹{(item.total || 0).toFixed(2)}</p></div>
                     </div>
                   )}
                 </div>
@@ -1056,8 +1065,11 @@ export default function EditOrder() {
                     {carrierRisk.gst_amount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Carrier Risk GST ({carrierRisk.gst_percent}%)</span><span className="font-mono">₹{carrierRisk.gst_amount.toFixed(2)}</span></div>}
                   </div>
                 )}
+                {protectedDiscount > 0 && (
+                  <div className="flex justify-between"><span className="text-muted-foreground">{order?.discount_label || "Discount"}</span><span className="font-mono text-emerald-500">-₹{protectedDiscount.toFixed(2)}</span></div>
+                )}
                 <Separator />
-                <div className="flex justify-between text-base font-bold"><span>Grand Total (Rounded Up)</span><span className="font-mono">₹{grandTotal}</span></div>
+                <div className="flex justify-between text-base font-bold"><span>{protectedDiscount > 0 ? "Grand Total" : "Grand Total (Rounded Up)"}</span><span className="font-mono">₹{grandTotal}</span></div>
               </div>
             </CardContent>
           </Card>
