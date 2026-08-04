@@ -5612,10 +5612,10 @@ async def amazon_check_pincode(pincode: str, weight: float = 1.0):
                 "phoneNumber": "9999999999",
             },
             "packages": [{
-                # Same default box the booking path uses, so the quote shown here
-                # matches what is actually charged. Amazon bills on volumetric
-                # weight, so a smaller assumed box quietly under-quotes.
-                "dimensions": {**AMAZON_DEFAULT_BOX, "unit": "CENTIMETER"},
+                # Same weight-derived box the booking path uses, so the quote
+                # shown here matches what is actually charged.
+                "dimensions": {**_amazon_box({"packaging": {"weight_kg": pkg_weight}}),
+                               "unit": "CENTIMETER"},
                 "weight": {"unit": "KILOGRAM", "value": pkg_weight},
                 "insuredValue": {"value": 100, "unit": "INR"},
                 "packageClientReferenceId": "svc-check-1",
@@ -5813,7 +5813,8 @@ def _amazon_rates_body(ship_to: dict, weight_kg: float, declared_value: float, r
         "shipFrom": _amazon_ship_from(),
         "shipTo": ship_to,
         "packages": [{
-            "dimensions": {**(box or AMAZON_DEFAULT_BOX), "unit": "CENTIMETER"},
+            "dimensions": {**(box or _amazon_box({"packaging": {"weight_kg": w}})),
+                           "unit": "CENTIMETER"},
             "weight": {"unit": "KILOGRAM", "value": w},
             "insuredValue": {"value": val, "unit": "INR"},
             "packageClientReferenceId": ref,
