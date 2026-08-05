@@ -5018,35 +5018,58 @@ async def dtdc_manual_dispatch(req: DtdcDispatchRequest, user=Depends(get_curren
 
 
 # DTDC pickup detection — statuses that mean the parcel has left us.
-DTDC_PICKED_HINTS = ("PICKED", "PICKUP", "IN TRANSIT", "INTRANSIT", "DISPATCH",
-                     "SHIPPED", "OUT FOR DELIVERY", "DELIVERED", "BOOKED")
+# Statuses that mean the parcel is genuinely in DTDC's hands. Anything not on
+# this list — notably pickup_awaited and softdata_upload — is NOT a pickup.
+#
+# This used to be a substring search over the whole tracking JSON for hints
+# including "PICKUP" and "BOOKED", so a freshly booked consignment showing
+# "Pickup Awaited" matched "PICKUP" and was auto-dispatched on the spot.
+DTDC_PICKED_STATUSES = {
+    "pickup_accepted", "pickup_completed", "picked_up", "pickedup",
+    "booked_at_hub", "in_transit", "intransit", "reached_at_hub",
+    "out_for_delivery", "delivered",
+}
+DTDC_PICKED_EVENTS = {"pickup completed", "pickup accepted", "picked up"}
+
+
+def _dtdc_norm(value) -> str:
+    return re.sub(r"[^a-z_ ]", "", str(value or "").strip().lower())
 
 
 def _dtdc_pickup_time(tracking: dict):
-    """Timestamp if DTDC tracking shows the parcel picked up, else None."""
-    if not tracking:
+    """Timestamp if DTDC confirms the parcel was collected, else None.
+
+    Matches the consignment status explicitly rather than searching the blob,
+    so 'Pickup Awaited' can never be read as 'picked up'.
+    """
+    if not isinstance(tracking, dict):
         return None
-    blob = json.dumps(tracking).upper() if isinstance(tracking, (dict, list)) else str(tracking).upper()
-    if not any(h in blob for h in DTDC_PICKED_HINTS):
+
+    status = _dtdc_norm(tracking.get("status")).replace(" ", "_")
+    events = tracking.get("events") or []
+
+    picked = status in DTDC_PICKED_STATUSES
+    event_time = None
+    for ev in events:
+        label = _dtdc_norm(ev.get("customer_update") or ev.get("type") or ev.get("status"))
+        if label in DTDC_PICKED_EVENTS or label.replace(" ", "_") in DTDC_PICKED_STATUSES:
+            picked = True
+            event_time = event_time or ev.get("event_time") or ev.get("timestamp") or ev.get("date")
+    if not picked:
         return None
-    # Try to surface a real event time; fall back to now.
-    def walk(node):
-        if isinstance(node, dict):
-            status = str(node.get("status") or node.get("action") or node.get("activity") or "").upper()
-            when = node.get("timestamp") or node.get("date") or node.get("event_time") or node.get("activity_date")
-            if status and any(h in status for h in DTDC_PICKED_HINTS) and when:
-                return str(when)
-            for v in node.values():
-                got = walk(v)
-                if got:
-                    return got
-        elif isinstance(node, list):
-            for v in node:
-                got = walk(v)
-                if got:
-                    return got
-        return None
-    return walk(tracking) or datetime.now(timezone.utc).isoformat()
+
+    when = event_time
+    if when is None:
+        for ev in events:
+            when = ev.get("event_time") or ev.get("timestamp") or ev.get("date")
+            if when:
+                break
+    if when is None:
+        return datetime.now(timezone.utc).isoformat()
+    try:                                    # DTDC sends epoch milliseconds
+        return datetime.fromtimestamp(int(when) / 1000, tz=timezone.utc).isoformat()
+    except (TypeError, ValueError):
+        return str(when)
 
 
 async def _dtdc_sync_all() -> list:
