@@ -4763,7 +4763,7 @@ async def dtdc_preview(req: DtdcBookRequest, user=Depends(get_current_user)):
 @api_router.post("/dtdc/book")
 async def dtdc_book(req: DtdcBookRequest, user=Depends(get_current_user)):
     """BOOKS a real DTDC consignment on the routed account."""
-    if user["role"] not in ["admin", "dispatch", "packaging"]:
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
         raise HTTPException(status_code=403, detail="Not authorized to book")
     order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
@@ -4828,6 +4828,58 @@ async def dtdc_book(req: DtdcBookRequest, user=Depends(get_current_user)):
     }})
     safe = {k: v for k, v in shipment.items() if k != "raw_response"}
     return {"ok": True, "shipment": safe}
+
+
+class BulkBookRequest(BaseModel):
+    order_ids: List[str]
+    payment_mode: Optional[str] = None      # Amazon only; prepaid unless stated
+
+
+async def _bulk_book(order_ids, book_one, user, label):
+    """Book many consignments one at a time, never aborting the batch.
+
+    Deliberately sequential: each booking spends money and schedules a pickup,
+    so a courier rate limit or one bad address must not take the rest down or
+    leave a half-booked batch nobody can account for. Every order gets its own
+    result line.
+    """
+    seen, ordered = set(), []
+    for oid in order_ids:
+        if oid and oid not in seen:
+            seen.add(oid)
+            ordered.append(oid)
+    if not ordered:
+        raise HTTPException(status_code=400, detail="No orders selected")
+    if len(ordered) > 50:
+        raise HTTPException(status_code=400, detail="Book at most 50 orders at a time")
+
+    booked, failed = [], []
+    for oid in ordered:
+        order = await db.orders.find_one({"id": oid}, {"_id": 0, "order_number": 1})
+        num = (order or {}).get("order_number") or oid[:8]
+        try:
+            res = await book_one(oid)
+            booked.append({"order_id": oid, "order_number": num, "result": res})
+        except HTTPException as e:
+            failed.append({"order_id": oid, "order_number": num, "error": str(e.detail)})
+        except Exception as e:
+            logging.error(f"{label} bulk book failed for {num}: {e}")
+            failed.append({"order_id": oid, "order_number": num, "error": str(e)[:200]})
+    return {"ok": True, "requested": len(ordered),
+            "booked": booked, "failed": failed,
+            "booked_count": len(booked), "failed_count": len(failed)}
+
+
+@api_router.post("/dtdc/bulk-book")
+async def dtdc_bulk_book(req: BulkBookRequest, user=Depends(get_current_user)):
+    """BOOKS real DTDC consignments for several orders."""
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized to book")
+
+    async def one(oid):
+        return await dtdc_book(DtdcBookRequest(order_id=oid), user=user)
+
+    return await _bulk_book(req.order_ids, one, user, "DTDC")
 
 
 @api_router.get("/dtdc/label/{order_id}")
@@ -5959,7 +6011,7 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
 @api_router.post("/amazon/book")
 async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_user)):
     """PURCHASES a real Amazon shipment (this costs money and schedules a pickup)."""
-    if user["role"] not in ["admin", "dispatch", "packaging"]:
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
         raise HTTPException(status_code=403, detail="Not authorized to book shipments")
     if not _amazon_configured():
         raise HTTPException(status_code=400, detail="Amazon Shipping API is not configured")
@@ -6094,6 +6146,26 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
 # ─── Amazon pickup tracking → auto-dispatch ───────────────────────────────
 # Amazon emits "PickupDone" when the parcel leaves us; the summary status also
 # moves past "ReadyForReceive" once it is in the network.
+@api_router.post("/amazon/bulk-book")
+async def amazon_bulk_book(req: BulkBookRequest, user=Depends(get_current_user)):
+    """PURCHASES real Amazon shipments for several orders.
+
+    payment_mode applies to the whole batch and defaults to prepaid, so a bulk
+    run can never turn prepaid orders into COD by accident.
+    """
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized to book")
+    mode = (req.payment_mode or "prepaid").strip().lower()
+    if mode not in ("prepaid", "cod"):
+        raise HTTPException(status_code=400, detail="payment_mode must be prepaid or cod")
+
+    async def one(oid):
+        return await amazon_book_order(
+            AmazonBookRequest(order_id=oid, payment_mode=mode), user=user)
+
+    return await _bulk_book(req.order_ids, one, user, "Amazon")
+
+
 AMAZON_PICKUP_EVENTS = {"PickupDone", "PickedUp", "Departed"}
 AMAZON_PICKED_STATUSES = {"InTransit", "OutForDelivery", "Delivering", "Delivered", "AttemptFail"}
 AMAZON_SYNC_INTERVAL_SECONDS = int(os.environ.get("AMAZON_SYNC_INTERVAL_SECONDS", "600"))

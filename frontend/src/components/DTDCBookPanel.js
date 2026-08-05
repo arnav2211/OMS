@@ -51,6 +51,29 @@ export default function DTDCBookPanel() {
 
   const printOne = (o) => window.open(labelUrl(o.id), "_blank");
 
+  // Unbooked selection drives bulk booking; booked selection drives slip printing.
+  const unbookedSelected = [...selected].filter(
+    id => orders.some(o => o.id === id && !o.dtdc_shipment?.reference_number));
+  const [bulkBooking, setBulkBooking] = useState(false);
+  const [bulkResult, setBulkResult] = useState(null);
+
+  const bulkBook = async () => {
+    if (unbookedSelected.length === 0) return;
+    setBulkBooking(true);
+    try {
+      const res = await api.post("/dtdc/bulk-book", { order_ids: unbookedSelected });
+      setBulkResult(res.data);
+      if (res.data.booked_count) toast.success(`Booked ${res.data.booked_count} consignment(s)`);
+      if (res.data.failed_count) toast.error(`${res.data.failed_count} failed — see the summary`);
+      setSelected(new Set());
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Bulk booking failed");
+    } finally {
+      setBulkBooking(false);
+    }
+  };
+
   const printBulk = () => {
     if (bookedSelected.length === 0) return toast.error("Select booked orders to print");
     bookedSelected.forEach((id, i) => setTimeout(() => window.open(labelUrl(id), "_blank"), i * 400));
@@ -123,6 +146,12 @@ export default function DTDCBookPanel() {
           DTDC orders weighed by packing. Booking charges the routed account — no Excel needed.
         </p>
         <div className="flex gap-2">
+          <Button size="sm" onClick={bulkBook}
+                  disabled={unbookedSelected.length === 0 || bulkBooking}
+                  data-testid="dtdc-bulk-book">
+            {bulkBooking ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Truck className="w-4 h-4 mr-1" />}
+            Book Selected ({unbookedSelected.length})
+          </Button>
           <Button variant="outline" size="sm" onClick={printBulk} disabled={bookedSelected.length === 0} data-testid="dtdc-bulk-print">
             <Printer className="w-4 h-4 mr-1" /> Print Slips ({bookedSelected.length})
           </Button>
@@ -134,6 +163,24 @@ export default function DTDCBookPanel() {
           </Button>
         </div>
       </div>
+
+      {bulkResult && (
+        <Card className={bulkResult.failed_count ? "border-amber-500/60" : "border-emerald-500/60"}>
+          <CardContent className="pt-4 text-sm space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold">
+                Bulk booking: {bulkResult.booked_count} booked, {bulkResult.failed_count} failed
+              </span>
+              <Button variant="ghost" size="sm" onClick={() => setBulkResult(null)}>Dismiss</Button>
+            </div>
+            {(bulkResult.failed || []).map((f, i) => (
+              <div key={i} className="text-xs text-destructive">
+                <b>{f.order_number}</b>: {f.error}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardContent className="p-0 overflow-x-auto">

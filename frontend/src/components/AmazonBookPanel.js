@@ -3,6 +3,7 @@ import api from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
@@ -25,6 +26,10 @@ export default function AmazonBookPanel() {
   // Explicit payment mode for this booking. Defaults to prepaid so COD is
   // never applied by omission, and never inferred silently from the order.
   const [payMode, setPayMode] = useState("prepaid");
+  const [selected, setSelected] = useState(new Set());
+  const [bulkMode, setBulkMode] = useState("prepaid");
+  const [bulkBooking, setBulkBooking] = useState(false);
+  const [bulkResult, setBulkResult] = useState(null);
   // { order, rates } — the confirmation step before any money is spent
   const [confirm, setConfirm] = useState(null);
   const [selectedRate, setSelectedRate] = useState(null);
@@ -42,6 +47,33 @@ export default function AmazonBookPanel() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const toggle = (id) => setSelected(prev => {
+    const n = new Set(prev);
+    n.has(id) ? n.delete(id) : n.add(id);
+    return n;
+  });
+
+  const bookable = orders.filter(o => !o.amazon_shipment?.shipment_id);
+  const selectedIds = [...selected].filter(id => bookable.some(o => o.id === id));
+
+  const bulkBook = async () => {
+    if (selectedIds.length === 0) return;
+    setBulkBooking(true);
+    try {
+      const res = await api.post("/amazon/bulk-book",
+                                 { order_ids: selectedIds, payment_mode: bulkMode });
+      setBulkResult(res.data);
+      if (res.data.booked_count) toast.success(`Booked ${res.data.booked_count} shipment(s)`);
+      if (res.data.failed_count) toast.error(`${res.data.failed_count} failed — see the summary`);
+      setSelected(new Set());
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Bulk booking failed");
+    } finally {
+      setBulkBooking(false);
+    }
+  };
 
   const getRates = async (order, mode) => {
     const useMode = mode || (order.is_cod ? "cod" : "prepaid");
@@ -101,6 +133,62 @@ export default function AmazonBookPanel() {
         </Button>
       </div>
 
+      {selectedIds.length > 0 && (
+        <Card className="border-primary/60">
+          <CardContent className="pt-4 flex flex-wrap items-center gap-3">
+            <span className="text-sm font-medium">
+              {selectedIds.length} order{selectedIds.length > 1 ? "s" : ""} selected
+            </span>
+            {/* The whole batch books on one mode, stated up front and prepaid
+                by default, so a bulk run can never silently turn orders COD. */}
+            <div className="flex gap-1">
+              {[["prepaid", "Prepaid"], ["cod", "COD"]].map(([m, label]) => (
+                <button key={m} type="button" onClick={() => setBulkMode(m)}
+                        data-testid={`amz-bulk-mode-${m}`}
+                        className={`rounded-md border px-3 py-1.5 text-xs transition ${
+                          bulkMode === m
+                            ? (m === "cod"
+                                ? "border-amber-500 bg-amber-100 dark:bg-amber-900/40 font-semibold"
+                                : "border-sky-500 bg-sky-100 dark:bg-sky-900/40 font-semibold")
+                            : "border-border hover:bg-muted"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <Button size="sm" onClick={bulkBook} disabled={bulkBooking}
+                    data-testid="amz-bulk-book">
+              {bulkBooking
+                ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Booking {selectedIds.length}…</>
+                : <><Truck className="w-4 h-4 mr-1" /> Book {selectedIds.length} as {bulkMode === "cod" ? "COD" : "Prepaid"}</>}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())} disabled={bulkBooking}>
+              Clear
+            </Button>
+            {bulkMode === "cod" && (
+              <span className="text-xs text-amber-600 w-full">
+                Every selected order will be booked COD, collecting its own outstanding balance.
+              </span>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {bulkResult && (
+        <Card className={bulkResult.failed_count ? "border-amber-500/60" : "border-emerald-500/60"}>
+          <CardContent className="pt-4 text-sm space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold">
+                Bulk booking: {bulkResult.booked_count} booked, {bulkResult.failed_count} failed
+              </span>
+              <Button variant="ghost" size="sm" onClick={() => setBulkResult(null)}>Dismiss</Button>
+            </div>
+            {(bulkResult.failed || []).map((f, i) => (
+              <div key={i} className="text-xs text-destructive"><b>{f.order_number}</b>: {f.error}</div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           {loading ? (
@@ -109,6 +197,7 @@ export default function AmazonBookPanel() {
             <Table className="min-w-[860px]">
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10"></TableHead>
                   <TableHead className="whitespace-nowrap">Order #</TableHead>
                   <TableHead className="whitespace-nowrap">Customer</TableHead>
                   <TableHead className="whitespace-nowrap">Destination</TableHead>
@@ -121,7 +210,7 @@ export default function AmazonBookPanel() {
               <TableBody>
                 {orders.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground py-10">
+                    <TableCell colSpan={8} className="text-center text-muted-foreground py-10">
                       No orders ready. Set an order's courier to <b>Amazon</b> and have packing enter the weight.
                     </TableCell>
                   </TableRow>
@@ -131,6 +220,13 @@ export default function AmazonBookPanel() {
                   const sa = o.shipping_address || {};
                   return (
                     <TableRow key={o.id} data-testid={`amz-book-row-${o.id}`}>
+                      <TableCell>
+                        {!sh?.shipment_id && (
+                          <Checkbox checked={selected.has(o.id)}
+                                    onCheckedChange={() => toggle(o.id)}
+                                    data-testid={`amz-select-${o.id}`} />
+                        )}
+                      </TableCell>
                       <TableCell className="font-mono text-sm">{o.order_number}</TableCell>
                       <TableCell className="text-sm">
                         {o.customer_name}
