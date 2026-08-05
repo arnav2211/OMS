@@ -6210,6 +6210,38 @@ async def _save_label_as_slip(shipment: dict) -> str:
     return f"/api/uploads/{filename}"
 
 
+async def _amazon_mark_dispatched(order: dict, when: str, by: str, docket: str = "", slip_url: str = "") -> dict:
+    """Shared dispatch write for both the manual button and the pickup poller."""
+    shipment = order.get("amazon_shipment") or {}
+    dispatch = order.get("dispatch") or {}
+    slips = list(dispatch.get("dispatch_slip_images") or [])
+    if slip_url and slip_url not in slips:
+        slips.append(slip_url)
+    if not slips:
+        url = await _save_label_as_slip(shipment)
+        if url:
+            slips.append(url)
+    lr = docket or shipment.get("tracking_id") or ""
+    dispatch.update({
+        "courier_name": "Amazon",
+        "transporter_name": "",
+        "lr_no": lr,
+        "dispatch_slip_images": slips,
+        "dispatch_type": "courier",
+        "porter_link": "",
+        "dispatched_by": by,
+        "dispatched_at": when,
+    })
+    await db.orders.update_one({"id": order["id"]}, {"$set": {
+        "dispatch": dispatch,
+        "status": "dispatched",
+        "courier_name": "Amazon",
+        "amazon_shipment.picked_up_at": when,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    return {"lr_no": lr, "slips": slips}
+
+
 async def _amazon_sync_order(order: dict) -> Optional[str]:
     """Mark an order dispatched once Amazon reports pickup. Returns a status note."""
     shipment = order.get("amazon_shipment") or {}
@@ -6220,30 +6252,7 @@ async def _amazon_sync_order(order: dict) -> Optional[str]:
     picked_at = _amazon_pickup_time(payload)
     if not picked_at:
         return None
-
-    dispatch = order.get("dispatch") or {}
-    slips = list(dispatch.get("dispatch_slip_images") or [])
-    if not slips:
-        url = await _save_label_as_slip(shipment)
-        if url:
-            slips.append(url)
-    dispatch.update({
-        "courier_name": "Amazon",
-        "transporter_name": "",
-        "lr_no": tracking,
-        "dispatch_slip_images": slips,
-        "dispatch_type": "courier",
-        "porter_link": "",
-        "dispatched_by": dispatch.get("dispatched_by") or "Amazon Shipping (auto)",
-        "dispatched_at": picked_at,
-    })
-    await db.orders.update_one({"id": order["id"]}, {"$set": {
-        "dispatch": dispatch,
-        "status": "dispatched",
-        "courier_name": "Amazon",
-        "amazon_shipment.picked_up_at": picked_at,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }})
+    await _amazon_mark_dispatched(order, picked_at, "Amazon Shipping (auto)", docket=tracking)
     logging.info(f"Amazon auto-dispatch: {order.get('order_number')} picked up at {picked_at}")
     return f"{order.get('order_number')} dispatched (picked up {picked_at})"
 
@@ -6317,6 +6326,33 @@ async def amazon_sync_tracking(user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Not authorized")
     notes = await _amazon_sync_all()
     return {"ok": True, "dispatched": notes, "count": len(notes)}
+
+
+class AmazonDispatchRequest(BaseModel):
+    order_id: str
+    docket_no: Optional[str] = ""
+    slip_image_url: Optional[str] = ""
+
+
+@api_router.post("/amazon/dispatch")
+async def amazon_manual_dispatch(req: AmazonDispatchRequest, user=Depends(get_current_user)):
+    """Dispatch now, without waiting for Amazon to report pickup."""
+    if user["role"] not in ["admin", "dispatch", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("status") == "dispatched":
+        raise HTTPException(status_code=400, detail="Order is already dispatched")
+    shipment = order.get("amazon_shipment") or {}
+    docket = (req.docket_no or "").strip() or shipment.get("tracking_id") or ""
+    if not docket:
+        raise HTTPException(status_code=400, detail="Tracking / docket number is required")
+    res = await _amazon_mark_dispatched(
+        order, datetime.now(timezone.utc).isoformat(), user["name"],
+        docket=docket, slip_url=(req.slip_image_url or "").strip(),
+    )
+    return {"ok": True, **res}
 
 
 async def _amazon_sync_loop():

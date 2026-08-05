@@ -4,6 +4,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
@@ -33,6 +35,10 @@ export default function AmazonBookPanel() {
   // { order, rates } — the confirmation step before any money is spent
   const [confirm, setConfirm] = useState(null);
   const [selectedRate, setSelectedRate] = useState(null);
+  // Manual dispatch — mark a booked order shipped without waiting for pickup.
+  const [dispatchFor, setDispatchFor] = useState(null);
+  const [docketNo, setDocketNo] = useState("");
+  const [dispatching, setDispatching] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -120,6 +126,22 @@ export default function AmazonBookPanel() {
   const printLabel = (order) => {
     const token = localStorage.getItem("token");
     window.open(`${process.env.REACT_APP_BACKEND_URL}/api/amazon/label/${order.id}?token=${token}`, "_blank");
+  };
+
+  const doDispatch = async () => {
+    if (!dispatchFor) return;
+    setDispatching(true);
+    try {
+      await api.post("/amazon/dispatch", { order_id: dispatchFor.id, docket_no: docketNo.trim() });
+      toast.success("Marked dispatched");
+      setDispatchFor(null);
+      setDocketNo("");
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Dispatch failed");
+    } finally {
+      setDispatching(false);
+    }
   };
 
   return (
@@ -253,9 +275,16 @@ export default function AmazonBookPanel() {
                       </TableCell>
                       <TableCell>
                         {sh?.shipment_id ? (
-                          <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => printLabel(o)} data-testid={`amz-print-${o.id}`}>
-                            <Printer className="w-3 h-3 mr-1" /> Print Label
-                          </Button>
+                          <div className="flex gap-1 flex-wrap">
+                            <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => printLabel(o)} data-testid={`amz-print-${o.id}`}>
+                              <Printer className="w-3 h-3 mr-1" /> Print Label
+                            </Button>
+                            <Button variant="outline" size="sm" className="text-xs h-7"
+                              onClick={() => { setDispatchFor(o); setDocketNo(sh.tracking_id || ""); }}
+                              data-testid={`amz-dispatch-${o.id}`}>
+                              Dispatch
+                            </Button>
+                          </div>
                         ) : (
                           <Button size="sm" className="text-xs h-7" disabled={!!quoting[o.id]} onClick={() => getRates(o)} data-testid={`amz-rates-${o.id}`}>
                             {quoting[o.id] ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Truck className="w-3 h-3 mr-1" />}
@@ -380,6 +409,32 @@ export default function AmazonBookPanel() {
                 : payMode === "cod"
                   ? `Book as COD — collect ₹${Number(confirm?.codAmount || 0).toFixed(2)}`
                   : "Book as Prepaid"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manual dispatch before Amazon reports pickup */}
+      <Dialog open={!!dispatchFor} onOpenChange={(v) => { if (!v && !dispatching) { setDispatchFor(null); setDocketNo(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Dispatch Order</DialogTitle>
+            <DialogDescription>
+              {dispatchFor?.order_number} · marks it dispatched without waiting for Amazon pickup.
+            </DialogDescription>
+          </DialogHeader>
+          <div>
+            <Label>Tracking / Docket No.</Label>
+            <Input value={docketNo} onChange={e => setDocketNo(e.target.value)} className="mt-1.5 font-mono"
+              placeholder="Tracking number" data-testid="amz-docket-input" />
+            <p className="text-xs text-muted-foreground mt-1.5">
+              The Amazon label is attached automatically as the dispatch slip.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDispatchFor(null); setDocketNo(""); }} disabled={dispatching}>Cancel</Button>
+            <Button onClick={doDispatch} disabled={dispatching || !docketNo.trim()} data-testid="amz-confirm-dispatch">
+              {dispatching ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Dispatching…</> : "Mark Dispatched"}
             </Button>
           </DialogFooter>
         </DialogContent>
