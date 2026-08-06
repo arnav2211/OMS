@@ -4221,12 +4221,136 @@ async def upload_amazon_pdf(
     return {"created": len(created), "duplicates": len(duplicates), "duplicate_ids": duplicates, "orders": created}
 
 
+# ─── Amazon product formulations ─────────────────────────────────────────
+# Amazon order lines carry a marketplace listing title, not our product names,
+# and one formulation covers every variant of a product — all the eucalyptus
+# oil listings share a recipe. So formulations are held per product keyword and
+# matched against the listing title, with a per-line override when a specific
+# order needs something different.
+
+def _formulation_key(text: str) -> str:
+    """Lowercase alphanumeric words, so listing titles and keys compare fairly."""
+    return " ".join(re.sub(r"[^a-z0-9 ]", " ", str(text or "").lower()).split())
+
+
+def resolve_amazon_formulation(product_name: str, defaults: list) -> Optional[dict]:
+    """Best product-level formulation for a listing title.
+
+    Longest matching keyword wins, so "eucalyptus oil blue gum" beats a generic
+    "eucalyptus oil" entry when both are configured.
+    """
+    title = _formulation_key(product_name)
+    if not title:
+        return None
+    best = None
+    for d in defaults:
+        key = _formulation_key(d.get("product_key"))
+        if key and key in title and (best is None or len(key) > len(_formulation_key(best["product_key"]))):
+            best = d
+    return best
+
+
+async def _amazon_apply_formulations(orders: list, user: dict) -> list:
+    """Attach the resolved formulation to each line, honouring visibility.
+
+    Same rules as our own orders: telecallers never see one, packaging only
+    when the global toggle is on, dispatch and accounts never, admin always.
+    """
+    role = user["role"]
+    settings = await db.settings.find_one({"_id": "global"})
+    show_global = bool((settings or {}).get("show_formulation", False))
+    visible = role == "admin" or (role == "packaging" and show_global)
+
+    defaults = await db.amazon_formulations.find({}, {"_id": 0}).to_list(500) if visible else []
+    for o in orders:
+        for item in o.get("items") or []:
+            if not visible:
+                item.pop("formulation", None)
+                item.pop("formulation_source", None)
+                continue
+            if str(item.get("formulation") or "").strip():
+                item["formulation_source"] = "order"
+                continue
+            match = resolve_amazon_formulation(item.get("product_name") or item.get("title"), defaults)
+            item["formulation"] = (match or {}).get("formulation", "")
+            item["formulation_source"] = "product" if match else ""
+            item["formulation_product_key"] = (match or {}).get("product_key", "")
+    return orders
+
+
+class AmazonFormulationModel(BaseModel):
+    product_key: str            # keyword matched against the listing title
+    formulation: str = ""
+    label: str = ""
+
+
+@api_router.get("/amazon/formulations")
+async def list_amazon_formulations(user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "packaging"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    rows = await db.amazon_formulations.find({}, {"_id": 0}).sort("product_key", 1).to_list(500)
+    return rows
+
+
+@api_router.post("/amazon/formulations")
+async def upsert_amazon_formulation(req: AmazonFormulationModel, user=Depends(get_current_user)):
+    """Create or update the default formulation for a product keyword."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    key = _formulation_key(req.product_key)
+    if not key:
+        raise HTTPException(status_code=400, detail="Product keyword is required")
+    now = datetime.now(timezone.utc).isoformat()
+    existing = await db.amazon_formulations.find_one({"product_key": key}, {"_id": 0})
+    doc = {"product_key": key, "label": req.label or req.product_key,
+           "formulation": req.formulation, "updated_at": now, "updated_by": user["name"]}
+    if existing:
+        await db.amazon_formulations.update_one({"product_key": key}, {"$set": doc})
+    else:
+        doc.update({"id": str(uuid.uuid4()), "created_at": now})
+        await db.amazon_formulations.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return {"ok": True, "formulation": doc}
+
+
+@api_router.delete("/amazon/formulations/{product_key}")
+async def delete_amazon_formulation(product_key: str, user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    res = await db.amazon_formulations.delete_one({"product_key": _formulation_key(product_key)})
+    return {"ok": True, "deleted": res.deleted_count}
+
+
+class AmazonItemFormulationRequest(BaseModel):
+    item_index: int
+    formulation: str = ""       # blank clears the override, reverting to the product default
+
+
+@api_router.put("/amazon/orders/{order_id}/formulation")
+async def set_amazon_item_formulation(order_id: str, req: AmazonItemFormulationRequest,
+                                      user=Depends(get_current_user)):
+    """Override one line's formulation for this order only."""
+    if user["role"] not in ["admin", "packaging"]:
+        raise HTTPException(status_code=403, detail="Packaging or admin only")
+    order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    items = order.get("items") or []
+    if not 0 <= req.item_index < len(items):
+        raise HTTPException(status_code=400, detail="No such item on this order")
+    items[req.item_index]["formulation"] = req.formulation.strip()
+    await db.amazon_orders.update_one({"id": order_id}, {"$set": {
+        "items": items, "updated_at": datetime.now(timezone.utc).isoformat(),
+        "formulation_by": user["name"]}})
+    return {"ok": True}
+
+
 @api_router.get("/amazon/orders")
 async def list_amazon_orders(user=Depends(get_current_user)):
     if user["role"] not in ["admin", "packaging", "dispatch"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     orders = await db.amazon_orders.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
-    return orders
+    return await _amazon_apply_formulations(orders, user)
 
 
 @api_router.get("/amazon/orders/{order_id}")
@@ -4236,7 +4360,7 @@ async def get_amazon_order(order_id: str, user=Depends(get_current_user)):
     order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    return order
+    return (await _amazon_apply_formulations([order], user))[0]
 
 
 @api_router.put("/amazon/orders/{order_id}/packaging")
