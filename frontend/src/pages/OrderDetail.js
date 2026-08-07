@@ -1172,12 +1172,37 @@ export default function OrderDetail() {
                         {h.items?.filter(it => it.formulation).map((it, j) => (
                           <div key={j} className="border-l-2 border-amber-400 pl-3">
                             <div className="flex items-start justify-between gap-2">
-                              <p className="text-sm">{it.product_name} <span className="text-muted-foreground">({it.qty} {it.unit})</span></p>
+                              {/* Same fields the editor shows for the current order */}
+                              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                <span className="text-sm font-medium">{it.product_name}</span>
+                                {it.description && <span className="text-xs text-muted-foreground">— {it.description}</span>}
+                                <span className="text-xs text-muted-foreground">Qty: {it.qty} {it.unit}</span>
+                                {it.amount > 0 && (
+                                  <span className="text-xs text-muted-foreground">
+                                    Amt: {"₹"}{it.amount}{h.gst_applicable ? " (excl. GST)" : ""}
+                                  </span>
+                                )}
+                              </div>
                               <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => copyToClipboard(it.formulation, "Formulation")} title="Copy formulation">
                                 <ClipboardCopy className="w-3.5 h-3.5" />
                               </Button>
                             </div>
                             <p className="text-xs text-amber-600 whitespace-pre-wrap select-text">{it.formulation}</p>
+                          </div>
+                        ))}
+                        {h.free_samples?.filter(s => s.formulation).map((s, j) => (
+                          <div key={`fs-${j}`} className="border-l-2 border-emerald-500 pl-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                <span className="text-sm font-medium">{s.item_name}</span>
+                                <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">Free sample</Badge>
+                                {s.description && <span className="text-xs text-muted-foreground">— {s.description}</span>}
+                              </div>
+                              <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => copyToClipboard(s.formulation, "Formulation")} title="Copy formulation">
+                                <ClipboardCopy className="w-3.5 h-3.5" />
+                              </Button>
+                            </div>
+                            <p className="text-xs text-amber-600 whitespace-pre-wrap select-text">{s.formulation}</p>
                           </div>
                         ))}
                       </div>

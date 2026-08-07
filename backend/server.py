@@ -2873,21 +2873,36 @@ async def formulation_history(customer_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Admin or packaging only")
     orders = await db.orders.find(
         {"customer_id": customer_id, "status": {"$ne": "cancelled"}},
-        {"_id": 0, "order_number": 1, "id": 1, "items": 1, "created_at": 1, "customer_name": 1}
+        {"_id": 0, "order_number": 1, "id": 1, "items": 1, "free_samples": 1,
+         "created_at": 1, "customer_name": 1, "gst_applicable": 1}
     ).sort("created_at", -1).to_list(50)
     history = []
     for order in orders:
+        # Mirror the fields the editor shows for the current order, so a past
+        # formulation can be read in the same context it was written in.
         items_with_formulation = [
-            {"product_name": item["product_name"], "formulation": item.get("formulation", ""), "qty": item.get("qty", 0), "unit": item.get("unit", "")}
+            {"product_name": item["product_name"],
+             "description": item.get("description", ""),
+             "formulation": item.get("formulation", ""),
+             "qty": item.get("qty", 0), "unit": item.get("unit", ""),
+             "amount": item.get("amount", 0)}
             for item in order.get("items", []) if item.get("formulation")
         ]
-        if items_with_formulation:
+        samples_with_formulation = [
+            {"item_name": s.get("item_name", ""),
+             "description": s.get("description", ""),
+             "formulation": s.get("formulation", "")}
+            for s in (order.get("free_samples") or []) if s.get("formulation")
+        ]
+        if items_with_formulation or samples_with_formulation:
             history.append({
                 "order_number": order["order_number"],
                 "order_id": order["id"],
                 "customer_name": order.get("customer_name", ""),
                 "created_at": order["created_at"],
-                "items": items_with_formulation
+                "gst_applicable": bool(order.get("gst_applicable")),
+                "items": items_with_formulation,
+                "free_samples": samples_with_formulation,
             })
     return history
 
