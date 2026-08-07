@@ -379,7 +379,12 @@ export default function OrderDetail() {
         slipUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
       );
       const files = blobs.map((blob, i) => {
-        const ext = blob.type.includes("png") ? "png" : "jpg";
+        // Courier-booked slips are PDFs; naming one .jpg produces a file that
+        // will not open on the recipient's phone.
+        const t = blob.type || "";
+        const ext = t.includes("pdf") ? "pdf"
+                  : t.includes("png") ? "png"
+                  : t.includes("webp") ? "webp" : "jpg";
         return new File([blob], `dispatch-slip-${order.order_number}-${i + 1}.${ext}`, { type: blob.type });
       });
       if (navigator.canShare && navigator.canShare({ files })) {
@@ -1051,11 +1056,24 @@ export default function OrderDetail() {
                   <div className="pt-2">
                     <span className="text-muted-foreground text-xs uppercase font-medium">Dispatch Slip</span>
                     <div className="flex flex-wrap gap-2 mt-1">
-                      {order.dispatch.dispatch_slip_images.map((url, i) => (
-                        <button key={i} className="w-16 h-16 rounded border overflow-hidden" onClick={() => setPreviewImage(`${process.env.REACT_APP_BACKEND_URL}${url}`)}>
-                          <img src={`${process.env.REACT_APP_BACKEND_URL}${url}`} alt={`Slip ${i+1}`} className="w-full h-full object-cover" />
-                        </button>
-                      ))}
+                      {order.dispatch.dispatch_slip_images.map((url, i) => {
+                        // Courier-booked slips arrive as PDFs; an <img> renders
+                        // those as a broken placeholder, so open them instead.
+                        const full = `${process.env.REACT_APP_BACKEND_URL}${url}`;
+                        const isPdf = String(url).toLowerCase().endsWith(".pdf");
+                        return isPdf ? (
+                          <a key={i} href={full} target="_blank" rel="noopener noreferrer"
+                             className="w-16 h-16 rounded border flex flex-col items-center justify-center gap-1 hover:bg-accent"
+                             title={`Open slip ${i + 1} (PDF)`} data-testid={`slip-pdf-${i}`}>
+                            <FileText className="w-6 h-6 text-red-600" />
+                            <span className="text-[9px] font-medium text-muted-foreground">PDF</span>
+                          </a>
+                        ) : (
+                          <button key={i} className="w-16 h-16 rounded border overflow-hidden" onClick={() => setPreviewImage(full)}>
+                            <img src={full} alt={`Slip ${i + 1}`} className="w-full h-full object-cover" />
+                          </button>
+                        );
+                      })}
                     </div>
                     {["admin", "telecaller", "packaging", "dispatch"].includes(user?.role) && (
                       <Button variant="outline" size="sm" className="mt-2" onClick={shareDispatchSlip} data-testid="share-dispatch-slip-btn">
