@@ -286,18 +286,17 @@ export default function CreateOrder() {
   const grandTotal = Math.ceil(rawTotal + (carrierRisk ? carrierRisk.total : 0));
   const balanceAmount = paymentStatus === "full" ? 0 : paymentStatus === "partial" ? Math.max(0, grandTotal - amountPaid) : grandTotal;
 
-  // Carrier risk is a DTDC charge, so selecting DTDC turns it on by default.
-  // Set here rather than in an effect so it never fights hydration or a manual
-  // override — it only moves when the courier itself changes.
+  // Carrier risk only exists on DTDC, and is never applied automatically - it
+  // is a real charge to the customer, so it must be a deliberate tick. Moving
+  // away from DTDC clears it, since it cannot apply to any other courier.
   const handleCourierChange = (value) => {
     setCourierName(value);
-    setCarrierRiskApplicable(value === CARRIER_RISK_COURIER);
+    if (value !== CARRIER_RISK_COURIER) setCarrierRiskApplicable(false);
   };
 
   const handleShippingMethodChange = (value) => {
     setShippingMethod(value);
     if (value !== "courier") setCarrierRiskApplicable(false);
-    else setCarrierRiskApplicable(courierName === CARRIER_RISK_COURIER);
   };
 
   const handleScreenshotUpload = async (e) => {
@@ -728,7 +727,11 @@ export default function CreateOrder() {
               <Checkbox
                 id="carrierRisk"
                 checked={carrierRiskApplicable}
-                onCheckedChange={setCarrierRiskApplicable}
+                disabled={courierName !== CARRIER_RISK_COURIER || shippingMethod !== "courier"}
+                onCheckedChange={(v) => {
+                  if (courierName !== CARRIER_RISK_COURIER || shippingMethod !== "courier") return;
+                  setCarrierRiskApplicable(v);
+                }}
                 data-testid="carrier-risk-checkbox"
               />
               <Label htmlFor="carrierRisk" className="cursor-pointer">

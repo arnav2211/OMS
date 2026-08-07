@@ -523,13 +523,13 @@ export default function EditOrder() {
   // override — it only moves when the courier itself changes.
   const handleCourierChange = (value) => {
     setCourierName(value);
-    setCarrierRiskApplicable(value === CARRIER_RISK_COURIER);
+    // Never applied automatically; cleared when the courier cannot carry it.
+    if (value !== CARRIER_RISK_COURIER) setCarrierRiskApplicable(false);
   };
 
   const handleShippingMethodChange = (value) => {
     setShippingMethod(value);
     if (value !== "courier") setCarrierRiskApplicable(false);
-    else setCarrierRiskApplicable(courierName === CARRIER_RISK_COURIER);
   };
 
   // State search for address
@@ -960,7 +960,11 @@ export default function EditOrder() {
                   <Checkbox
                     id="editCarrierRisk"
                     checked={carrierRiskApplicable}
-                    onCheckedChange={setCarrierRiskApplicable}
+                    disabled={courierName !== CARRIER_RISK_COURIER || shippingMethod !== "courier"}
+                    onCheckedChange={(v) => {
+                      if (courierName !== CARRIER_RISK_COURIER || shippingMethod !== "courier") return;
+                      setCarrierRiskApplicable(v);
+                    }}
                     data-testid="edit-carrier-risk-checkbox"
                   />
                   <Label htmlFor="editCarrierRisk" className="cursor-pointer">

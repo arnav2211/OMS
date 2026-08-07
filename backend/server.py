@@ -209,6 +209,19 @@ def calc_carrier_risk(base_value: float, gst_percent: int = CARRIER_RISK_GST_PER
 WEBSITE_USERNAME = "website"
 
 
+def carrier_risk_allowed(req) -> bool:
+    """Carrier risk is a DTDC-only charge and is never applied automatically.
+
+    Guards the stored value so it cannot end up on another courier if a client
+    sends it - it is a real charge to the customer, not a default.
+    """
+    if not bool(getattr(req, "carrier_risk_applicable", False)):
+        return False
+    if (getattr(req, "shipping_method", "") or "").strip().lower() not in ("", "courier"):
+        return False
+    return (getattr(req, "courier_name", "") or "").strip().upper() == "DTDC"
+
+
 def build_additional_charges(raw_charges, gst_applicable: bool, carrier_risk_applicable: bool, base_value: float):
     """Normalise additional charges, appending the derived carrier risk row when applicable.
 
@@ -882,7 +895,7 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "shipping_charge": req.shipping_charge,
         "shipping_gst": shipping_gst,
         "additional_charges": additional_charges,
-        "carrier_risk_applicable": req.carrier_risk_applicable,
+        "carrier_risk_applicable": carrier_risk_allowed(req),
         "subtotal": round(subtotal, 2),
         "total_gst": round(total_gst + shipping_gst + total_additional_gst - discount_gst, 2),
         "grand_total": grand_total,
@@ -3252,7 +3265,7 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
         "shipping_charge": req.shipping_charge,
         "shipping_gst": shipping_gst,
         "additional_charges": additional_charges,
-        "carrier_risk_applicable": req.carrier_risk_applicable,
+        "carrier_risk_applicable": carrier_risk_allowed(req),
         "subtotal": round(subtotal, 2),
         "total_gst": round(total_gst + shipping_gst + total_additional_gst, 2),
         "grand_total": grand_total,
@@ -3374,7 +3387,7 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
         "shipping_charge": req.shipping_charge,
         "shipping_gst": shipping_gst,
         "additional_charges": additional_charges,
-        "carrier_risk_applicable": req.carrier_risk_applicable,
+        "carrier_risk_applicable": carrier_risk_allowed(req),
         "subtotal": round(subtotal, 2),
         "total_gst": round(total_gst + shipping_gst + total_additional_gst, 2),
         "grand_total": grand_total,
