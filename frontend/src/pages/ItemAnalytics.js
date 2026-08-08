@@ -15,6 +15,7 @@ export default function ItemAnalytics() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [selectedItem, setSelectedItem] = useState(null);
+  const [search, setSearch] = useState("");
   const [showDetail, setShowDetail] = useState(false);
 
   useEffect(() => { loadData(); }, []);
@@ -34,21 +35,45 @@ export default function ItemAnalytics() {
 
   const openDetail = (item) => { setSelectedItem(item); setShowDetail(true); };
 
+  // Filtered client-side: the dataset is one row per product, so it stays fast
+  // and the date filter (which does hit the server) is not re-run on typing.
+  const q = search.trim().toLowerCase();
+  const visibleItems = q
+    ? items.filter(i => (i.product_name || "").toLowerCase().includes(q))
+    : items;
+
   return (
     <div className="space-y-6" data-testid="item-analytics">
-      <h1 className="text-2xl font-bold tracking-tight">Item Sales Analytics</h1>
+      <div className="flex items-baseline justify-between gap-3 flex-wrap">
+        <h1 className="text-2xl font-bold tracking-tight">Item Sales Analytics</h1>
+        {!loading && items.length > 0 && (
+          <span className="text-sm text-muted-foreground" data-testid="item-count">
+            {q ? `${visibleItems.length} of ${items.length} products` : `${items.length} products`}
+          </span>
+        )}
+      </div>
 
       <Card>
         <CardHeader className="pb-3">
           <div className="flex flex-wrap items-end gap-3">
             <div><Label className="text-xs">From</Label><Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} data-testid="item-date-from" /></div>
             <div><Label className="text-xs">To</Label><Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} data-testid="item-date-to" /></div>
-            <Button variant="outline" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }} data-testid="item-clear-filter">Clear</Button>
+            <div className="flex-1 min-w-[200px]">
+              <Label className="text-xs">Search product</Label>
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input value={search} onChange={e => setSearch(e.target.value)}
+                       placeholder="Type a product name..." className="pl-8"
+                       data-testid="item-search" />
+              </div>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); setSearch(""); }} data-testid="item-clear-filter">Clear</Button>
           </div>
         </CardHeader>
         <CardContent>
-          {loading ? <p className="text-center py-8 text-muted-foreground">Loading...</p> : items.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground"><TrendingUp className="w-12 h-12 mx-auto mb-3 opacity-30" /><p>No item sales data</p></div>
+          {loading ? <p className="text-center py-8 text-muted-foreground">Loading...</p> : visibleItems.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground"><TrendingUp className="w-12 h-12 mx-auto mb-3 opacity-30" />
+              <p>{q ? `No product matches "${search.trim()}"` : "No item sales data"}</p></div>
           ) : (
             <Table>
               <TableHeader><TableRow>
@@ -60,7 +85,7 @@ export default function ItemAnalytics() {
                 <TableHead></TableHead>
               </TableRow></TableHeader>
               <TableBody>
-                {items.map((item, idx) => (
+                {visibleItems.map((item, idx) => (
                   <TableRow key={idx} data-testid={`item-row-${idx}`}>
                     <TableCell className="text-muted-foreground">{idx + 1}</TableCell>
                     <TableCell className="font-medium">{item.product_name}</TableCell>
