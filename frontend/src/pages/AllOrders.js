@@ -58,6 +58,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
   const [showDTDCDialog, setShowDTDCDialog] = useState(false);
   const [currentPage, setCurrentPage] = useState(Number(sp.get("page")) || 1);
   const [totalPages, setTotalPages] = useState(1);
+  const [pageInput, setPageInput] = useState("");
   const [totalOrders, setTotalOrders] = useState(0);
   const PAGE_SIZE = 50;
 
@@ -545,6 +546,26 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" className="h-7" disabled={currentPage <= 1} onClick={() => setCurrentPage(p => p - 1)} data-testid="prev-page-btn">Previous</Button>
               <span className="text-xs">Page {currentPage} of {totalPages}</span>
+              {totalPages > 1 && (
+                <form className="flex items-center gap-1"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        // Clamp rather than reject, so 999 lands on the last page.
+                        const n = parseInt(pageInput, 10);
+                        if (!n || n < 1) return;
+                        setCurrentPage(Math.min(n, totalPages));
+                        setPageInput("");
+                      }}>
+                  <span className="text-xs">Go to</span>
+                  <Input value={pageInput}
+                         onChange={(e) => setPageInput(e.target.value.replace(/\D/g, ""))}
+                         placeholder="#" inputMode="numeric"
+                         className="h-7 w-14 text-xs text-center"
+                         data-testid="goto-page-input" />
+                  <Button type="submit" variant="outline" size="sm" className="h-7"
+                          disabled={!pageInput} data-testid="goto-page-btn">Go</Button>
+                </form>
+              )}
               <Button variant="outline" size="sm" className="h-7" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(p => p + 1)} data-testid="next-page-btn">Next</Button>
             </div>
           </div>
