@@ -5977,6 +5977,24 @@ def _address_lines(sa: dict) -> tuple:
     return line1[:120], line2[:120]
 
 
+AMAZON_FALLBACK_EMAIL = os.environ.get("AMAZON_FALLBACK_EMAIL", "arnavagrawal22@gmail.com")
+
+
+async def _amazon_recipient_email(order: dict) -> str:
+    """Email to put on the Amazon shipment.
+
+    Amazon sends delivery notifications here. Used at booking time only and
+    never written back to the order, so falling back to our own address routes
+    the notifications to us rather than losing them - unlike a placeholder
+    phone number, which would break the delivery itself.
+    """
+    email = str(order.get("customer_email") or "").strip()
+    if not email and order.get("customer_id"):
+        cust = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0, "email": 1})
+        email = str((cust or {}).get("email") or "").strip()
+    return email if "@" in email else AMAZON_FALLBACK_EMAIL
+
+
 def _amazon_ship_from() -> dict:
     return {
         "name": AMAZON_SHIP["origin_name"],
@@ -6134,6 +6152,7 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
         "city": sa.get("city") or "", "stateOrRegion": sa.get("state") or "",
         "postalCode": sa.get("pincode") or "", "countryCode": "IN",
         "phoneNumber": phone or AMAZON_SHIP["origin_phone"],
+        "email": await _amazon_recipient_email(order),
     }
     token = await _amazon_access_token()
     mode = (req.payment_mode or "").strip().lower()
@@ -6213,6 +6232,7 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         "city": sa.get("city") or "", "stateOrRegion": sa.get("state") or "",
         "postalCode": sa.get("pincode") or "", "countryCode": "IN",
         "phoneNumber": phone,
+        "email": await _amazon_recipient_email(order),
     }
     token = await _amazon_access_token()
     ref = order.get("order_number") or req.order_id[:20]
