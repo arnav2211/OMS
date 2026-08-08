@@ -219,7 +219,13 @@ export default function AmazonBookPanel() {
             <Table className="min-w-[860px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-10"></TableHead>
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={bookable.length > 0 && selectedIds.length === bookable.length}
+                      onCheckedChange={(v) => setSelected(v ? new Set(bookable.map(o => o.id)) : new Set())}
+                      aria-label="Select all bookable"
+                      data-testid="amz-select-all" />
+                  </TableHead>
                   <TableHead className="whitespace-nowrap">Order #</TableHead>
                   <TableHead className="whitespace-nowrap">Customer</TableHead>
                   <TableHead className="whitespace-nowrap">Destination</TableHead>

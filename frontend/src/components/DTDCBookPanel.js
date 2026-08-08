@@ -190,7 +190,13 @@ export default function DTDCBookPanel() {
             <Table className="min-w-[1000px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-10"></TableHead>
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={orders.length > 0 && selected.size === orders.length}
+                      onCheckedChange={(v) => setSelected(v ? new Set(orders.map(o => o.id)) : new Set())}
+                      aria-label="Select all"
+                      data-testid="dtdc-select-all" />
+                  </TableHead>
                   <TableHead className="whitespace-nowrap">Order #</TableHead>
                   <TableHead className="whitespace-nowrap">Customer</TableHead>
                   <TableHead className="whitespace-nowrap">Destination</TableHead>
@@ -215,9 +221,9 @@ export default function DTDCBookPanel() {
                   return (
                     <TableRow key={o.id} data-testid={`dtdc-row-${o.id}`}>
                       <TableCell>
-                        {isBooked && (
-                          <Checkbox checked={selected.has(o.id)} onCheckedChange={() => toggle(o.id)} data-testid={`dtdc-select-${o.id}`} />
-                        )}
+                        {/* Selectable whether booked or not: booked rows feed
+                            Print Slips, unbooked rows feed Book Selected. */}
+                        <Checkbox checked={selected.has(o.id)} onCheckedChange={() => toggle(o.id)} data-testid={`dtdc-select-${o.id}`} />
                       </TableCell>
                       <TableCell className="font-mono text-sm">{o.order_number}</TableCell>
                       <TableCell className="text-sm">{o.customer_name}</TableCell>
