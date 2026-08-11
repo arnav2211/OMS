@@ -62,6 +62,15 @@ export default function AmazonBookPanel() {
 
   const bookable = orders.filter(o => !o.amazon_shipment?.shipment_id);
   const selectedIds = [...selected].filter(id => bookable.some(o => o.id === id));
+  const bookedSelected = [...selected].filter(id =>
+    orders.some(o => o.id === id && o.amazon_shipment?.shipment_id));
+
+  // One A4 sheet, four labels per page in quarter slots, in selection order.
+  const printSheet = () => {
+    if (bookedSelected.length === 0) return;
+    const token = localStorage.getItem("token");
+    window.open(`${process.env.REACT_APP_BACKEND_URL}/api/amazon/labels-sheet?ids=${bookedSelected.join(",")}&token=${token}`, "_blank");
+  };
 
   const bulkBook = async () => {
     if (selectedIds.length === 0) return;
@@ -155,11 +164,13 @@ export default function AmazonBookPanel() {
         </Button>
       </div>
 
-      {selectedIds.length > 0 && (
+      {(selectedIds.length > 0 || bookedSelected.length > 0) && (
         <Card className="border-primary/60">
           <CardContent className="pt-4 flex flex-wrap items-center gap-3">
             <span className="text-sm font-medium">
-              {selectedIds.length} order{selectedIds.length > 1 ? "s" : ""} selected
+              {selected.size} selected
+              {selectedIds.length > 0 && ` · ${selectedIds.length} to book`}
+              {bookedSelected.length > 0 && ` · ${bookedSelected.length} booked`}
             </span>
             {/* The whole batch books on one mode, stated up front and prepaid
                 by default, so a bulk run can never silently turn orders COD. */}
@@ -177,11 +188,16 @@ export default function AmazonBookPanel() {
                 </button>
               ))}
             </div>
-            <Button size="sm" onClick={bulkBook} disabled={bulkBooking}
+            <Button size="sm" onClick={bulkBook} disabled={bulkBooking || selectedIds.length === 0}
                     data-testid="amz-bulk-book">
               {bulkBooking
                 ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Booking {selectedIds.length}…</>
                 : <><Truck className="w-4 h-4 mr-1" /> Book {selectedIds.length} as {bulkMode === "cod" ? "COD" : "Prepaid"}</>}
+            </Button>
+            <Button variant="outline" size="sm" onClick={printSheet}
+                    disabled={bookedSelected.length === 0}
+                    data-testid="amz-print-sheet">
+              <Printer className="w-4 h-4 mr-1" /> Print Labels ({bookedSelected.length}) — 4/A4
             </Button>
             <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())} disabled={bulkBooking}>
               Clear
@@ -221,9 +237,9 @@ export default function AmazonBookPanel() {
                 <TableRow>
                   <TableHead className="w-10">
                     <Checkbox
-                      checked={bookable.length > 0 && selectedIds.length === bookable.length}
-                      onCheckedChange={(v) => setSelected(v ? new Set(bookable.map(o => o.id)) : new Set())}
-                      aria-label="Select all bookable"
+                      checked={orders.length > 0 && selected.size === orders.length}
+                      onCheckedChange={(v) => setSelected(v ? new Set(orders.map(o => o.id)) : new Set())}
+                      aria-label="Select all"
                       data-testid="amz-select-all" />
                   </TableHead>
                   <TableHead className="whitespace-nowrap">Order #</TableHead>
@@ -249,11 +265,10 @@ export default function AmazonBookPanel() {
                   return (
                     <TableRow key={o.id} data-testid={`amz-book-row-${o.id}`}>
                       <TableCell>
-                        {!sh?.shipment_id && (
-                          <Checkbox checked={selected.has(o.id)}
-                                    onCheckedChange={() => toggle(o.id)}
-                                    data-testid={`amz-select-${o.id}`} />
-                        )}
+                        {/* Booked rows feed Print Labels, unbooked rows feed Book Selected. */}
+                        <Checkbox checked={selected.has(o.id)}
+                                  onCheckedChange={() => toggle(o.id)}
+                                  data-testid={`amz-select-${o.id}`} />
                       </TableCell>
                       <TableCell className="font-mono text-sm">{o.order_number}</TableCell>
                       <TableCell className="text-sm">

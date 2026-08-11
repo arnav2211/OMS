@@ -5099,11 +5099,38 @@ async def _dtdc_fetch_label_bytes(shipment: dict):
     return None, ""
 
 
+def _pdf_first_page_jpg(raw: bytes, scale: float = 2.5) -> Optional[bytes]:
+    """First page of a PDF rendered as JPEG (~180 dpi), or None on failure."""
+    try:
+        import pypdfium2 as pdfium
+        import io as _io
+        pdf = pdfium.PdfDocument(raw)
+        try:
+            page = pdf[0]
+            bmp = page.render(scale=scale)
+            img = bmp.to_pil().convert("RGB")
+        finally:
+            pdf.close()
+        buf = _io.BytesIO()
+        img.save(buf, format="JPEG", quality=88)
+        return buf.getvalue()
+    except Exception as e:
+        logging.error(f"PDF->JPG render failed: {e}")
+        return None
+
+
 async def _dtdc_save_label_as_slip(shipment: dict) -> str:
     raw, _media = await _dtdc_fetch_label_bytes(shipment)
     if not raw:
         return ""
     _m, ext = _sniff_media(raw)
+    if ext == "pdf":
+        # Slips are shared to customers on WhatsApp and shown as thumbnails;
+        # a JPG works everywhere a PDF does not. Keep the PDF only if the
+        # render fails, so a slip is never silently lost.
+        jpg = _pdf_first_page_jpg(raw)
+        if jpg:
+            raw, ext = jpg, "jpg"
     filename = f"{uuid.uuid4()}.{ext}"
     async with aiofiles.open(UPLOAD_DIR / filename, "wb") as f:
         await f.write(raw)
@@ -6566,6 +6593,74 @@ async def _start_amazon_sync():
     if _amazon_configured():
         asyncio.create_task(_amazon_sync_loop())
         logging.info(f"Amazon pickup sync every {AMAZON_SYNC_INTERVAL_SECONDS}s")
+
+
+@api_router.get("/amazon/labels-sheet")
+async def amazon_labels_sheet(ids: str, token: str = "", user=None):
+    """Selected Amazon labels laid out four to an A4 page, one per quarter.
+
+    Filled in selection order: 1 label uses one quarter, 2 the top half, 3
+    leave one quarter blank, 4 fill the page; more than 4 continues on the
+    next page. Quarters are never stretched — each label keeps its aspect.
+    """
+    if token:
+        user = await get_user_from_token_param(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    order_ids = [x.strip() for x in (ids or "").split(",") if x.strip()][:40]
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="No orders given")
+
+    import base64
+    labels = []          # (order_number, PIL-ready bytes)
+    missing = []
+    for oid in order_ids:
+        o = await db.orders.find_one({"id": oid}, {"_id": 0, "order_number": 1,
+                                                   "amazon_shipment": 1})
+        sh = (o or {}).get("amazon_shipment") or {}
+        if not sh.get("label_base64"):
+            missing.append((o or {}).get("order_number") or oid[:8])
+            continue
+        try:
+            labels.append(((o or {}).get("order_number", ""),
+                           base64.b64decode(sh["label_base64"])))
+        except Exception:
+            missing.append((o or {}).get("order_number") or oid[:8])
+    if not labels:
+        raise HTTPException(status_code=404,
+                            detail=f"No stored labels for: {', '.join(missing)}")
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas as pdfcanvas
+    from reportlab.lib.utils import ImageReader
+    import io as _io
+
+    page_w, page_h = A4
+    quad_w, quad_h = page_w / 2, page_h / 2
+    pad = 8              # small gutter so labels don't touch when cut
+    buffer = _io.BytesIO()
+    c = pdfcanvas.Canvas(buffer, pagesize=A4)
+    # Quarter origins in fill order: top-left, top-right, bottom-left, bottom-right
+    quads = [(0, quad_h), (quad_w, quad_h), (0, 0), (quad_w, 0)]
+
+    for idx, (_num, raw) in enumerate(labels):
+        if idx and idx % 4 == 0:
+            c.showPage()
+        qx, qy = quads[idx % 4]
+        img = ImageReader(_io.BytesIO(raw))
+        iw, ih = img.getSize()
+        avail_w, avail_h = quad_w - 2 * pad, quad_h - 2 * pad
+        scale = min(avail_w / iw, avail_h / ih)
+        w, h = iw * scale, ih * scale
+        c.drawImage(img, qx + pad + (avail_w - w) / 2, qy + pad + (avail_h - h) / 2,
+                    width=w, height=h, preserveAspectRatio=True, anchor="c")
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return StreamingResponse(buffer, media_type="application/pdf",
+                             headers={"Content-Disposition":
+                                      "inline; filename=amazon-labels-sheet.pdf"})
 
 
 @api_router.get("/amazon/label/{order_id}")
