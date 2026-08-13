@@ -42,6 +42,9 @@ export default function OrderDetail() {
   const [packagingDirty, setPackagingDirty] = useState(false);
   const [formulationSnapshot, setFormulationSnapshot] = useState("");
   const [showDispatch, setShowDispatch] = useState(false);
+  // Un-dispatch: admin-only, three-step confirmation before anything happens.
+  const [undispatchStep, setUndispatchStep] = useState(0);   // 0=closed, 1..3
+  const [undispatching, setUndispatching] = useState(false);
   const [showFormulation, setShowFormulation] = useState(false);
   const [formulationItems, setFormulationItems] = useState([]);
   const [formulationFreeSamples, setFormulationFreeSamples] = useState([]);
@@ -201,6 +204,23 @@ export default function OrderDetail() {
     finally { setSaving(false); }
   };
 
+
+  const doUndispatch = async () => {
+    setUndispatching(true);
+    try {
+      const res = await api.post(`/orders/${id}/undispatch`, { reason: "Dispatched by mistake" });
+      toast.success("Order moved back to Packaging");
+      if (res.data.had_courier_booking) {
+        toast.warning("A courier booking exists on this order — cancel it with the courier separately.", { duration: 10000 });
+      }
+      setUndispatchStep(0);
+      loadOrder();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Could not un-dispatch");
+    } finally {
+      setUndispatching(false);
+    }
+  };
   const openDispatch = () => {
     const d = order.dispatch || {};
     setDispatchData({
@@ -1008,6 +1028,13 @@ export default function OrderDetail() {
                   <Truck className="w-4 h-4 mr-1" /> {order.status === "dispatched" ? "Edit Dispatch" : "Dispatch"}
                 </Button>
               )}
+              {user?.role === "admin" && order.status === "dispatched" && (
+                <Button variant="outline" size="sm"
+                        className="ml-2 border-destructive/50 text-destructive hover:bg-destructive/10"
+                        onClick={() => setUndispatchStep(1)} data-testid="undispatch-btn">
+                  Un-dispatch
+                </Button>
+              )}
             </div>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
@@ -1242,6 +1269,49 @@ export default function OrderDetail() {
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Update Packaging</DialogTitle></DialogHeader>
           <PackagingForm order={order} staffList={packagingStaff} onSave={savePackaging} onCancel={() => handlePackagingOpenChange(false)} saving={saving} onDirtyChange={setPackagingDirty} />
+        </DialogContent>
+      </Dialog>
+
+      {/* Un-dispatch: three explicit warnings before the call is made */}
+      <Dialog open={undispatchStep > 0} onOpenChange={(o) => { if (!o && !undispatching) setUndispatchStep(0); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-destructive">
+              Un-dispatch {order?.order_number} — warning {undispatchStep} of 3
+            </DialogTitle>
+          </DialogHeader>
+          <div className="text-sm space-y-2">
+            {undispatchStep === 1 && (
+              <p>This order is marked <b>dispatched</b>. Un-dispatching moves it back to
+              <b> Packaging</b> and clears the dispatch record (LR/docket, slip links) from
+              the order. The cleared record is archived, not deleted.</p>
+            )}
+            {undispatchStep === 2 && (
+              <p>If a courier shipment was actually booked (Amazon, DTDC, India Post), this
+              does <b>NOT cancel the booking</b> — the courier may still pick up and bill it.
+              Cancel with the courier separately if a real consignment exists.</p>
+            )}
+            {undispatchStep === 3 && (
+              <p>Final confirmation: the order leaves dispatch reports and reappears in the
+              packaging queue. This is meant only for a dispatch marked <b>by mistake</b>.
+              Proceed?</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={undispatching}
+                    onClick={() => setUndispatchStep(0)}>Cancel</Button>
+            {undispatchStep < 3 ? (
+              <Button variant="destructive" onClick={() => setUndispatchStep(undispatchStep + 1)}
+                      data-testid={`undispatch-warn-${undispatchStep}`}>
+                I understand — continue
+              </Button>
+            ) : (
+              <Button variant="destructive" onClick={doUndispatch} disabled={undispatching}
+                      data-testid="undispatch-confirm">
+                {undispatching ? "Reverting…" : "Un-dispatch now"}
+              </Button>
+            )}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

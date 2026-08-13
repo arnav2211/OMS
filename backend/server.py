@@ -1511,6 +1511,42 @@ async def check_formulation_lock(order_id: str, user=Depends(get_current_user)):
 
 
 # Forward to Packaging (Admin reference flag)
+class UndispatchRequest(BaseModel):
+    reason: str = ""
+
+
+@api_router.post("/orders/{order_id}/undispatch")
+async def undispatch_order(order_id: str, req: UndispatchRequest,
+                           user=Depends(get_current_user)):
+    """Admin-only reversal of a mistaken dispatch.
+
+    Moves the order back to packaging and clears the dispatch record, archiving
+    it in undispatch_log so nothing is destroyed. Deliberately does NOT touch
+    any courier booking (Amazon/DTDC shipment records stay) - a booked parcel
+    must be cancelled with the courier, not by editing our status.
+    """
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("status") != "dispatched":
+        raise HTTPException(status_code=400, detail="Order is not dispatched")
+    now = datetime.now(timezone.utc).isoformat()
+    log = (order.get("undispatch_log") or []) + [{
+        "at": now, "by": user["name"],
+        "reason": (req.reason or "").strip() or "Dispatched by mistake",
+        "previous_dispatch": order.get("dispatch") or {},
+    }]
+    await db.orders.update_one({"id": order_id}, {
+        "$set": {"status": "packaging", "dispatch": {},
+                 "undispatch_log": log, "updated_at": now},
+        "$unset": {"dispatched_at": ""}})
+    return {"ok": True, "status": "packaging",
+            "had_courier_booking": bool((order.get("amazon_shipment") or {}).get("shipment_id")
+                                        or (order.get("dtdc_shipment") or {}).get("reference_number"))}
+
+
 @api_router.post("/orders/{order_id}/forward-to-packaging")
 async def forward_to_packaging(order_id: str, user=Depends(get_current_user)):
     if user["role"] != "admin":
