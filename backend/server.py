@@ -5092,7 +5092,8 @@ async def dtdc_labels_sheet(ids: str, token: str = "", user=None):
         sh = (o or {}).get("dtdc_shipment") or {}
         raw, media = await _dtdc_fetch_label_bytes(sh)
         if not raw:
-            missing.append((o or {}).get("order_number") or oid[:8])
+            num = (o or {}).get("order_number") or oid[:8]
+            missing.append(f"{num} ({media})" if media else num)
             continue
         if "pdf" in (media or ""):
             pages = _pdf_pages_jpg(raw)
@@ -5158,11 +5159,16 @@ def _sniff_media(raw: bytes, header_value: str = "") -> tuple:
 
 
 async def _dtdc_fetch_label_bytes(shipment: dict):
-    """(bytes, content_type) for a booked consignment's label, or (None, '')."""
+    """(bytes, content_type) for a booked consignment's label, or (None, reason).
+
+    On failure the second element carries DTDC's own message — freshly booked
+    consignments answer "Label cannot be generated until booking sync is
+    complete" for a few minutes, and that is worth showing rather than hiding.
+    """
     ref = shipment.get("awb") or shipment.get("reference_number")
     account = DTDC_ACCOUNTS.get(shipment.get("account") or "", {})
     if not ref or not account.get("api_key"):
-        return None, ""
+        return None, "not booked through the DTDC API"
     try:
         async with httpx.AsyncClient(timeout=45) as c:
             r = await c.get(f"{DTDC_BASE_URL}{DTDC_PATH_LABEL}",
@@ -5171,9 +5177,14 @@ async def _dtdc_fetch_label_bytes(shipment: dict):
         if r.status_code == 200 and r.content:
             media, _ext = _sniff_media(r.content, r.headers.get("content-type", ""))
             return r.content, media
+        try:
+            reason = (r.json().get("error") or {}).get("message") or f"HTTP {r.status_code}"
+        except Exception:
+            reason = f"HTTP {r.status_code}"
+        return None, reason
     except Exception as e:
         logging.error(f"DTDC label fetch failed for {ref}: {e}")
-    return None, ""
+        return None, str(e)[:120]
 
 
 def _pdf_pages_jpg(raw: bytes, scale: float = 2.5, max_pages: int = 8) -> list:
