@@ -5087,10 +5087,9 @@ async def dtdc_labels_sheet(ids: str, token: str = "", user=None):
 
     images, missing = [], []
     for oid in order_ids:
-        o = await db.orders.find_one({"id": oid}, {"_id": 0, "order_number": 1,
-                                                   "dtdc_shipment": 1})
+        o = await db.orders.find_one({"id": oid}, {"_id": 0})
         sh = (o or {}).get("dtdc_shipment") or {}
-        raw, media = await _dtdc_fetch_label_bytes(sh)
+        raw, media = await _dtdc_fetch_label_bytes(sh, order=o)
         if not raw:
             num = (o or {}).get("order_number") or oid[:8]
             missing.append(f"{num} ({media})" if media else num)
@@ -5126,18 +5125,12 @@ async def dtdc_label(order_id: str, token: str = "", user=None):
     ref = sh.get("awb") or sh.get("reference_number")
     if not ref:
         raise HTTPException(status_code=404, detail="This order is not booked with DTDC")
-    account = DTDC_ACCOUNTS.get(sh.get("account") or "", {})
-    if not account.get("api_key"):
-        raise HTTPException(status_code=400, detail="DTDC API key not configured for this account")
-    async with httpx.AsyncClient(timeout=45) as c:
-        r = await c.get(f"{DTDC_BASE_URL}{DTDC_PATH_LABEL}",
-                        params={"reference_number": ref},
-                        headers={"api-key": account["api_key"]})
-    if r.status_code != 200:
-        raise HTTPException(status_code=400, detail=f"DTDC label failed: {r.text[:300]}")
-    media, ext = _sniff_media(r.content, r.headers.get("content-type", ""))
+    raw, media = await _dtdc_fetch_label_bytes(sh, order=order)
+    if not raw:
+        raise HTTPException(status_code=400, detail=f"DTDC label failed: {media}")
+    ext = "pdf" if "pdf" in media else _sniff_media(raw)[1]
     return StreamingResponse(
-        io.BytesIO(r.content), media_type=media,
+        io.BytesIO(raw), media_type=media,
         headers={"Content-Disposition": f"inline; filename=dtdc-label-{ref}.{ext}"},
     )
 
@@ -5158,17 +5151,231 @@ def _sniff_media(raw: bytes, header_value: str = "") -> tuple:
     return "application/pdf", "pdf"
 
 
-async def _dtdc_fetch_label_bytes(shipment: dict):
+DTDC_LOGO_PATH = Path(__file__).parent / "assets" / "dtdc_logo.png"
+
+# The R11 booking branch printed on every DTDC label, exactly as their PDF has it.
+DTDC_LABEL_BRANCH = {
+    "name": "NAGPUR PANDE LAYOUT BRANCH",
+    "address": "58.59 AGNE LAYOUT, NEAR ANAND PURTI SUPER BAZAR, JAITALA ROAD, "
+               "KHAMLA, NAGPUR-440025, NAGPUR, MAHARASHTRA, 440025",
+    "phone": "9916088912/7718823039",
+}
+
+
+def _dtdc_render_label_pdf(order: dict, shipment: dict) -> bytes:
+    """Replica of DTDC's own A4 label sheet, rendered from our booking data.
+
+    DTDC's API refuses labels until its booking sync completes (minutes after
+    softdata upload), while their portal prints instantly from the same data.
+    This renders the identical three-copy sheet (Sender's / Account's / POD)
+    so book-then-print works without the wait. Layout measured off a real
+    label (CS-1238 / M1001198347).
+    """
+    import io as _io
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas as pdfcanvas
+    from reportlab.lib.utils import ImageReader, simpleSplit
+    from reportlab.graphics.barcode import code128
+
+    sa = order.get("shipping_address") or {}
+    line1, line2 = _address_lines(sa)
+    consignee_addr = ", ".join(x for x in [line1, line2, sa.get("city"),
+                                           (sa.get("state") or "").upper(),
+                                           sa.get("pincode")] if x)
+    origin = _dtdc_party_origin()
+    consignor_addr = (f"{origin['address_line_1']}, {origin['city']}, "
+                      f"{origin['city'].upper()}, {origin['state'].upper()}, {origin['pincode']}")
+    awb = shipment.get("awb") or shipment.get("reference_number") or ""
+    service = shipment.get("service_type") or ""
+    mode = "AIR" if service.upper().startswith("STD") else "SURFACE"
+    risk = bool(shipment.get("risk_surcharge"))
+    weight = str(shipment.get("weight_kg") or "")
+    pieces = str(shipment.get("num_boxes") or "1")
+    declared = shipment.get("declared_value")
+    declared = str(int(declared)) if declared not in (None, "") else ""
+    try:
+        booked = datetime.fromisoformat(str(shipment.get("booked_at")).replace("Z", "+00:00"))
+    except Exception:
+        booked = datetime.now(timezone.utc)
+    date_str = booked.strftime("%a %b %d %Y")
+    dest_city = (sa.get("city") or "").upper()
+
+    buf = _io.BytesIO()
+    c = pdfcanvas.Canvas(buf, pagesize=A4)
+    W, H = A4
+    logo = ImageReader(str(DTDC_LOGO_PATH)) if DTDC_LOGO_PATH.exists() else None
+
+    def kv(x, y, caption, value, size=7, vbold=True, cap_bold=False):
+        c.setFont("Helvetica-Bold" if cap_bold else "Helvetica", size)
+        c.drawString(x, y, caption)
+        cw = c.stringWidth(caption, "Helvetica-Bold" if cap_bold else "Helvetica", size)
+        c.setFont("Helvetica-Bold" if vbold else "Helvetica", size)
+        c.drawString(x + cw + 2, y, value)
+
+    def wrapped(x, y, text, size, width, bold=True):
+        font = "Helvetica-Bold" if bold else "Helvetica"
+        lines = simpleSplit(text, font, size, width)
+        c.setFont(font, size)
+        for i, ln in enumerate(lines):
+            c.drawString(x, y - i * (size + 1.5), ln)
+        return y - (len(lines) - 1) * (size + 1.5)
+
+    def copy_block(top, copy_name):
+        T = H - top
+        B = T - 253
+        L, R = 7, 588
+        xm1, xm2 = 299, 443
+        xl = 155
+
+        c.setLineWidth(0.8)
+        c.rect(L, B, R - L, 253)
+        hb = T - 47
+        c.line(L, hb, R, hb)
+        c.line(xm1, T, xm1, hb)
+        c.line(xm2, T, xm2, hb)
+        if logo:
+            c.drawImage(logo, L + 8, T - 40, width=125, height=30,
+                        preserveAspectRatio=True, anchor="w", mask="auto")
+        else:
+            c.setFont("Helvetica-Bold", 20)
+            c.drawString(L + 10, T - 30, "DTDC")
+        c.setFont("Helvetica", 7)
+        c.drawString(L + 145, T - 14, "DTDC Express Limited")
+        c.drawString(L + 145, T - 23, "Regd. Office No. 3, Victoria Road")
+        c.drawString(L + 145, T - 32, "Bengaluru - 560047")
+        c.line(xm1, T - 23.5, xm2, T - 23.5)
+        kv(xm1 + 38, T - 16, "Origin:", "NAGPUR", 8)
+        kv(xm1 + 28, T - 39, "PRODUCT:", service, 8)
+        c.line(xm2, T - 15.7, R, T - 15.7)
+        c.line(xm2, T - 31.3, R, T - 31.3)
+        kv(xm2 + 22, T - 11.5, "Dest:", dest_city, 7)
+        kv(xm2 + 10, T - 27, "Type:", "NON-DOCUMENT", 7)
+        kv(xm2 + 10, T - 42.5, "Date:", date_str, 7, vbold=False)
+        cb = T - 102
+        c.line(L, cb, R, cb)
+        c.line(xm1, hb, xm1, cb)
+        y = T - 56
+        kv(L + 3, y, "Consignor's Name:", (COMPANY.get("name") or "").upper(), 7)
+        c.setFont("Helvetica", 7)
+        c.drawString(L + 3, y - 9, "Consignor's Address:")
+        ay = wrapped(L + 72, y - 9, consignor_addr, 7, xm1 - L - 78)
+        kv(L + 3, ay - 10, "GSTIN No.:", COMPANY.get("gstin") or "", 7, vbold=False)
+        kv(L + 3, ay - 19, "Phone:", _to_local_phone(COMPANY.get("mobile")), 7)
+        y2 = T - 56
+        kv(xm1 + 3, y2, "Customer Ref No:", order.get("order_number") or "", 7)
+        kv(xm1 + 3, y2 - 9, "Consignee's Name:", order.get("customer_name") or "", 7)
+        c.setFont("Helvetica", 7)
+        c.drawString(xm1 + 3, y2 - 18, "Consignee's Address:")
+        ay2 = wrapped(xm1 + 75, y2 - 18, consignee_addr, 7, R - xm1 - 82)
+        kv(xm1 + 3, ay2 - 10, "GSTIN No.:", "", 7, vbold=False)
+        kv(xm1 + 3, ay2 - 19, "Phone:", shipment.get("recipient_phone") or "", 7)
+        mb = T - 228
+        c.line(L, mb, R, mb)
+        c.line(xl, cb, xl, mb)
+        c.line(xm1, cb, xm1, mb)
+        kv(L + 3, cb - 10, "Content Specification:", "OTHERS", 7, cap_bold=True, vbold=False)
+        c.setFont("Helvetica-Bold", 7)
+        c.drawString(L + 3, cb - 26, "Paperwork Enclosed :")
+        decl = ("I/We declare that this consignment does not contain personal mail, cash, "
+                "jewellery, contraband, illegal drugs, any prohibited items and commodities "
+                "which can cause safety hazards while transporting")
+        c.setFont("Helvetica", 6.5)
+        yy = cb - 38
+        for ln in simpleSplit(decl, "Helvetica", 6.5, xl - L - 8):
+            c.drawCentredString((L + xl) / 2, yy, ln)
+            yy -= 8
+        c.setFont("Helvetica-Bold", 6.5)
+        c.drawCentredString((L + xl) / 2, yy - 3, "Sender's Signature & Seal")
+        terms = ("I have read and understood terms & conditions of carriage mentioned on "
+                 "website www.dtdc.in, and I agree to the same.")
+        c.setFont("Helvetica", 6.5)
+        yy -= 13
+        for ln in simpleSplit(terms, "Helvetica", 6.5, xl - L - 8):
+            c.drawCentredString((L + xl) / 2, yy, ln)
+            yy -= 8
+        rows = [("Declared Value:", declared, True), ("No Of Pieces:", pieces, True),
+                ("Actual Weight:", weight + " Kgs", True), ("Ewaybill Number:", "", False),
+                ("Dim:", "Not Applicable", True), ("Charged weight:", weight + " Kgs", True)]
+        ry = cb
+        for cap, val, vb in rows:
+            ry -= 10.5
+            kv(xl + 3, ry, cap, val, 7, vbold=vb)
+            c.line(xl, ry - 3, xm1, ry - 3)
+        by_ = ry - 3
+        kv(xl + 3, by_ - 9, "Name :", DTDC_LABEL_BRANCH["name"], 6.5, cap_bold=True, vbold=False)
+        c.setFont("Helvetica-Bold", 6.5)
+        c.drawString(xl + 3, by_ - 17, "Address:")
+        ay3 = wrapped(xl + 32, by_ - 17, DTDC_LABEL_BRANCH["address"], 6.5, xm1 - xl - 38, bold=False)
+        kv(xl + 3, ay3 - 9, "Phone :", DTDC_LABEL_BRANCH["phone"], 6.5, cap_bold=True, vbold=False)
+        c.setFont("Helvetica", 10)
+        c.drawCentredString((xm1 + R) / 2 - 20, cb - 14, "Mode:")
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString((xm1 + R) / 2 + 8, cb - 14, mode)
+        bc = code128.Code128(awb, barHeight=26, barWidth=1.15, quiet=False)
+        bc.drawOn(c, (xm1 + R) / 2 - bc.width / 2, cb - 46)
+        c.setFont("Helvetica", 9)
+        c.drawCentredString((xm1 + R) / 2 - 25, cb - 58, "AWB No:")
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString((xm1 + R) / 2 + 12, cb - 58, awb)
+        rc = cb - 68
+        c.line(xm1, rc, R, rc)
+        c.line(xm2, rc, xm2, mb)
+        if copy_name != "POD Copy":
+            c.line(xm2, (rc + mb) / 2, R, (rc + mb) / 2)
+            xbox = 505
+            c.setFont("Helvetica-Bold", 13)
+            c.drawCentredString((xm1 + xm2) / 2, (rc + mb) / 2 - 4, "Risk Surcharge")
+            c.setFont("Helvetica", 9)
+            c.drawCentredString((xm2 + xbox) / 2 + 10, rc - 18, "Owner")
+            c.drawCentredString((xm2 + xbox) / 2 + 10, (rc + mb) / 2 - 18, "Carrier")
+            for i, ticked in enumerate([not risk, risk]):
+                yb = (rc - 26) if i == 0 else ((rc + mb) / 2 - 26)
+                c.roundRect(xbox + 30, yb, 16, 16, 3)
+                if ticked:
+                    c.setFont("ZapfDingbats", 11)
+                    c.drawString(xbox + 33.5, yb + 3.5, "4")
+        else:
+            c.line(xm1, (rc + mb) / 2, xm2, (rc + mb) / 2)
+            c.setFont("Helvetica", 9)
+            c.drawString(xm1 + 6, rc - 18, "Receiver's Name :")
+            c.drawString(xm1 + 6, (rc + mb) / 2 - 18, "Phone Number :")
+            c.drawString(xm2 + 8, rc - 18, "Receiver's Signature and Stamp")
+        lb = B + 14
+        c.line(L, lb, R, lb)
+        c.setFont("Helvetica", 7)
+        c.drawString(L + 12, mb - 9, "https://www.dtdc.in")
+        c.drawString(L + 95, mb - 9, "|  customersupport@dtdc.com")
+        c.drawString(L + 212, mb - 9, "|  +91-9606911811")
+        c.drawString(xm1 + 3, mb - 9, "Remark :")
+        c.setFont("Helvetica-Bold", 7)
+        c.drawCentredString((L + R) / 2 - 30, B + 4,
+                            "THIS DOCUMENT IS NOT A TAX INVOICE. WEIGHT CAPTURED BY DTDC "
+                            "WILL BE USED FOR INVOICE GENERATION.")
+        c.setFont("Helvetica", 7)
+        c.drawString(R - 62, B + 4, copy_name)
+
+    for i, name in enumerate(["Sender's Copy", "Account's Copy", "POD Copy"]):
+        copy_block(7 + i * 258, name)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+async def _dtdc_fetch_label_bytes(shipment: dict, order: dict = None):
     """(bytes, content_type) for a booked consignment's label, or (None, reason).
 
-    On failure the second element carries DTDC's own message — freshly booked
-    consignments answer "Label cannot be generated until booking sync is
-    complete" for a few minutes, and that is worth showing rather than hiding.
+    DTDC refuses labels until its booking sync completes ("Label cannot be
+    generated until booking sync is complete"), minutes after softdata upload,
+    although the consignment is real. When the order is supplied, that window
+    is bridged by rendering our replica of their label from the booking data —
+    the same thing DTDC's own portal does. Once their sync finishes, the
+    official artwork is served again.
     """
     ref = shipment.get("awb") or shipment.get("reference_number")
     account = DTDC_ACCOUNTS.get(shipment.get("account") or "", {})
     if not ref or not account.get("api_key"):
         return None, "not booked through the DTDC API"
+    reason = ""
     try:
         async with httpx.AsyncClient(timeout=45) as c:
             r = await c.get(f"{DTDC_BASE_URL}{DTDC_PATH_LABEL}",
@@ -5181,10 +5388,15 @@ async def _dtdc_fetch_label_bytes(shipment: dict):
             reason = (r.json().get("error") or {}).get("message") or f"HTTP {r.status_code}"
         except Exception:
             reason = f"HTTP {r.status_code}"
-        return None, reason
     except Exception as e:
         logging.error(f"DTDC label fetch failed for {ref}: {e}")
-        return None, str(e)[:120]
+        reason = str(e)[:120]
+    if order is not None:
+        try:
+            return _dtdc_render_label_pdf(order, shipment), "application/pdf"
+        except Exception as e:
+            logging.error(f"DTDC replica label render failed for {ref}: {e}")
+    return None, reason
 
 
 def _pdf_pages_jpg(raw: bytes, scale: float = 2.5, max_pages: int = 8) -> list:
