@@ -46,10 +46,11 @@ export default function DTDCBookPanel() {
   const booked = orders.filter(o => o.dtdc_shipment?.reference_number);
   const bookedSelected = [...selected].filter(id => booked.some(b => b.id === id));
 
-  const labelUrl = (id) =>
-    `${process.env.REACT_APP_BACKEND_URL}/api/dtdc/label/${id}?token=${localStorage.getItem("token")}`;
+  // Same quarter-A4 sheet as Amazon: 4x6in labels, four per page, single or bulk.
+  const sheetUrl = (ids) =>
+    `${process.env.REACT_APP_BACKEND_URL}/api/dtdc/labels-sheet?ids=${ids.join(",")}&token=${localStorage.getItem("token")}`;
 
-  const printOne = (o) => window.open(labelUrl(o.id), "_blank");
+  const printOne = (o) => window.open(sheetUrl([o.id]), "_blank");
 
   // Unbooked selection drives bulk booking; booked selection drives slip printing.
   const unbookedSelected = [...selected].filter(
@@ -76,8 +77,7 @@ export default function DTDCBookPanel() {
 
   const printBulk = () => {
     if (bookedSelected.length === 0) return toast.error("Select booked orders to print");
-    bookedSelected.forEach((id, i) => setTimeout(() => window.open(labelUrl(id), "_blank"), i * 400));
-    toast.success(`Opening ${bookedSelected.length} label(s)`);
+    window.open(sheetUrl(bookedSelected), "_blank");
   };
 
   const openConfirm = async (o) => {

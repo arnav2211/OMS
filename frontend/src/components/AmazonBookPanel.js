@@ -134,7 +134,8 @@ export default function AmazonBookPanel() {
 
   const printLabel = (order) => {
     const token = localStorage.getItem("token");
-    window.open(`${process.env.REACT_APP_BACKEND_URL}/api/amazon/label/${order.id}?token=${token}`, "_blank");
+    // Single print uses the same quarter-A4 sheet as bulk — one label, one quarter.
+    window.open(`${process.env.REACT_APP_BACKEND_URL}/api/amazon/labels-sheet?ids=${order.id}&token=${token}`, "_blank");
   };
 
   const doDispatch = async () => {
