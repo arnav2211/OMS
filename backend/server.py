@@ -5070,6 +5070,47 @@ async def dtdc_bulk_book(req: BulkBookRequest, user=Depends(get_current_user)):
     return await _bulk_book(req.order_ids, one, user, "DTDC")
 
 
+@api_router.get("/dtdc/labels-sheet")
+async def dtdc_labels_sheet(ids: str, token: str = "", user=None):
+    """Selected DTDC labels four to an A4 page, matching the Amazon sheet.
+
+    DTDC labels arrive as 4x6in PDFs (one page per piece for multi-box
+    consignments); every page is rasterised and gets its own quarter.
+    """
+    if token:
+        user = await get_user_from_token_param(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    order_ids = [x.strip() for x in (ids or "").split(",") if x.strip()][:40]
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="No orders given")
+
+    images, missing = [], []
+    for oid in order_ids:
+        o = await db.orders.find_one({"id": oid}, {"_id": 0, "order_number": 1,
+                                                   "dtdc_shipment": 1})
+        sh = (o or {}).get("dtdc_shipment") or {}
+        raw, media = await _dtdc_fetch_label_bytes(sh)
+        if not raw:
+            missing.append((o or {}).get("order_number") or oid[:8])
+            continue
+        if "pdf" in (media or ""):
+            pages = _pdf_pages_jpg(raw)
+            if pages:
+                images.extend(pages)
+            else:
+                missing.append((o or {}).get("order_number") or oid[:8])
+        else:
+            images.append(raw)
+    if not images:
+        raise HTTPException(status_code=404,
+                            detail=f"No labels available for: {', '.join(missing)}")
+    buffer = _quarter_sheet_pdf(images)
+    return StreamingResponse(buffer, media_type="application/pdf",
+                             headers={"Content-Disposition":
+                                      "inline; filename=dtdc-labels-sheet.pdf"})
+
+
 @api_router.get("/dtdc/label/{order_id}")
 async def dtdc_label(order_id: str, token: str = "", user=None):
     """Stream the DTDC shipping label for a booked consignment."""
@@ -5135,24 +5176,64 @@ async def _dtdc_fetch_label_bytes(shipment: dict):
     return None, ""
 
 
-def _pdf_first_page_jpg(raw: bytes, scale: float = 2.5) -> Optional[bytes]:
-    """First page of a PDF rendered as JPEG (~180 dpi), or None on failure."""
+def _pdf_pages_jpg(raw: bytes, scale: float = 2.5, max_pages: int = 8) -> list:
+    """Pages of a PDF rendered as JPEGs (~180 dpi). Empty list on failure."""
+    out = []
     try:
         import pypdfium2 as pdfium
         import io as _io
         pdf = pdfium.PdfDocument(raw)
         try:
-            page = pdf[0]
-            bmp = page.render(scale=scale)
-            img = bmp.to_pil().convert("RGB")
+            for i in range(min(len(pdf), max_pages)):
+                bmp = pdf[i].render(scale=scale)
+                img = bmp.to_pil().convert("RGB")
+                buf = _io.BytesIO()
+                img.save(buf, format="JPEG", quality=88)
+                out.append(buf.getvalue())
         finally:
             pdf.close()
-        buf = _io.BytesIO()
-        img.save(buf, format="JPEG", quality=88)
-        return buf.getvalue()
     except Exception as e:
         logging.error(f"PDF->JPG render failed: {e}")
-        return None
+    return out
+
+
+def _pdf_first_page_jpg(raw: bytes, scale: float = 2.5) -> Optional[bytes]:
+    pages = _pdf_pages_jpg(raw, scale=scale, max_pages=1)
+    return pages[0] if pages else None
+
+
+def _quarter_sheet_pdf(images: list):
+    """Images laid out four per A4 page, one per quarter, in the order given.
+
+    The shared layout for courier labels: 1 image fills one quarter, 4 fill the
+    page, more continue overleaf. Never stretched; small gutter for cutting.
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas as pdfcanvas
+    from reportlab.lib.utils import ImageReader
+    import io as _io
+
+    page_w, page_h = A4
+    quad_w, quad_h = page_w / 2, page_h / 2
+    pad = 8
+    buffer = _io.BytesIO()
+    c = pdfcanvas.Canvas(buffer, pagesize=A4)
+    quads = [(0, quad_h), (quad_w, quad_h), (0, 0), (quad_w, 0)]
+    for idx, raw in enumerate(images):
+        if idx and idx % 4 == 0:
+            c.showPage()
+        qx, qy = quads[idx % 4]
+        img = ImageReader(_io.BytesIO(raw))
+        iw, ih = img.getSize()
+        avail_w, avail_h = quad_w - 2 * pad, quad_h - 2 * pad
+        scale = min(avail_w / iw, avail_h / ih)
+        w, h = iw * scale, ih * scale
+        c.drawImage(img, qx + pad + (avail_w - w) / 2, qy + pad + (avail_h - h) / 2,
+                    width=w, height=h, preserveAspectRatio=True, anchor="c")
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer
 
 
 async def _dtdc_save_label_as_slip(shipment: dict) -> str:
@@ -6667,33 +6748,7 @@ async def amazon_labels_sheet(ids: str, token: str = "", user=None):
         raise HTTPException(status_code=404,
                             detail=f"No stored labels for: {', '.join(missing)}")
 
-    from reportlab.lib.pagesizes import A4
-    from reportlab.pdfgen import canvas as pdfcanvas
-    from reportlab.lib.utils import ImageReader
-    import io as _io
-
-    page_w, page_h = A4
-    quad_w, quad_h = page_w / 2, page_h / 2
-    pad = 8              # small gutter so labels don't touch when cut
-    buffer = _io.BytesIO()
-    c = pdfcanvas.Canvas(buffer, pagesize=A4)
-    # Quarter origins in fill order: top-left, top-right, bottom-left, bottom-right
-    quads = [(0, quad_h), (quad_w, quad_h), (0, 0), (quad_w, 0)]
-
-    for idx, (_num, raw) in enumerate(labels):
-        if idx and idx % 4 == 0:
-            c.showPage()
-        qx, qy = quads[idx % 4]
-        img = ImageReader(_io.BytesIO(raw))
-        iw, ih = img.getSize()
-        avail_w, avail_h = quad_w - 2 * pad, quad_h - 2 * pad
-        scale = min(avail_w / iw, avail_h / ih)
-        w, h = iw * scale, ih * scale
-        c.drawImage(img, qx + pad + (avail_w - w) / 2, qy + pad + (avail_h - h) / 2,
-                    width=w, height=h, preserveAspectRatio=True, anchor="c")
-    c.showPage()
-    c.save()
-    buffer.seek(0)
+    buffer = _quarter_sheet_pdf([raw for _num, raw in labels])
     return StreamingResponse(buffer, media_type="application/pdf",
                              headers={"Content-Disposition":
                                       "inline; filename=amazon-labels-sheet.pdf"})
