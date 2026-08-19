@@ -5072,10 +5072,10 @@ async def dtdc_bulk_book(req: BulkBookRequest, user=Depends(get_current_user)):
 
 @api_router.get("/dtdc/labels-sheet")
 async def dtdc_labels_sheet(ids: str, token: str = "", user=None):
-    """Selected DTDC labels four to an A4 page, matching the Amazon sheet.
+    """Selected DTDC labels, each label page on its own full A4 page.
 
-    DTDC labels arrive as 4x6in PDFs (one page per piece for multi-box
-    consignments); every page is rasterised and gets its own quarter.
+    DTDC's label is itself an A4 three-copy sheet (one page per piece for
+    multi-box consignments); every page is rasterised and printed full size.
     """
     if token:
         user = await get_user_from_token_param(token)
@@ -5105,7 +5105,8 @@ async def dtdc_labels_sheet(ids: str, token: str = "", user=None):
     if not images:
         raise HTTPException(status_code=404,
                             detail=f"No labels available for: {', '.join(missing)}")
-    buffer = _quarter_sheet_pdf(images)
+    # DTDC labels are full A4 three-copy sheets: one label page per A4 page.
+    buffer = _quarter_sheet_pdf(images, per_page=1)
     return StreamingResponse(buffer, media_type="application/pdf",
                              headers={"Content-Disposition":
                                       "inline; filename=dtdc-labels-sheet.pdf"})
@@ -5425,11 +5426,13 @@ def _pdf_first_page_jpg(raw: bytes, scale: float = 2.5) -> Optional[bytes]:
     return pages[0] if pages else None
 
 
-def _quarter_sheet_pdf(images: list):
-    """Images laid out four per A4 page, one per quarter, in the order given.
+def _quarter_sheet_pdf(images: list, per_page: int = 4):
+    """Images laid out on A4 pages, in the order given, never stretched.
 
-    The shared layout for courier labels: 1 image fills one quarter, 4 fill the
-    page, more continue overleaf. Never stretched; small gutter for cutting.
+    per_page=4: quarter slots — 1 image fills one quarter, 4 fill the page,
+    more continue overleaf (Amazon's 4x6 labels). per_page=1: each image gets
+    a whole A4 page (DTDC's label is itself a full A4 three-copy sheet, which
+    becomes unreadable shrunk to a quarter).
     """
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas as pdfcanvas
@@ -5437,15 +5440,20 @@ def _quarter_sheet_pdf(images: list):
     import io as _io
 
     page_w, page_h = A4
-    quad_w, quad_h = page_w / 2, page_h / 2
+    if per_page == 1:
+        quad_w, quad_h = page_w, page_h
+        quads = [(0, 0)]
+    else:
+        per_page = 4
+        quad_w, quad_h = page_w / 2, page_h / 2
+        quads = [(0, quad_h), (quad_w, quad_h), (0, 0), (quad_w, 0)]
     pad = 8
     buffer = _io.BytesIO()
     c = pdfcanvas.Canvas(buffer, pagesize=A4)
-    quads = [(0, quad_h), (quad_w, quad_h), (0, 0), (quad_w, 0)]
     for idx, raw in enumerate(images):
-        if idx and idx % 4 == 0:
+        if idx and idx % per_page == 0:
             c.showPage()
-        qx, qy = quads[idx % 4]
+        qx, qy = quads[idx % per_page]
         img = ImageReader(_io.BytesIO(raw))
         iw, ih = img.getSize()
         avail_w, avail_h = quad_w - 2 * pad, quad_h - 2 * pad

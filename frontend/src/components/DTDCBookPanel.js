@@ -46,11 +46,13 @@ export default function DTDCBookPanel() {
   const booked = orders.filter(o => o.dtdc_shipment?.reference_number);
   const bookedSelected = [...selected].filter(id => booked.some(b => b.id === id));
 
-  // Same quarter-A4 sheet as Amazon: 4x6in labels, four per page, single or bulk.
+  // DTDC labels print full-size on A4. Single opens the original PDF (or the
+  // instant replica while DTDC's sync lags); bulk is one label page per A4 page.
   const sheetUrl = (ids) =>
     `${process.env.REACT_APP_BACKEND_URL}/api/dtdc/labels-sheet?ids=${ids.join(",")}&token=${localStorage.getItem("token")}`;
 
-  const printOne = (o) => window.open(sheetUrl([o.id]), "_blank");
+  const printOne = (o) =>
+    window.open(`${process.env.REACT_APP_BACKEND_URL}/api/dtdc/label/${o.id}?token=${localStorage.getItem("token")}`, "_blank");
 
   // Unbooked selection drives bulk booking; booked selection drives slip printing.
   const unbookedSelected = [...selected].filter(
