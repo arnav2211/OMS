@@ -153,16 +153,6 @@ async def next_document_number(company: dict, kind: str) -> str:
     return f"{prefix}-{counter['seq']:04d}"
 
 
-@api_router.get("/companies")
-async def list_companies(user=Depends(get_current_user)):
-    """Selectable companies for the order and PI forms."""
-    return [{"key": c["key"], "label": c["label"], "brand": c["brand"],
-             "order_prefix": c["order_prefix"], "gstin": c["gstin"],
-             "is_default": c["key"] == DEFAULT_COMPANY,
-             "configured": bool(c["gstin"])}
-            for c in COMPANIES.values()]
-
-
 COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"]
 
 # Bank details for PI PDFs
@@ -895,6 +885,16 @@ async def lookup_pincode(pincode: str, user=Depends(get_current_user)):
             city, state = prefix_map[prefix2]
             return {"pincode": pincode, "city": city, "state": state, "country": "India", "post_offices": []}
         return {"pincode": pincode, "city": "", "state": "", "country": "India", "post_offices": []}
+
+@api_router.get("/companies")
+async def list_companies(user=Depends(get_current_user)):
+    """Selectable companies for the order and PI forms."""
+    return [{"key": c["key"], "label": c["label"], "brand": c["brand"],
+             "order_prefix": c["order_prefix"], "gstin": c["gstin"],
+             "is_default": c["key"] == DEFAULT_COMPANY,
+             "configured": bool(c["gstin"])}
+            for c in COMPANIES.values()]
+
 
 # Order Routes
 @api_router.post("/orders")
