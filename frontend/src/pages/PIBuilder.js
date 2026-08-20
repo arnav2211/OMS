@@ -91,6 +91,12 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
   );
 }
 
+// The two businesses sharing this OMS. CitSpray is the default.
+const COMPANIES = [
+  { key: "citspray", label: "CitSpray", prefix: "CS" },
+  { key: "fragvansh", label: "FragVansh", prefix: "FV" },
+];
+
 export default function PIBuilder() {
   const { user } = useAuth();
   const [piList, setPiList] = useState([]);
@@ -102,6 +108,7 @@ export default function PIBuilder() {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [items, setItems] = useState([emptyItem()]);
   const [gstApplicable, setGstApplicable] = useState(false);
+  const [company, setCompany] = useState("citspray");
   const [showRate, setShowRate] = useState(true);
   const [shippingCharge, setShippingCharge] = useState(0);
   const [additionalCharges, setAdditionalCharges] = useState([]);
@@ -258,7 +265,7 @@ export default function PIBuilder() {
 
   const openNewPI = () => {
     setEditingPi(null); setSelectedCustomer(null); setCustomerSearch(""); setItems([emptyItem()]);
-    setGstApplicable(false); setShowRate(true); setShippingCharge(0); setAdditionalCharges([]);
+    setGstApplicable(false); setCompany("citspray"); setShowRate(true); setShippingCharge(0); setAdditionalCharges([]);
     setCarrierRiskApplicable(false); setRemark("");
     setBillingAddress(null); setShippingAddress(null); setSameAsBilling(true); setFreeSamples([]);
     setShowBuilder(true);
@@ -272,7 +279,8 @@ export default function PIBuilder() {
       const cust = customers.find(c => c.id === fullPi.customer_id);
       setSelectedCustomer(cust || { id: fullPi.customer_id, name: fullPi.customer_name });
       setItems(fullPi.items?.length ? fullPi.items.map(i => ({ ...i })) : [emptyItem()]);
-      setGstApplicable(fullPi.gst_applicable); setShowRate(fullPi.show_rate !== false);
+      setGstApplicable(fullPi.gst_applicable); setCompany(fullPi.company || "citspray");
+      setShowRate(fullPi.show_rate !== false);
       setShippingCharge(fullPi.shipping_charge || 0);
       // Carrier risk is a derived row, so it is kept out of the editable list.
       setAdditionalCharges(stripCarrierRisk(fullPi.additional_charges));
@@ -295,6 +303,7 @@ export default function PIBuilder() {
     try {
       const payload = {
         customer_id: selectedCustomer.id,
+        company,
         items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description }) => ({
           product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description
         })),
@@ -435,7 +444,8 @@ export default function PIBuilder() {
                               setEditingPi(null);
                               setSelectedCustomer(cust || { id: d.customer_id, name: d.customer_name });
                               setItems(d.items?.length ? d.items.map(i => ({ ...i })) : [emptyItem()]);
-                              setGstApplicable(d.gst_applicable); setShowRate(d.show_rate !== false);
+                              setGstApplicable(d.gst_applicable); setCompany(d.company || "citspray");
+                              setShowRate(d.show_rate !== false);
                               setShippingCharge(d.shipping_charge || 0);
                               setAdditionalCharges(stripCarrierRisk(d.additional_charges));
                               setCarrierRiskApplicable(resolveCarrierRiskFlag(d));
@@ -532,6 +542,34 @@ export default function PIBuilder() {
               </CardContent>
             </Card>
           )}
+
+      {/* Company — which business this belongs to. Default CitSpray. */}
+      <Card>
+        <CardContent className="pt-6">
+          <Label className="text-sm font-medium">Company</Label>
+          <div className="flex flex-wrap gap-2 mt-2">
+            {COMPANIES.map((co) => (
+              <button
+                key={co.key}
+                type="button"
+                onClick={() => setCompany(co.key)}
+                data-testid={`company-${co.key}`}
+                className={`rounded-md border px-4 py-2 text-sm transition ${
+                  company === co.key
+                    ? "border-primary bg-primary/10 font-semibold"
+                    : "border-border hover:bg-muted"
+                }`}
+              >
+                {co.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Sets the number series ({COMPANIES.find((c) => c.key === company)?.prefix}-…)
+            and the company shown on the PDF.
+          </p>
+        </CardContent>
+      </Card>
 
           {/* Options */}
           <Card>

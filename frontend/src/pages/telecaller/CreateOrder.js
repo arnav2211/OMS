@@ -110,6 +110,12 @@ function AddressSelector({ customerId, label, selectedAddress, onSelect, onAddNe
   );
 }
 
+// The two businesses sharing this OMS. CitSpray is the default.
+const COMPANIES = [
+  { key: "citspray", label: "CitSpray", prefix: "CS" },
+  { key: "fragvansh", label: "FragVansh", prefix: "FV" },
+];
+
 export default function CreateOrder() {
   const navigate = useNavigate();
   const { piId } = useParams(); // For PI conversion mode
@@ -125,6 +131,7 @@ export default function CreateOrder() {
   const [purpose, setPurpose] = useState("");
   const [items, setItems] = useState([emptyItem()]);
   const [gstApplicable, setGstApplicable] = useState(false);
+  const [company, setCompany] = useState("citspray");
   const [shippingMethod, setShippingMethod] = useState("");
   const [courierName, setCourierName] = useState("");
   const [transporterName, setTransporterName] = useState("");
@@ -178,6 +185,7 @@ export default function CreateOrder() {
       setPurpose(pi.purpose || "");
       setItems(pi.items?.length ? pi.items.map(i => ({ ...i, formulation: "" })) : [emptyItem()]);
       setGstApplicable(pi.gst_applicable || false);
+      setCompany(pi.company || "citspray");
       setShippingMethod(pi.shipping_method || "");
       setCourierName(pi.courier_name || "");
       setTransporterName(pi.transporter_name || "");
@@ -218,6 +226,7 @@ export default function CreateOrder() {
       setPurpose(d.purpose || "");
       setItems(d.items?.length ? d.items.map(i => ({ ...i })) : [emptyItem()]);
       setGstApplicable(d.gst_applicable || false);
+      setCompany(d.company || "citspray");
       setShippingMethod(d.shipping_method || "");
       setCourierName(d.courier_name || "");
       setTransporterName(d.transporter_name || "");
@@ -451,6 +460,7 @@ export default function CreateOrder() {
         carrier_risk_applicable: carrierRiskApplicable,
         remark,
         payment_status: paymentStatus,
+        company,
         is_cod: isCod,
         cod_amount: 0,          // 0 = collect whatever is still outstanding
         amount_paid: paymentStatus === "full" ? grandTotal : amountPaid,
@@ -555,6 +565,34 @@ export default function CreateOrder() {
         <CardContent className="pt-6">
           <Label>Purpose / Requirement</Label>
           <Textarea placeholder="Enter the purpose..." className="mt-2" value={purpose} onChange={(e) => setPurpose(e.target.value)} data-testid="order-purpose-input" />
+        </CardContent>
+      </Card>
+
+      {/* Company — which business this belongs to. Default CitSpray. */}
+      <Card>
+        <CardContent className="pt-6">
+          <Label className="text-sm font-medium">Company</Label>
+          <div className="flex flex-wrap gap-2 mt-2">
+            {COMPANIES.map((co) => (
+              <button
+                key={co.key}
+                type="button"
+                onClick={() => setCompany(co.key)}
+                data-testid={`company-${co.key}`}
+                className={`rounded-md border px-4 py-2 text-sm transition ${
+                  company === co.key
+                    ? "border-primary bg-primary/10 font-semibold"
+                    : "border-border hover:bg-muted"
+                }`}
+              >
+                {co.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Sets the number series ({COMPANIES.find((c) => c.key === company)?.prefix}-…)
+            and the company shown on the PDF.
+          </p>
         </CardContent>
       </Card>
 

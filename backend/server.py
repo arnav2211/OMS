@@ -65,6 +65,104 @@ COMPANY = {
 LOGO_PATH = ROOT_DIR / "logo.png"
 LOGO_PDF_PATH = ROOT_DIR / "logo_pdf.png"
 
+# ─── Companies ────────────────────────────────────────────────────────────
+# Two businesses share this OMS. Every order and PI carries a `company` key;
+# CitSpray is the default so nothing existing changes. Each company owns its
+# own number series and counter, so CS and FV sequences never interfere.
+DEFAULT_COMPANY = "citspray"
+
+COMPANIES = {
+    "citspray": {
+        "key": "citspray",
+        "label": "CitSpray",
+        "name": COMPANY["name"],
+        "brand": COMPANY["brand"],
+        "address": COMPANY["address"],
+        "mobile": COMPANY["mobile"],
+        "gstin": COMPANY["gstin"],
+        "email": COMPANY["email"],
+        "website": COMPANY["website"],
+        "state_code": COMPANY["state_code"],
+        "order_prefix": "CS",
+        "pi_prefix": "PI",
+        "order_counter": "order_number",
+        "pi_counter": "pi_number",
+        "logo": LOGO_PATH,
+        "logo_pdf": LOGO_PDF_PATH,
+    },
+    "fragvansh": {
+        "key": "fragvansh",
+        "label": "FragVansh",
+        "name": "FragVansh",
+        "brand": "FragVansh Aromatic Elements",
+        "address": ("B Wing, Poonam Heights, Behind Gulmohar Hall, Pande Layout, "
+                    "Khamla, Nagpur, Maharashtra, 440025"),
+        "mobile": "7447717744",
+        "gstin": "27CBKPA6724N1ZB",
+        "email": "Info@fragvansh.com",
+        "website": "www.fragvansh.com",
+        "state_code": "27",
+        "order_prefix": "FV",
+        "pi_prefix": "FVPI",
+        "order_counter": "order_number_fragvansh",
+        "pi_counter": "pi_number_fragvansh",
+        "logo": ROOT_DIR / "assets" / "fragvansh_logo.png",
+        "logo_pdf": ROOT_DIR / "assets" / "fragvansh_logo.png",
+    },
+}
+
+
+def company_of(doc) -> dict:
+    """Company profile for an order/PI, defaulting to CitSpray.
+
+    Documents created before the second company existed have no `company`
+    key, so they resolve to CitSpray and keep printing exactly as before.
+    """
+    key = (doc or {}).get("company") if isinstance(doc, dict) else doc
+    return COMPANIES.get(str(key or "").strip().lower(), COMPANIES[DEFAULT_COMPANY])
+
+
+BANK_FRAGVANSH = {
+    "account_name": "FragVansh",
+    "account_no": "1472002100033922",
+    "ifsc": "PUNB0147200",
+    "bank": "Punjab National Bank",
+    "branch": "Khamla, Nagpur",
+    "upi_string": "upi://pay?pa=arnavagrawal22@okicici&mam=1&am={amount}&cu=INR",
+}
+
+
+def company_bank(company: dict, gst_applicable: bool) -> dict:
+    """Bank block for a company's PI.
+
+    FragVansh banks under its own account regardless of GST applicability;
+    CitSpray keeps the existing GST / non-GST split.
+    """
+    if company["key"] == "fragvansh":
+        return BANK_FRAGVANSH
+    return BANK_GST if gst_applicable else BANK_NON_GST
+
+
+async def next_document_number(company: dict, kind: str) -> str:
+    """Next order/PI number for a company, from that company's own counter."""
+    counter_id = company["order_counter"] if kind == "order" else company["pi_counter"]
+    prefix = company["order_prefix"] if kind == "order" else company["pi_prefix"]
+    counter = await db.counters.find_one_and_update(
+        {"_id": counter_id}, {"$inc": {"seq": 1}}, upsert=True, return_document=True
+    )
+    return f"{prefix}-{counter['seq']:04d}"
+
+
+@api_router.get("/companies")
+async def list_companies(user=Depends(get_current_user)):
+    """Selectable companies for the order and PI forms."""
+    return [{"key": c["key"], "label": c["label"], "brand": c["brand"],
+             "order_prefix": c["order_prefix"], "gstin": c["gstin"],
+             "is_default": c["key"] == DEFAULT_COMPANY,
+             "configured": bool(c["gstin"])}
+            for c in COMPANIES.values()]
+
+
 COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"]
 
 # Bank details for PI PDFs
@@ -268,6 +366,7 @@ def build_additional_charges(raw_charges, gst_applicable: bool, carrier_risk_app
     return charges, total_amount, total_gst
 
 class OrderCreate(BaseModel):
+    company: str = DEFAULT_COMPANY   # which business this document belongs to
     customer_id: str
     purpose: str = ""
     items: List[OrderItemModel]
@@ -307,6 +406,7 @@ class DispatchUpdate(BaseModel):
     porter_link: str = ""
 
 class PICreate(BaseModel):
+    company: str = DEFAULT_COMPANY   # which business this document belongs to
     customer_id: str
     items: List[OrderItemModel]
     free_samples: List[FreeSampleModel] = []
@@ -799,10 +899,8 @@ async def lookup_pincode(pincode: str, user=Depends(get_current_user)):
 # Order Routes
 @api_router.post("/orders")
 async def create_order(req: OrderCreate, user=Depends(get_current_user)):
-    counter = await db.counters.find_one_and_update(
-        {"_id": "order_number"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True
-    )
-    order_number = f"CS-{counter['seq']:04d}"
+    company = company_of({"company": req.company})
+    order_number = await next_document_number(company, "order")
     customer = await db.customers.find_one({"id": req.customer_id}, {"_id": 0})
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -884,6 +982,7 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
     order_doc = {
         "id": str(uuid.uuid4()),
         "order_number": order_number,
+        "company": company["key"],
         "customer_id": req.customer_id,
         "customer_name": customer["name"],
         "purpose": req.purpose,
@@ -2195,10 +2294,12 @@ async def print_bulk_packaging_sheets(body: dict, user=Depends(get_current_user)
 
     for index, order in enumerate(orders):
         customer = customers.get(order.get("customer_id", ""))
+        company = company_of(order)
 
         # ── 1. HEADER ──
         logo_cell = ''
-        logo_src = str(LOGO_PDF_PATH) if LOGO_PDF_PATH.exists() else str(LOGO_PATH)
+        logo_src = (str(company["logo_pdf"]) if company["logo_pdf"].exists()
+                    else str(company["logo"]))
         if Path(logo_src).exists():
             try:
                 tmp = Image(logo_src)
@@ -2209,10 +2310,10 @@ async def print_bulk_packaging_sheets(body: dict, user=Depends(get_current_user)
                 pass
 
         co_info = Paragraph(
-            f"<b><font size=11>{COMPANY['name']}</font></b><br/>"
-            f"<font size=8 color='#15803D'><i>{COMPANY['brand']}</i></font><br/>"
-            f"<font size=7 color='#6B7280'>{COMPANY['address']}</font><br/>"
-            f"<font size=7 color='#6B7280'>Ph: {COMPANY['mobile']} | {COMPANY['email']}</font>",
+            f"<b><font size=11>{company['name']}</font></b><br/>"
+            f"<font size=8 color='#15803D'><i>{company['brand']}</i></font><br/>"
+            f"<font size=7 color='#6B7280'>{company['address']}</font><br/>"
+            f"<font size=7 color='#6B7280'>Ph: {company['mobile']} | {company['email']}</font>",
             ParagraphStyle(f"CoInfo_{index}", parent=styles['Normal'], fontSize=9, leading=12)
         )
         header_tbl = Table([[logo_cell, co_info]], colWidths=[32*mm, pw - 32*mm])
@@ -2978,6 +3079,7 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     customer = await db.customers.find_one({"id": order["customer_id"]}, {"_id": 0})
+    company = company_of(order)
 
     page_size = A5 if size == "A5" else A4
     buffer = io.BytesIO()
@@ -3015,7 +3117,7 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
 
     # ── 1. HEADER ──
     logo_cell = ''
-    logo_src = str(LOGO_PDF_PATH) if LOGO_PDF_PATH.exists() else str(LOGO_PATH)
+    logo_src = str(company["logo_pdf"]) if company["logo_pdf"].exists() else str(company["logo"])
     if Path(logo_src).exists():
         try:
             tmp = Image(logo_src)
@@ -3026,10 +3128,10 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
             pass
 
     co_info = Paragraph(
-        f"<b><font size=11>{COMPANY['name']}</font></b><br/>"
-        f"<font size=8 color='#15803D'><i>{COMPANY['brand']}</i></font><br/>"
-        f"<font size=7 color='#6B7280'>{COMPANY['address']}</font><br/>"
-        f"<font size=7 color='#6B7280'>Ph: {COMPANY['mobile']} | {COMPANY['email']}</font>",
+        f"<b><font size=11>{company['name']}</font></b><br/>"
+        f"<font size=8 color='#15803D'><i>{company['brand']}</i></font><br/>"
+        f"<font size=7 color='#6B7280'>{company['address']}</font><br/>"
+        f"<font size=7 color='#6B7280'>Ph: {company['mobile']} | {company['email']}</font>",
         ParagraphStyle('CoInfo', parent=styles['Normal'], fontSize=9, leading=12)
     )
     header_tbl = Table([[logo_cell, co_info]], colWidths=[32*mm, pw - 32*mm])
@@ -3246,10 +3348,8 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
 async def create_pi(req: PICreate, user=Depends(get_current_user)):
     if user["role"] not in ["admin", "telecaller"]:
         raise HTTPException(status_code=403, detail="Admin or telecaller only")
-    counter = await db.counters.find_one_and_update(
-        {"_id": "pi_number"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True
-    )
-    pi_number = f"PI-{counter['seq']:04d}"
+    company = company_of({"company": req.company})
+    pi_number = await next_document_number(company, "pi")
     customer = await db.customers.find_one({"id": req.customer_id}, {"_id": 0})
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -3293,6 +3393,7 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
     pi_doc = {
         "id": str(uuid.uuid4()),
         "pi_number": pi_number,
+        "company": company["key"],
         "customer_id": req.customer_id,
         "customer_name": customer["name"],
         "items": items,
@@ -3525,10 +3626,8 @@ async def make_pi_from_order(order_id: str, req: MakePIRequest, user=Depends(get
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-    counter = await db.counters.find_one_and_update(
-        {"_id": "pi_number"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True
-    )
-    pi_number = f"PI-{counter['seq']:04d}"
+    company = company_of(order)
+    pi_number = await next_document_number(company, "pi")
     
     # Process items and strip formulations
     items = []
@@ -3586,6 +3685,7 @@ async def make_pi_from_order(order_id: str, req: MakePIRequest, user=Depends(get
     pi_doc = {
         "id": str(uuid.uuid4()),
         "pi_number": pi_number,
+        "company": company["key"],
         "customer_id": order.get("customer_id", ""),
         "customer_name": order.get("customer_name", ""),
         "items": items,
@@ -3627,14 +3727,13 @@ async def convert_pi_to_order(pi_id: str, body: dict, user=Depends(get_current_u
         raise HTTPException(status_code=404, detail="PI not found")
     if pi.get("converted_order_id"):
         raise HTTPException(status_code=400, detail="PI already converted")
-    counter = await db.counters.find_one_and_update(
-        {"_id": "order_number"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True
-    )
-    order_number = f"CS-{counter['seq']:04d}"
+    company = company_of(pi)
+    order_number = await next_document_number(company, "order")
     customer = await db.customers.find_one({"id": pi["customer_id"]}, {"_id": 0})
     order_doc = {
         "id": str(uuid.uuid4()),
         "order_number": order_number,
+        "company": company["key"],
         "customer_id": pi["customer_id"],
         "customer_name": customer["name"] if customer else pi["customer_name"],
         "purpose": body.get("purpose", ""),
@@ -3694,6 +3793,7 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     if not pi:
         raise HTTPException(status_code=404, detail="PI not found")
     customer = await db.customers.find_one({"id": pi["customer_id"]}, {"_id": 0})
+    company = company_of(pi)
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4,
@@ -3735,8 +3835,8 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     if is_gst:
         # 1. HEADER: logo (aspect-ratio corrected) + company info
         logo_cell = Paragraph('', body)
-        if LOGO_PDF_PATH.exists() or LOGO_PATH.exists():
-            logo_src = str(LOGO_PDF_PATH) if LOGO_PDF_PATH.exists() else str(LOGO_PATH)
+        if company["logo_pdf"].exists() or company["logo"].exists():
+            logo_src = str(company["logo_pdf"]) if company["logo_pdf"].exists() else str(company["logo"])
             try:
                 tmp = Image(logo_src)
                 aspect = tmp.imageHeight / tmp.imageWidth
@@ -3745,12 +3845,12 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
                 pass
 
         co_para = Paragraph(
-            f"<b><font size=13>{COMPANY['name']}</font></b><br/>"
-            f"<font size=8 color='#15803D'><i>{COMPANY['brand']}</i></font><br/>"
-            f"<font size=7.5 color='#374151'>{COMPANY['address']}</font><br/>"
+            f"<b><font size=13>{company['name']}</font></b><br/>"
+            f"<font size=8 color='#15803D'><i>{company['brand']}</i></font><br/>"
+            f"<font size=7.5 color='#374151'>{company['address']}</font><br/>"
             f"<font size=7.5 color='#6B7280'>"
-            f"Ph: {COMPANY['mobile']}  |  {COMPANY['email']}  |  {COMPANY['website']}</font><br/>"
-            f"<font size=7.5 color='#374151'><b>GSTIN:</b> {COMPANY['gstin']}</font>",
+            f"Ph: {company['mobile']}  |  {company['email']}  |  {company['website']}</font><br/>"
+            f"<font size=7.5 color='#374151'><b>GSTIN:</b> {company['gstin']}</font>",
             sty('CoP', fontSize=9, leading=13)
         )
         head = Table([[logo_cell, co_para]], colWidths=[34*mm, pw - 34*mm])
@@ -4028,7 +4128,7 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     # ── F. BANK / PAYMENT DETAILS + QR CODE ──────────────────────
     # ─────────────────────────────────────────────────────────────
     elements.append(Spacer(1, 7*mm))
-    bank = BANK_GST if is_gst else BANK_NON_GST
+    bank = company_bank(company, is_gst)
     upi_string = bank["upi_string"].format(amount=int(pi.get("grand_total", 0)))
 
     qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=6, border=2)
