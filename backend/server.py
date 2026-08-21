@@ -1380,9 +1380,14 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
                 detail="Accounts can only update payment details, not: "
                        + ", ".join(sorted(outside)))
 
-    # Formulation lock: if order has any formulation, only admin can edit (unless approved)
+    # Formulation lock: if order has any formulation, only admin can edit (unless
+    # approved). A payment-only edit cannot touch a formulation, so recording a
+    # payment is not blocked by it - accounts are restricted to payment fields
+    # anyway, and this is the same set the dispatched-order rule already allows.
+    payment_only = bool(updates) and not (
+        set(updates.keys()) - PAYMENT_FIELDS - {"id", "order_number", "updated_at"})
     has_approved_permission = False
-    if user["role"] != "admin":
+    if user["role"] != "admin" and not payment_only:
         has_formulation = any(item.get("formulation") for item in order.get("items", []))
         if not has_formulation:
             has_formulation = any(s.get("formulation") for s in order.get("free_samples", []))
