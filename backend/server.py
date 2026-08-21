@@ -1354,13 +1354,31 @@ async def get_order(order_id: str, user=Depends(get_current_user)):
         order["has_edit_permission"] = user["role"] == "admin"
     return order
 
+# Payment fields accounts may edit. Everything else on an order stays with
+# admin and the owning telecaller.
+PAYMENT_FIELDS = {"payment_status", "amount_paid", "balance_amount",
+                  "mode_of_payment", "payment_mode_details", "payment_screenshots"}
+
+
 @api_router.put("/orders/{order_id}")
 async def update_order(order_id: str, updates: dict, user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "telecaller"]:
-        raise HTTPException(status_code=403, detail="Only admin or telecaller can edit orders")
+    if user["role"] not in ["admin", "telecaller", "accounts"]:
+        raise HTTPException(status_code=403,
+                            detail="Only admin, telecaller or accounts can edit orders")
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    if user["role"] == "accounts":
+        # Accounts reconcile payments; they must not touch items, pricing or
+        # dispatch. Anything outside the payment set is refused outright rather
+        # than silently dropped, so a blocked edit is visible.
+        outside = set(updates.keys()) - PAYMENT_FIELDS - {"id", "order_number", "updated_at"}
+        if outside:
+            raise HTTPException(
+                status_code=403,
+                detail="Accounts can only update payment details, not: "
+                       + ", ".join(sorted(outside)))
 
     # Formulation lock: if order has any formulation, only admin can edit (unless approved)
     has_approved_permission = False
@@ -1385,7 +1403,7 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
 
     # Dispatch lock: admins can edit everything; telecallers can edit payment fields on own orders
     if order.get("status") == "dispatched" and user["role"] != "admin":
-        allowed_dispatched = {"payment_status", "amount_paid", "balance_amount", "mode_of_payment", "payment_mode_details", "payment_screenshots"}
+        allowed_dispatched = set(PAYMENT_FIELDS)
         non_allowed = set(updates.keys()) - allowed_dispatched - {"id", "order_number", "updated_at"}
         if non_allowed:
             raise HTTPException(status_code=400, detail="Order is dispatched. Only payment details can be updated.")

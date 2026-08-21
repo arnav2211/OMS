@@ -114,7 +114,9 @@ export default function OrderDetail() {
   const canSharePI = ["admin", "telecaller"].includes(user?.role);
   const canShareImages = ["admin", "telecaller", "packaging"].includes(user?.role);
   // Telecaller can edit payment on own orders even after dispatch
-  const canEditPayment = isAdmin || (user?.role === "telecaller" && order?.telecaller_id === user?.id);
+  // Accounts reconcile payments on any order; telecallers only on their own.
+  const canEditPayment = isAdmin || user?.role === "accounts"
+    || (user?.role === "telecaller" && order?.telecaller_id === user?.id);
 
   const openEdit = () => {
     if (isDispatched && !isAdmin) return toast.error("Cannot edit dispatched order");
