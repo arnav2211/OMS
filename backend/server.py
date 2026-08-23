@@ -3541,6 +3541,9 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
     update_data = {
         "customer_id": req.customer_id,
         "customer_name": customer["name"] if customer else pi["customer_name"],
+        # The company can be corrected while the PI is still a draft; the
+        # number keeps its original prefix so an issued PI is never renumbered.
+        "company": company_of({"company": req.company})["key"],
         "items": items,
         "gst_applicable": req.gst_applicable,
         "show_rate": req.show_rate,

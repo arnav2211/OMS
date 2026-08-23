@@ -390,6 +390,12 @@ function DispatchEditSection({ order, onSaved }) {
 }
 
 // ─── MAIN EDIT ORDER COMPONENT ───────────────────────────────────────────────
+// The two businesses sharing this OMS. CitSpray is the default.
+const COMPANIES = [
+  { key: "citspray", label: "CitSpray", prefix: "CS" },
+  { key: "fragvansh", label: "FragVansh", prefix: "FV" },
+];
+
 export default function EditOrder() {
   const { orderId } = useParams();
   const { user } = useAuth();
@@ -402,6 +408,7 @@ export default function EditOrder() {
   const [purpose, setPurpose] = useState("");
   const [items, setItems] = useState([emptyItem()]);
   const [gstApplicable, setGstApplicable] = useState(false);
+  const [company, setCompany] = useState("citspray");
   const [shippingMethod, setShippingMethod] = useState("");
   const [courierName, setCourierName] = useState("");
   const [transporterName, setTransporterName] = useState("");
@@ -443,6 +450,7 @@ export default function EditOrder() {
       setPurpose(o.purpose || "");
       setItems(o.items?.length ? o.items.map(i => ({ ...i })) : [emptyItem()]);
       setGstApplicable(o.gst_applicable || false);
+      setCompany(o.company || "citspray");
       setShippingMethod(o.shipping_method || "");
       setCourierName(o.courier_name || "");
       setTransporterName(o.transporter_name || "");
@@ -644,6 +652,7 @@ export default function EditOrder() {
         grand_total: grandTotal,
         remark,
         payment_status: paymentStatus,
+        company,
         is_cod: isCod,
         amount_paid: paymentStatus === "full" ? grandTotal : amountPaid,
         balance_amount: balanceAmount,
@@ -808,6 +817,34 @@ export default function EditOrder() {
             <CardContent className="pt-6">
               <Label>Purpose / Requirement</Label>
               <Textarea className="mt-2" value={purpose} onChange={e => setPurpose(e.target.value)} data-testid="edit-purpose" />
+            </CardContent>
+          </Card>
+
+          {/* Company — which business this order belongs to. */}
+          <Card>
+            <CardContent className="pt-6">
+              <Label className="text-sm font-medium">Company</Label>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {COMPANIES.map((co) => (
+                  <button
+                    key={co.key}
+                    type="button"
+                    onClick={() => setCompany(co.key)}
+                    data-testid={`edit-company-${co.key}`}
+                    className={`rounded-md border px-4 py-2 text-sm transition ${
+                      company === co.key
+                        ? "border-primary bg-primary/10 font-semibold"
+                        : "border-border hover:bg-muted"
+                    }`}
+                  >
+                    {co.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Changes which company appears on this order's PDF. The order
+                number keeps its original prefix.
+              </p>
             </CardContent>
           </Card>
 
