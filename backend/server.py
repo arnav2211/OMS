@@ -1545,6 +1545,22 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
             dispatch["porter_link"] = ""
         updates["dispatch"] = dispatch
 
+    # Moving an order to the other company renumbers it into that company's
+    # series (CS-xxxx <-> FV-xxxx). The old number is kept in renumber_history
+    # so anything already quoting it can still be traced. A courier booking
+    # holds the old number as its customer reference and is not rewritten.
+    if "company" in updates:
+        new_key = company_of({"company": updates["company"]})["key"]
+        updates["company"] = new_key
+        if new_key != company_of(order)["key"]:
+            old_number = order.get("order_number") or ""
+            updates["order_number"] = await next_document_number(
+                COMPANIES[new_key], "order")
+            updates["renumber_history"] = (order.get("renumber_history") or []) + [{
+                "from": old_number, "to": updates["order_number"],
+                "at": datetime.now(timezone.utc).isoformat(), "by": user["name"],
+            }]
+
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.orders.update_one({"id": order_id}, {"$set": updates})
     if result.matched_count == 0:
@@ -3538,11 +3554,23 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
     if req.shipping_address_id:
         shipping_addr = await db.addresses.find_one({"id": req.shipping_address_id}, {"_id": 0})
 
+    # Switching a PI's company renumbers it into that company's series, the
+    # same rule orders follow.
+    new_company = company_of({"company": req.company})
+    pi_renumber = {}
+    if new_company["key"] != company_of(pi)["key"]:
+        pi_renumber = {
+            "pi_number": await next_document_number(new_company, "pi"),
+            "renumber_history": (pi.get("renumber_history") or []) + [{
+                "from": pi.get("pi_number", ""), "at": datetime.now(timezone.utc).isoformat(),
+                "by": user["name"],
+            }],
+        }
+        pi_renumber["renumber_history"][-1]["to"] = pi_renumber["pi_number"]
+
     update_data = {
         "customer_id": req.customer_id,
         "customer_name": customer["name"] if customer else pi["customer_name"],
-        # The company can be corrected while the PI is still a draft; the
-        # number keeps its original prefix so an issued PI is never renumbered.
         "company": company_of({"company": req.company})["key"],
         "items": items,
         "gst_applicable": req.gst_applicable,
@@ -3561,6 +3589,7 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
         "shipping_address": shipping_addr,
         "free_samples": [s.model_dump() for s in req.free_samples],
         "terms_and_conditions": req.terms_and_conditions,
+        **pi_renumber,
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     await db.proforma_invoices.update_one({"id": pi_id}, {"$set": update_data})
