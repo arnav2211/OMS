@@ -6489,7 +6489,7 @@ _ADDRESS_LABEL_WORDS = ("billing", "shipping", "home", "office", "work", "branch
                         "secondary", "adress", "address")
 
 
-def _address_lines(sa: dict) -> tuple:
+def _address_lines(sa: dict, cap: int = 120) -> tuple:
     """(line1, line2) for a courier label.
 
     The OMS address has no address_line2. Users sometimes put real address text
@@ -6504,7 +6504,45 @@ def _address_lines(sa: dict) -> tuple:
     line2 = "" if is_category else label
     if not line1:
         line1, line2 = line2, ""
-    return line1[:120], line2[:120]
+    return line1[:cap], line2[:cap]
+
+
+def _amazon_address_lines(sa: dict) -> dict:
+    """The recipient address split across Amazon's three 60-character lines.
+
+    Amazon caps every address line at 60 characters but accepts three of them.
+    We used to send a single truncated line, which cost CS-1398 half its
+    address on the label. Wraps on word boundaries; anything beyond what three
+    lines can hold is squeezed onto the last line and hard-capped, so the
+    label degrades from the end rather than mid-address.
+    """
+    # 180 = three full Amazon lines; the default 120 cap silently ate the tail.
+    line1, line2 = _address_lines(sa, cap=180)
+    full = re.sub(r"\s+", " ", ", ".join(x for x in (line1, line2) if x)).strip()
+    if not full:
+        return {"addressLine1": "Address"}
+    wrapped, cur = [], ""
+    for word in full.split(" "):
+        while len(word) > 60:               # pathological unbroken token
+            wrapped.append(word[:60])
+            word = word[60:]
+        cand = f"{cur} {word}".strip()
+        if len(cand) <= 60:
+            cur = cand
+        else:
+            wrapped.append(cur)
+            cur = word
+    if cur:
+        wrapped.append(cur)
+    if len(wrapped) > 3:                    # squeeze the tail into line 3
+        wrapped[2] = (wrapped[2] + " " + " ".join(wrapped[3:]))[:60]
+        wrapped = wrapped[:3]
+    out = {"addressLine1": wrapped[0]}
+    if len(wrapped) > 1:
+        out["addressLine2"] = wrapped[1]
+    if len(wrapped) > 2:
+        out["addressLine3"] = wrapped[2]
+    return out
 
 
 AMAZON_FALLBACK_EMAIL = os.environ.get("AMAZON_FALLBACK_EMAIL", "arnavagrawal22@gmail.com")
@@ -6678,7 +6716,7 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
     phone = await _order_recipient_phone(order)
     ship_to = {
         "name": sa.get("address_name") or order.get("customer_name") or "Customer",
-        "addressLine1": (sa.get("address_line") or "Address")[:60],
+        **_amazon_address_lines(sa),
         "city": sa.get("city") or "", "stateOrRegion": sa.get("state") or "",
         "postalCode": sa.get("pincode") or "", "countryCode": "IN",
         "phoneNumber": phone or AMAZON_SHIP["origin_phone"],
@@ -6758,7 +6796,7 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         )
     ship_to = {
         "name": sa.get("address_name") or order.get("customer_name") or "Customer",
-        "addressLine1": (sa.get("address_line") or "Address")[:60],
+        **_amazon_address_lines(sa),
         "city": sa.get("city") or "", "stateOrRegion": sa.get("state") or "",
         "postalCode": sa.get("pincode") or "", "countryCode": "IN",
         "phoneNumber": phone,
