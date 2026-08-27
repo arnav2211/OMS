@@ -6484,9 +6484,10 @@ async def _order_recipient_phone(order: dict) -> str:
 
 # Words that mean `label` is a category name ("Billing address", "Home") rather
 # than real address text — those must not be printed on the shipping label.
-_ADDRESS_LABEL_WORDS = ("billing", "shipping", "home", "office", "work", "branch",
-                        "warehouse", "godown", "factory", "default", "primary",
-                        "secondary", "adress", "address")
+_ADDRESS_LABEL_WORDS = ("billing", "shipping", "ship to", "deliver", "home",
+                        "office", "work", "branch", "warehouse", "godown",
+                        "factory", "default", "primary", "secondary",
+                        "adress", "address")
 
 
 def _address_lines(sa: dict, cap: int = 120) -> tuple:
