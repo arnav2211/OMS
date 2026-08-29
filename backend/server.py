@@ -196,14 +196,35 @@ def _bank_by_key(key: str):
             "arnav_personal": BANK_ARNAV, "fragvansh": BANK_FRAGVANSH}.get(key)
 
 
-def resolve_pi_bank(pi: dict, company: dict, gst_applicable: bool) -> dict:
-    """Bank block for a PI PDF: the admin's explicit choice, else the default.
+# The three slots an admin can point at any account, from Settings. A slot
+# with no mapping keeps its historical default, so out of the box nothing
+# changes: GST -> Mangalam Agro, non-GST -> Lata Agrawal, FragVansh -> its own.
+BANK_SLOTS = {
+    "citspray_gst":    {"label": "CitSpray - GST PIs",     "default": "citspray_gst"},
+    "citspray_nongst": {"label": "CitSpray - non-GST PIs", "default": "citspray_nongst"},
+    "fragvansh":       {"label": "FragVansh PIs",          "default": "fragvansh"},
+}
 
-    The default stays exactly what it always was - company + GST rules - so
-    every existing PI renders unchanged unless an admin picked an account.
+
+def _bank_slot_for(company: dict, gst_applicable: bool) -> str:
+    if company["key"] == "fragvansh":
+        return "fragvansh"
+    return "citspray_gst" if gst_applicable else "citspray_nongst"
+
+
+async def resolve_pi_bank(pi: dict, company: dict, gst_applicable: bool) -> dict:
+    """Bank block for a PI PDF, from the admin's Settings mapping.
+
+    One global mapping per slot (CitSpray GST / CitSpray non-GST / FragVansh),
+    applied to every PI. Unset or invalid mappings fall back to the slot's
+    historical default, so existing documents render unchanged.
     """
-    chosen = _bank_by_key(str((pi or {}).get("bank_account") or ""))
-    return chosen if chosen else company_bank(company, gst_applicable)
+    slot = _bank_slot_for(company, gst_applicable)
+    settings = await db.settings.find_one({"_id": "global"}) or {}
+    mapping = settings.get("bank_mapping") or {}
+    return (_bank_by_key(str(mapping.get(slot) or ""))
+            or _bank_by_key(BANK_SLOTS[slot]["default"])
+            or company_bank(company, gst_applicable))
 
 PAYMENT_MODES = ["Cash", "Online", "Other"]
 
@@ -277,6 +298,8 @@ class OrderItemModel(BaseModel):
     total: float = 0
     formulation: str = ""
     description: str = ""
+    discount: float = 0                 # per-item discount, used in "items" mode
+    discount_is_percent: bool = False
 
 class FreeSampleModel(BaseModel):
     item_name: str = ""
@@ -342,6 +365,40 @@ def carrier_risk_allowed(req) -> bool:
     return (getattr(req, "courier_name", "") or "").strip().upper() == "DTDC"
 
 
+def compute_manual_discount(req, items: list, subtotal: float, total_gst: float):
+    """(discount, discount_gst) for a manually entered discount, pre-GST.
+
+    Callers emit it as a negative additional-charge row - the same shape the
+    website discount uses - so screens and PDFs render it with no changes.
+    GST reversal is exact per item rate in items mode and pro-rata in total
+    mode; both give GST-charged-on-the-discounted-value semantics. Discounts
+    are capped so a document can never go negative.
+    """
+    if not getattr(req, "discount_enabled", False) or subtotal <= 0:
+        return 0.0, 0.0
+    gst_on = bool(getattr(req, "gst_applicable", False))
+    if (getattr(req, "discount_mode", "total") or "total").lower() == "items":
+        disc = gst_rev = 0.0
+        for src, d in zip(req.items, items):
+            v = float(getattr(src, "discount", 0) or 0)
+            if v <= 0:
+                continue
+            amt = float(d.get("amount") or 0)
+            di = amt * v / 100 if getattr(src, "discount_is_percent", False) else v
+            di = min(round(di, 2), amt)
+            disc += di
+            if gst_on and d.get("gst_rate"):
+                gst_rev += di * float(d["gst_rate"]) / 100
+        return round(disc, 2), round(gst_rev, 2)
+    v = float(getattr(req, "discount_value", 0) or 0)
+    if v <= 0:
+        return 0.0, 0.0
+    disc = subtotal * v / 100 if getattr(req, "discount_is_percent", False) else v
+    disc = min(round(disc, 2), round(subtotal, 2))
+    gst_rev = round(total_gst * (disc / subtotal), 2) if (gst_on and total_gst > 0) else 0.0
+    return disc, gst_rev
+
+
 def build_additional_charges(raw_charges, gst_applicable: bool, carrier_risk_applicable: bool, base_value: float):
     """Normalise additional charges, appending the derived carrier risk row when applicable.
 
@@ -389,6 +446,12 @@ def build_additional_charges(raw_charges, gst_applicable: bool, carrier_risk_app
 
 class OrderCreate(BaseModel):
     company: str = DEFAULT_COMPANY   # which business this document belongs to
+    # Manual discount, off unless ticked in the form. Mode "total" or "items";
+    # value/is_percent apply to total mode, per-item fields to items mode.
+    discount_enabled: bool = False
+    discount_mode: str = "total"
+    discount_value: float = 0
+    discount_is_percent: bool = False
     customer_id: str
     purpose: str = ""
     items: List[OrderItemModel]
@@ -429,6 +492,12 @@ class DispatchUpdate(BaseModel):
 
 class PICreate(BaseModel):
     company: str = DEFAULT_COMPANY   # which business this document belongs to
+    # Manual discount, off unless ticked in the form. Mode "total" or "items";
+    # value/is_percent apply to total mode, per-item fields to items mode.
+    discount_enabled: bool = False
+    discount_mode: str = "total"
+    discount_value: float = 0
+    discount_is_percent: bool = False
     bank_account: str = ""           # admin-chosen bank for the PDF; blank = automatic
     customer_id: str
     items: List[OrderItemModel]
@@ -919,6 +988,35 @@ async def lookup_pincode(pincode: str, user=Depends(get_current_user)):
             return {"pincode": pincode, "city": city, "state": state, "country": "India", "post_offices": []}
         return {"pincode": pincode, "city": "", "state": "", "country": "India", "post_offices": []}
 
+@api_router.get("/settings/bank-mapping")
+async def get_bank_mapping(user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    settings = await db.settings.find_one({"_id": "global"}) or {}
+    mapping = settings.get("bank_mapping") or {}
+    return {"slots": [{"slot": k, "label": v["label"],
+                       "current": mapping.get(k) or v["default"],
+                       "default": v["default"]}
+                      for k, v in BANK_SLOTS.items()]}
+
+
+@api_router.put("/settings/bank-mapping")
+async def set_bank_mapping(body: dict, user=Depends(get_current_user)):
+    """Admin-only: point each PI slot at a bank account, applied globally."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    mapping = {}
+    for slot in BANK_SLOTS:
+        key = str((body or {}).get(slot) or "").strip()
+        if key:
+            if not _bank_by_key(key):
+                raise HTTPException(status_code=400, detail=f"Unknown account '{key}'")
+            mapping[slot] = key
+    await db.settings.update_one({"_id": "global"},
+                                 {"$set": {"bank_mapping": mapping}}, upsert=True)
+    return {"ok": True, "bank_mapping": mapping}
+
+
 @api_router.get("/bank-accounts")
 async def list_bank_accounts(user=Depends(get_current_user)):
     """Accounts an admin may put on a PI. Admin-only by design."""
@@ -1009,6 +1107,16 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
             "gst_amount": -discount_gst,
         })
         raw_total -= discount + discount_gst
+
+    # Manual discount (admin/telecaller form). Stored in the same fields as the
+    # website discount, so the edit guard preserves it identically.
+    if not is_website:
+        mdisc, mdisc_gst = compute_manual_discount(req, items, subtotal, total_gst)
+        if mdisc > 0:
+            discount, discount_gst = mdisc, mdisc_gst
+            additional_charges.append({"name": "Discount", "amount": -mdisc,
+                                       "gst_percent": 0, "gst_amount": -mdisc_gst})
+            raw_total -= mdisc + mdisc_gst
 
     # Website orders must match the amount the customer actually paid online,
     # so they are never rounded up. Manual orders keep the round-to-rupee.
@@ -3465,6 +3573,12 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
         subtotal + total_gst + req.shipping_charge + shipping_gst,
     )
 
+    mdisc, mdisc_gst = compute_manual_discount(req, items, subtotal, total_gst)
+    if mdisc > 0:
+        additional_charges.append({"name": "Discount", "amount": -mdisc,
+                                   "gst_percent": 0, "gst_amount": -mdisc_gst})
+        total_additional -= mdisc
+        total_additional_gst -= mdisc_gst
     grand_total = math.ceil(subtotal + total_gst + req.shipping_charge + shipping_gst + total_additional + total_additional_gst)
 
     # Fetch addresses
@@ -3592,6 +3706,12 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
         subtotal + total_gst + req.shipping_charge + shipping_gst,
     )
 
+    mdisc, mdisc_gst = compute_manual_discount(req, items, subtotal, total_gst)
+    if mdisc > 0:
+        additional_charges.append({"name": "Discount", "amount": -mdisc,
+                                   "gst_percent": 0, "gst_amount": -mdisc_gst})
+        total_additional -= mdisc
+        total_additional_gst -= mdisc_gst
     grand_total = math.ceil(subtotal + total_gst + req.shipping_charge + shipping_gst + total_additional + total_additional_gst)
 
     billing_addr = None
@@ -4233,7 +4353,7 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     # ── F. BANK / PAYMENT DETAILS + QR CODE ──────────────────────
     # ─────────────────────────────────────────────────────────────
     elements.append(Spacer(1, 7*mm))
-    bank = resolve_pi_bank(pi, company, is_gst)
+    bank = await resolve_pi_bank(pi, company, is_gst)
     upi_string = bank["upi_string"].format(amount=int(pi.get("grand_total", 0)))
 
     qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=6, border=2)

@@ -109,14 +109,11 @@ export default function PIBuilder() {
   const [items, setItems] = useState([emptyItem()]);
   const [gstApplicable, setGstApplicable] = useState(false);
   const [company, setCompany] = useState("citspray");
-  // Admin-only: which bank account prints on the PI. "" = automatic default.
-  const [bankAccount, setBankAccount] = useState("");
-  const [bankOptions, setBankOptions] = useState([]);
-  useEffect(() => {
-    if (user?.role === "admin") {
-      api.get("/bank-accounts").then(r => setBankOptions(r.data)).catch(() => {});
-    }
-  }, [user?.role]);
+  // Manual discount - hidden until ticked, so the default document has none.
+  const [discountEnabled, setDiscountEnabled] = useState(false);
+  const [discountMode, setDiscountMode] = useState("total");
+  const [discountValue, setDiscountValue] = useState(0);
+  const [discountIsPercent, setDiscountIsPercent] = useState(false);
   const [showRate, setShowRate] = useState(true);
   const [shippingCharge, setShippingCharge] = useState(0);
   const [additionalCharges, setAdditionalCharges] = useState([]);
@@ -242,7 +239,31 @@ export default function PIBuilder() {
   const carrierRisk = carrierRiskApplicable
     ? resolveCarrierRiskCharge(carrierRiskBase, gstApplicable)
     : null;
-  const grandTotal = Math.ceil(carrierRiskBase + (carrierRisk ? carrierRisk.total : 0));
+  // Discount preview mirrors the server: per-item exact GST reversal, total
+  // mode pro-rata; both capped so the document cannot go negative.
+  let discountPreview = 0, discountGstPreview = 0;
+  if (discountEnabled && subtotal > 0) {
+    if (discountMode === "items") {
+      for (const i of items) {
+        const v = parseFloat(i.discount) || 0;
+        if (v <= 0) continue;
+        const di = Math.min(i.discount_is_percent ? i.amount * v / 100 : v, i.amount);
+        discountPreview += di;
+        if (gstApplicable && i.gst_rate > 0) discountGstPreview += di * i.gst_rate / 100;
+      }
+    } else {
+      const v = parseFloat(discountValue) || 0;
+      if (v > 0) {
+        discountPreview = Math.min(discountIsPercent ? subtotal * v / 100 : v, subtotal);
+        const totalItemGst = items.reduce((t, i) => t + (i.gst_amount || 0), 0);
+        if (gstApplicable && totalItemGst > 0)
+          discountGstPreview = totalItemGst * (discountPreview / subtotal);
+      }
+    }
+    discountPreview = +discountPreview.toFixed(2);
+    discountGstPreview = +discountGstPreview.toFixed(2);
+  }
+  const grandTotal = Math.ceil(carrierRiskBase - discountPreview - discountGstPreview + (carrierRisk ? carrierRisk.total : 0));
 
   const saveNewAddress = async () => {
     if (!newAddr.address_line || !newAddr.city || !newAddr.state || !newAddr.pincode) return toast.error("All address fields required");
@@ -273,7 +294,8 @@ export default function PIBuilder() {
 
   const openNewPI = () => {
     setEditingPi(null); setSelectedCustomer(null); setCustomerSearch(""); setItems([emptyItem()]);
-    setGstApplicable(false); setCompany("citspray"); setBankAccount(""); setShowRate(true); setShippingCharge(0); setAdditionalCharges([]);
+    setGstApplicable(false); setCompany("citspray"); setShowRate(true);
+    setDiscountEnabled(false); setDiscountMode("total"); setDiscountValue(0); setDiscountIsPercent(false); setShippingCharge(0); setAdditionalCharges([]);
     setCarrierRiskApplicable(false); setRemark("");
     setBillingAddress(null); setShippingAddress(null); setSameAsBilling(true); setFreeSamples([]);
     setShowBuilder(true);
@@ -288,7 +310,8 @@ export default function PIBuilder() {
       setSelectedCustomer(cust || { id: fullPi.customer_id, name: fullPi.customer_name });
       setItems(fullPi.items?.length ? fullPi.items.map(i => ({ ...i })) : [emptyItem()]);
       setGstApplicable(fullPi.gst_applicable); setCompany(fullPi.company || "citspray");
-      setBankAccount(fullPi.bank_account || "");
+      setDiscountEnabled(!!fullPi.discount_enabled); setDiscountMode(fullPi.discount_mode || "total");
+      setDiscountValue(fullPi.discount_value || 0); setDiscountIsPercent(!!fullPi.discount_is_percent);
       setShowRate(fullPi.show_rate !== false);
       setShippingCharge(fullPi.shipping_charge || 0);
       // Carrier risk is a derived row, so it is kept out of the editable list.
@@ -313,9 +336,13 @@ export default function PIBuilder() {
       const payload = {
         customer_id: selectedCustomer.id,
         company,
-        bank_account: bankAccount,
-        items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description }) => ({
-          product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description
+        discount_enabled: discountEnabled,
+        discount_mode: discountMode,
+        discount_value: parseFloat(discountValue) || 0,
+        discount_is_percent: discountIsPercent,
+        items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description, discount, discount_is_percent }) => ({
+          product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description,
+          discount: parseFloat(discount) || 0, discount_is_percent: !!discount_is_percent
         })),
         gst_applicable: gstApplicable, show_rate: showRate, shipping_charge: shippingCharge,
         // The carrier risk row itself is derived server-side from this flag.
@@ -455,7 +482,6 @@ export default function PIBuilder() {
                               setSelectedCustomer(cust || { id: d.customer_id, name: d.customer_name });
                               setItems(d.items?.length ? d.items.map(i => ({ ...i })) : [emptyItem()]);
                               setGstApplicable(d.gst_applicable); setCompany(d.company || "citspray");
-                              setBankAccount(d.bank_account || "");
                               setShowRate(d.show_rate !== false);
                               setShippingCharge(d.shipping_charge || 0);
                               setAdditionalCharges(stripCarrierRisk(d.additional_charges));
@@ -579,25 +605,6 @@ export default function PIBuilder() {
             Sets the number series ({COMPANIES.find((c) => c.key === company)?.prefix}-…)
             and the company shown on the PDF.
           </p>
-          {user?.role === "admin" && bankOptions.length > 0 && (
-            <div className="mt-4 max-w-sm">
-              <Label className="text-sm font-medium">Bank account on PI (admin)</Label>
-              <Select value={bankAccount || "auto"}
-                      onValueChange={(v) => setBankAccount(v === "auto" ? "" : v)}>
-                <SelectTrigger className="mt-1" data-testid="pi-bank-account">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="auto">Automatic (company &amp; GST rules)</SelectItem>
-                  {bankOptions.map((b) => (
-                    <SelectItem key={b.key} value={b.key}>
-                      {b.label} — {b.account_no}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
         </CardContent>
       </Card>
 
@@ -610,12 +617,83 @@ export default function PIBuilder() {
                   <Label htmlFor="piGst" className="cursor-pointer">GST Applicable</Label>
                 </div>
                 <div className="flex items-center gap-2">
+                  <Checkbox id="piDisc" checked={discountEnabled} onCheckedChange={setDiscountEnabled} data-testid="pi-discount-checkbox" />
+                  <Label htmlFor="piDisc" className="cursor-pointer">Discount</Label>
+                </div>
+                <div className="flex items-center gap-2">
                   <Checkbox id="piRate" checked={showRate} onCheckedChange={setShowRate} />
                   <Label htmlFor="piRate" className="cursor-pointer">Show Rate in PDF</Label>
                 </div>
               </div>
             </CardContent>
           </Card>
+
+          {discountEnabled && (
+            <Card data-testid="pi-discount-card">
+              <CardContent className="pt-6 space-y-3">
+                <div className="flex flex-wrap items-center gap-4">
+                  <Label className="text-sm font-medium">Discount</Label>
+                  {[["total", "On total"], ["items", "Per item"]].map(([m, lbl]) => (
+                    <label key={m} className="flex items-center gap-1.5 cursor-pointer text-sm">
+                      <input type="radio" name="piDiscMode" checked={discountMode === m}
+                             onChange={() => setDiscountMode(m)} /> {lbl}
+                    </label>
+                  ))}
+                </div>
+                {discountMode === "total" ? (
+                  <div className="flex items-center gap-2 max-w-xs">
+                    <Input type="number" min="0" value={discountValue}
+                           onChange={(e) => setDiscountValue(e.target.value)}
+                           data-testid="pi-discount-value" />
+                    <Select value={discountIsPercent ? "pct" : "amt"}
+                            onValueChange={(v) => setDiscountIsPercent(v === "pct")}>
+                      <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="amt">{"\u20B9"}</SelectItem>
+                        <SelectItem value="pct">%</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {items.filter(i => i.product_name).map((i, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <span className="text-sm w-52 truncate">{i.product_name}
+                          <span className="text-muted-foreground"> ({"\u20B9"}{(i.amount || 0).toFixed(0)})</span>
+                        </span>
+                        <Input type="number" min="0" className="w-28" value={i.discount || ""}
+                               placeholder="0"
+                               onChange={(e) => {
+                                 const u = [...items];
+                                 u[items.indexOf(i)] = { ...i, discount: e.target.value };
+                                 setItems(u);
+                               }} />
+                        <Select value={i.discount_is_percent ? "pct" : "amt"}
+                                onValueChange={(v) => {
+                                  const u = [...items];
+                                  u[items.indexOf(i)] = { ...i, discount_is_percent: v === "pct" };
+                                  setItems(u);
+                                }}>
+                          <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="amt">{"\u20B9"}</SelectItem>
+                            <SelectItem value="pct">%</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {discountPreview > 0 && (
+                  <p className="text-sm text-emerald-700 dark:text-emerald-400">
+                    Discount {"\u20B9"}{discountPreview.toFixed(2)}
+                    {gstApplicable && discountGstPreview > 0 &&
+                      ` (+ \u20B9${discountGstPreview.toFixed(2)} GST reduction)`}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {/* Items */}
           <Card>
@@ -812,6 +890,7 @@ export default function PIBuilder() {
                   </div>
                 )}
                 <Separator />
+                {discountPreview > 0 && <div className="flex justify-between text-emerald-700 dark:text-emerald-400"><span>Discount</span><span className="font-mono">-{"\u20B9"}{(discountPreview + discountGstPreview).toFixed(2)}</span></div>}
                 <div className="flex justify-between text-base font-bold"><span>Grand Total (Rounded Up)</span><span className="font-mono">{"\u20B9"}{grandTotal}</span></div>
               </div>
             </CardContent>

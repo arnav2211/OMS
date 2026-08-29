@@ -52,6 +52,9 @@ export default function AdminDashboard() {
   const [showUserDialog, setShowUserDialog] = useState(false);
   const [newUser, setNewUser] = useState({ username: "", password: "", name: "", role: "telecaller" });
   const [showFormulation, setShowFormulation] = useState(false);
+  // Which bank account prints on each PI slot; applied globally from here.
+  const [bankSlots, setBankSlots] = useState([]);
+  const [bankOptions, setBankOptions] = useState([]);
   const [packagingStaff, setPackagingStaff] = useState([]);
   const [newStaffName, setNewStaffName] = useState("");
 
@@ -135,6 +138,24 @@ export default function AdminDashboard() {
   const loadSettings = async () => {
     try { const res = await api.get("/settings"); setShowFormulation(res.data.show_formulation || false); }
     catch { }
+  };
+
+  const loadBankMapping = async () => {
+    try {
+      const [m, a] = await Promise.all([api.get("/settings/bank-mapping"), api.get("/bank-accounts")]);
+      setBankSlots(m.data.slots || []); setBankOptions(a.data || []);
+    } catch { }
+  };
+  useEffect(() => { loadBankMapping(); }, []);
+
+  const setSlotAccount = async (slot, key) => {
+    try {
+      const body = {};
+      for (const sl of bankSlots) body[sl.slot] = sl.slot === slot ? key : sl.current;
+      await api.put("/settings/bank-mapping", body);
+      setBankSlots(bankSlots.map(sl => sl.slot === slot ? { ...sl, current: key } : sl));
+      toast.success("Bank account updated - applies to all PIs of that type");
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
   };
 
   const loadPackagingStaff = async () => {
@@ -707,6 +728,31 @@ export default function AdminDashboard() {
                 {showFormulation ? <Eye className="w-4 h-4 mr-2" /> : <EyeOff className="w-4 h-4 mr-2" />}
                 {showFormulation ? "Formulations Visible (for Packaging)" : "Formulations Hidden (for Packaging)"}
               </Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle className="text-base">Bank Account on PIs</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Which bank account prints on each type of PI. The choice applies to every
+                PI of that type, immediately - existing PDFs re-render with it too.
+              </p>
+              {bankSlots.map((sl) => (
+                <div key={sl.slot} className="flex flex-wrap items-center gap-3">
+                  <Label className="w-44 text-sm">{sl.label}</Label>
+                  <Select value={sl.current} onValueChange={(v) => setSlotAccount(sl.slot, v)}>
+                    <SelectTrigger className="w-80" data-testid={`bank-slot-${sl.slot}`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {bankOptions.map((b) => (
+                        <SelectItem key={b.key} value={b.key}>{b.label} — {b.account_no}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
             </CardContent>
           </Card>
 

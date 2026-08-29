@@ -132,6 +132,11 @@ export default function CreateOrder() {
   const [items, setItems] = useState([emptyItem()]);
   const [gstApplicable, setGstApplicable] = useState(false);
   const [company, setCompany] = useState("citspray");
+  // Manual discount - hidden until ticked, so the default order has none.
+  const [discountEnabled, setDiscountEnabled] = useState(false);
+  const [discountMode, setDiscountMode] = useState("total");
+  const [discountValue, setDiscountValue] = useState(0);
+  const [discountIsPercent, setDiscountIsPercent] = useState(false);
   const [shippingMethod, setShippingMethod] = useState("");
   const [courierName, setCourierName] = useState("");
   const [transporterName, setTransporterName] = useState("");
@@ -186,6 +191,8 @@ export default function CreateOrder() {
       setItems(pi.items?.length ? pi.items.map(i => ({ ...i, formulation: "" })) : [emptyItem()]);
       setGstApplicable(pi.gst_applicable || false);
       setCompany(pi.company || "citspray");
+      setDiscountEnabled(!!pi.discount_enabled); setDiscountMode(pi.discount_mode || "total");
+      setDiscountValue(pi.discount_value || 0); setDiscountIsPercent(!!pi.discount_is_percent);
       setShippingMethod(pi.shipping_method || "");
       setCourierName(pi.courier_name || "");
       setTransporterName(pi.transporter_name || "");
@@ -227,6 +234,8 @@ export default function CreateOrder() {
       setItems(d.items?.length ? d.items.map(i => ({ ...i })) : [emptyItem()]);
       setGstApplicable(d.gst_applicable || false);
       setCompany(d.company || "citspray");
+      setDiscountEnabled(!!d.discount_enabled); setDiscountMode(d.discount_mode || "total");
+      setDiscountValue(d.discount_value || 0); setDiscountIsPercent(!!d.discount_is_percent);
       setShippingMethod(d.shipping_method || "");
       setCourierName(d.courier_name || "");
       setTransporterName(d.transporter_name || "");
@@ -292,7 +301,30 @@ export default function CreateOrder() {
   const carrierRisk = carrierRiskApplicable
     ? resolveCarrierRiskCharge(rawTotal, gstApplicable)
     : null;
-  const grandTotal = Math.ceil(rawTotal + (carrierRisk ? carrierRisk.total : 0));
+  // Discount preview mirrors the server: per-item exact GST reversal, total
+  // mode pro-rata; both capped so the order cannot go negative.
+  let discountPreview = 0, discountGstPreview = 0;
+  if (discountEnabled && subtotal > 0) {
+    if (discountMode === "items") {
+      for (const i of items) {
+        const v = parseFloat(i.discount) || 0;
+        if (v <= 0) continue;
+        const di = Math.min(i.discount_is_percent ? i.amount * v / 100 : v, i.amount);
+        discountPreview += di;
+        if (gstApplicable && i.gst_rate > 0) discountGstPreview += di * i.gst_rate / 100;
+      }
+    } else {
+      const v = parseFloat(discountValue) || 0;
+      if (v > 0) {
+        discountPreview = Math.min(discountIsPercent ? subtotal * v / 100 : v, subtotal);
+        if (gstApplicable && totalItemGst > 0)
+          discountGstPreview = totalItemGst * (discountPreview / subtotal);
+      }
+    }
+    discountPreview = +discountPreview.toFixed(2);
+    discountGstPreview = +discountGstPreview.toFixed(2);
+  }
+  const grandTotal = Math.ceil(rawTotal - discountPreview - discountGstPreview + (carrierRisk ? carrierRisk.total : 0));
   const balanceAmount = paymentStatus === "full" ? 0 : paymentStatus === "partial" ? Math.max(0, grandTotal - amountPaid) : grandTotal;
 
   // Carrier risk only exists on DTDC, and is never applied automatically - it
@@ -441,8 +473,9 @@ export default function CreateOrder() {
       const payload = {
         customer_id: selectedCustomer.id,
         purpose,
-        items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description }) => ({
+        items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description, discount, discount_is_percent }) => ({
           product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description,
+          discount: parseFloat(discount) || 0, discount_is_percent: !!discount_is_percent,
         })),
         gst_applicable: gstApplicable,
         shipping_method: shippingMethod,
@@ -461,6 +494,10 @@ export default function CreateOrder() {
         remark,
         payment_status: paymentStatus,
         company,
+        discount_enabled: discountEnabled,
+        discount_mode: discountMode,
+        discount_value: parseFloat(discountValue) || 0,
+        discount_is_percent: discountIsPercent,
         is_cod: isCod,
         cod_amount: 0,          // 0 = collect whatever is still outstanding
         amount_paid: paymentStatus === "full" ? grandTotal : amountPaid,
@@ -596,15 +633,88 @@ export default function CreateOrder() {
         </CardContent>
       </Card>
 
-      {/* GST Toggle */}
+      {/* GST + Discount toggles */}
       <Card>
         <CardContent className="pt-6">
-          <div className="flex items-center gap-3">
-            <Checkbox id="gst" checked={gstApplicable} onCheckedChange={setGstApplicable} data-testid="gst-applicable-checkbox" />
-            <Label htmlFor="gst" className="cursor-pointer">GST Applicable</Label>
+          <div className="flex flex-wrap items-center gap-6">
+            <div className="flex items-center gap-3">
+              <Checkbox id="gst" checked={gstApplicable} onCheckedChange={setGstApplicable} data-testid="gst-applicable-checkbox" />
+              <Label htmlFor="gst" className="cursor-pointer">GST Applicable</Label>
+            </div>
+            <div className="flex items-center gap-3">
+              <Checkbox id="disc" checked={discountEnabled} onCheckedChange={setDiscountEnabled} data-testid="discount-checkbox" />
+              <Label htmlFor="disc" className="cursor-pointer">Discount</Label>
+            </div>
           </div>
         </CardContent>
       </Card>
+
+      {discountEnabled && (
+        <Card data-testid="discount-card">
+          <CardContent className="pt-6 space-y-3">
+            <div className="flex flex-wrap items-center gap-4">
+              <Label className="text-sm font-medium">Discount</Label>
+              {[["total", "On total"], ["items", "Per item"]].map(([m, lbl]) => (
+                <label key={m} className="flex items-center gap-1.5 cursor-pointer text-sm">
+                  <input type="radio" name="orderDiscMode" checked={discountMode === m}
+                         onChange={() => setDiscountMode(m)} /> {lbl}
+                </label>
+              ))}
+            </div>
+            {discountMode === "total" ? (
+              <div className="flex items-center gap-2 max-w-xs">
+                <Input type="number" min="0" value={discountValue}
+                       onChange={(e) => setDiscountValue(e.target.value)}
+                       data-testid="discount-value" />
+                <Select value={discountIsPercent ? "pct" : "amt"}
+                        onValueChange={(v) => setDiscountIsPercent(v === "pct")}>
+                  <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="amt">{"\u20B9"}</SelectItem>
+                    <SelectItem value="pct">%</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {items.filter(i => i.product_name).map((i) => (
+                  <div key={items.indexOf(i)} className="flex items-center gap-2">
+                    <span className="text-sm w-52 truncate">{i.product_name}
+                      <span className="text-muted-foreground"> ({"\u20B9"}{(i.amount || 0).toFixed(0)})</span>
+                    </span>
+                    <Input type="number" min="0" className="w-28" value={i.discount || ""}
+                           placeholder="0"
+                           onChange={(e) => {
+                             const u = [...items];
+                             u[items.indexOf(i)] = { ...i, discount: e.target.value };
+                             setItems(u);
+                           }} />
+                    <Select value={i.discount_is_percent ? "pct" : "amt"}
+                            onValueChange={(v) => {
+                              const u = [...items];
+                              u[items.indexOf(i)] = { ...i, discount_is_percent: v === "pct" };
+                              setItems(u);
+                            }}>
+                      <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="amt">{"\u20B9"}</SelectItem>
+                        <SelectItem value="pct">%</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ))}
+              </div>
+            )}
+            {discountPreview > 0 && (
+              <p className="text-sm text-emerald-700 dark:text-emerald-400">
+                Discount {"\u20B9"}{discountPreview.toFixed(2)}
+                {gstApplicable && discountGstPreview > 0 &&
+                  ` (+ \u20B9${discountGstPreview.toFixed(2)} GST reduction)`}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Items */}
       <Card>
@@ -880,6 +990,7 @@ export default function CreateOrder() {
           <div className="space-y-2 text-sm">
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">{"\u20B9"}{subtotal.toFixed(2)}</span></div>
             {gstApplicable && <div className="flex justify-between"><span className="text-muted-foreground">Item GST</span><span className="font-mono">{"\u20B9"}{totalItemGst.toFixed(2)}</span></div>}
+            {discountPreview > 0 && <div className="flex justify-between text-emerald-700 dark:text-emerald-400"><span>Discount</span><span className="font-mono">-{"\u20B9"}{(discountPreview + discountGstPreview).toFixed(2)}</span></div>}
             {shippingCharge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping Charges</span><span className="font-mono">{"\u20B9"}{shippingCharge.toFixed(2)}</span></div>}
             {shippingGst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST (18%)</span><span className="font-mono">{"\u20B9"}{shippingGst.toFixed(2)}</span></div>}
             {additionalCharges.filter(c => c.amount > 0).map((c, i) => (
