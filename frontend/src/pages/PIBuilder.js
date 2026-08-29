@@ -109,6 +109,14 @@ export default function PIBuilder() {
   const [items, setItems] = useState([emptyItem()]);
   const [gstApplicable, setGstApplicable] = useState(false);
   const [company, setCompany] = useState("citspray");
+  // Admin-only: which bank account prints on the PI. "" = automatic default.
+  const [bankAccount, setBankAccount] = useState("");
+  const [bankOptions, setBankOptions] = useState([]);
+  useEffect(() => {
+    if (user?.role === "admin") {
+      api.get("/bank-accounts").then(r => setBankOptions(r.data)).catch(() => {});
+    }
+  }, [user?.role]);
   const [showRate, setShowRate] = useState(true);
   const [shippingCharge, setShippingCharge] = useState(0);
   const [additionalCharges, setAdditionalCharges] = useState([]);
@@ -265,7 +273,7 @@ export default function PIBuilder() {
 
   const openNewPI = () => {
     setEditingPi(null); setSelectedCustomer(null); setCustomerSearch(""); setItems([emptyItem()]);
-    setGstApplicable(false); setCompany("citspray"); setShowRate(true); setShippingCharge(0); setAdditionalCharges([]);
+    setGstApplicable(false); setCompany("citspray"); setBankAccount(""); setShowRate(true); setShippingCharge(0); setAdditionalCharges([]);
     setCarrierRiskApplicable(false); setRemark("");
     setBillingAddress(null); setShippingAddress(null); setSameAsBilling(true); setFreeSamples([]);
     setShowBuilder(true);
@@ -280,6 +288,7 @@ export default function PIBuilder() {
       setSelectedCustomer(cust || { id: fullPi.customer_id, name: fullPi.customer_name });
       setItems(fullPi.items?.length ? fullPi.items.map(i => ({ ...i })) : [emptyItem()]);
       setGstApplicable(fullPi.gst_applicable); setCompany(fullPi.company || "citspray");
+      setBankAccount(fullPi.bank_account || "");
       setShowRate(fullPi.show_rate !== false);
       setShippingCharge(fullPi.shipping_charge || 0);
       // Carrier risk is a derived row, so it is kept out of the editable list.
@@ -304,6 +313,7 @@ export default function PIBuilder() {
       const payload = {
         customer_id: selectedCustomer.id,
         company,
+        bank_account: bankAccount,
         items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description }) => ({
           product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description
         })),
@@ -445,6 +455,7 @@ export default function PIBuilder() {
                               setSelectedCustomer(cust || { id: d.customer_id, name: d.customer_name });
                               setItems(d.items?.length ? d.items.map(i => ({ ...i })) : [emptyItem()]);
                               setGstApplicable(d.gst_applicable); setCompany(d.company || "citspray");
+                              setBankAccount(d.bank_account || "");
                               setShowRate(d.show_rate !== false);
                               setShippingCharge(d.shipping_charge || 0);
                               setAdditionalCharges(stripCarrierRisk(d.additional_charges));
@@ -568,6 +579,25 @@ export default function PIBuilder() {
             Sets the number series ({COMPANIES.find((c) => c.key === company)?.prefix}-…)
             and the company shown on the PDF.
           </p>
+          {user?.role === "admin" && bankOptions.length > 0 && (
+            <div className="mt-4 max-w-sm">
+              <Label className="text-sm font-medium">Bank account on PI (admin)</Label>
+              <Select value={bankAccount || "auto"}
+                      onValueChange={(v) => setBankAccount(v === "auto" ? "" : v)}>
+                <SelectTrigger className="mt-1" data-testid="pi-bank-account">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Automatic (company &amp; GST rules)</SelectItem>
+                  {bankOptions.map((b) => (
+                    <SelectItem key={b.key} value={b.key}>
+                      {b.label} — {b.account_no}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </CardContent>
       </Card>
 

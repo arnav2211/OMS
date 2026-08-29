@@ -165,6 +165,14 @@ BANK_GST = {
     "upi_string": "upi://pay?pa=archanaagrawal80-1@okicici&mam=1&am={amount}&cu=INR",
 }
 BANK_NON_GST = {
+    "account_name": "Mrs. Lata Agrawal",
+    "account_no": "1472000100430026",
+    "ifsc": "PUNB0147200",
+    "bank": "Punjab National Bank",
+    "branch": "Khamla, Nagpur",
+    "upi_string": "upi://pay?pa=citsprayhr@okicici&mam=1&am={amount}&cu=INR",
+}
+BANK_ARNAV = {                       # previous non-GST account, selectable by admins
     "account_name": "Arnav Mukul Agrawal",
     "account_no": "1472000100369074",
     "ifsc": "PUNB0147200",
@@ -172,6 +180,30 @@ BANK_NON_GST = {
     "branch": "Khamla, Nagpur",
     "upi_string": "upi://pay?pa=citronellaoilnagpur-2@okaxis&mam=1&am={amount}&cu=INR",
 }
+
+# Every selectable bank account, for the admin-only picker on a PI. A PI with
+# no bank_account key keeps today's automatic choice (company + GST rules).
+BANK_ACCOUNTS = {
+    "citspray_gst":    {"label": "Mangalam Agro (GST a/c)",       "details": None},
+    "citspray_nongst": {"label": "Mrs. Lata Agrawal (non-GST)",   "details": None},
+    "arnav_personal":  {"label": "Arnav Agrawal (old non-GST)",   "details": None},
+    "fragvansh":       {"label": "FragVansh",                     "details": None},
+}
+
+
+def _bank_by_key(key: str):
+    return {"citspray_gst": BANK_GST, "citspray_nongst": BANK_NON_GST,
+            "arnav_personal": BANK_ARNAV, "fragvansh": BANK_FRAGVANSH}.get(key)
+
+
+def resolve_pi_bank(pi: dict, company: dict, gst_applicable: bool) -> dict:
+    """Bank block for a PI PDF: the admin's explicit choice, else the default.
+
+    The default stays exactly what it always was - company + GST rules - so
+    every existing PI renders unchanged unless an admin picked an account.
+    """
+    chosen = _bank_by_key(str((pi or {}).get("bank_account") or ""))
+    return chosen if chosen else company_bank(company, gst_applicable)
 
 PAYMENT_MODES = ["Cash", "Online", "Other"]
 
@@ -397,6 +429,7 @@ class DispatchUpdate(BaseModel):
 
 class PICreate(BaseModel):
     company: str = DEFAULT_COMPANY   # which business this document belongs to
+    bank_account: str = ""           # admin-chosen bank for the PDF; blank = automatic
     customer_id: str
     items: List[OrderItemModel]
     free_samples: List[FreeSampleModel] = []
@@ -885,6 +918,19 @@ async def lookup_pincode(pincode: str, user=Depends(get_current_user)):
             city, state = prefix_map[prefix2]
             return {"pincode": pincode, "city": city, "state": state, "country": "India", "post_offices": []}
         return {"pincode": pincode, "city": "", "state": "", "country": "India", "post_offices": []}
+
+@api_router.get("/bank-accounts")
+async def list_bank_accounts(user=Depends(get_current_user)):
+    """Accounts an admin may put on a PI. Admin-only by design."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    out = []
+    for key, meta in BANK_ACCOUNTS.items():
+        d = _bank_by_key(key)
+        out.append({"key": key, "label": meta["label"],
+                    "account_no": d["account_no"], "bank": d["bank"]})
+    return out
+
 
 @api_router.get("/companies")
 async def list_companies(user=Depends(get_current_user)):
@@ -3433,6 +3479,7 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
         "id": str(uuid.uuid4()),
         "pi_number": pi_number,
         "company": company["key"],
+        "bank_account": req.bank_account if req.bank_account else "",
         "customer_id": req.customer_id,
         "customer_name": customer["name"],
         "items": items,
@@ -3572,6 +3619,7 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
         "customer_id": req.customer_id,
         "customer_name": customer["name"] if customer else pi["customer_name"],
         "company": company_of({"company": req.company})["key"],
+        "bank_account": req.bank_account if req.bank_account else "",
         "items": items,
         "gst_applicable": req.gst_applicable,
         "show_rate": req.show_rate,
@@ -3672,6 +3720,7 @@ class MakePIRequest(BaseModel):
     gst_applicable: bool
     show_rate: bool
     pi_date: str
+    bank_account: str = ""           # admin-chosen bank for the PDF; blank = automatic
 
 @api_router.post("/orders/{order_id}/make-pi")
 async def make_pi_from_order(order_id: str, req: MakePIRequest, user=Depends(get_current_user)):
@@ -3741,6 +3790,7 @@ async def make_pi_from_order(order_id: str, req: MakePIRequest, user=Depends(get
         "id": str(uuid.uuid4()),
         "pi_number": pi_number,
         "company": company["key"],
+        "bank_account": req.bank_account if req.bank_account else "",
         "customer_id": order.get("customer_id", ""),
         "customer_name": order.get("customer_name", ""),
         "items": items,
@@ -4183,7 +4233,7 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     # ── F. BANK / PAYMENT DETAILS + QR CODE ──────────────────────
     # ─────────────────────────────────────────────────────────────
     elements.append(Spacer(1, 7*mm))
-    bank = company_bank(company, is_gst)
+    bank = resolve_pi_bank(pi, company, is_gst)
     upi_string = bank["upi_string"].format(amount=int(pi.get("grand_total", 0)))
 
     qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=6, border=2)
