@@ -1153,6 +1153,11 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "total_gst": round(total_gst + shipping_gst + total_additional_gst - discount_gst, 2),
         "grand_total": grand_total,
         "discount": discount,
+        "website_order": is_website,
+        "discount_enabled": (not is_website) and bool(req.discount_enabled),
+        "discount_mode": req.discount_mode or "total",
+        "discount_value": float(req.discount_value or 0),
+        "discount_is_percent": bool(req.discount_is_percent),
         "discount_gst": discount_gst,
         "remark": req.remark,
         "status": "new",
@@ -1578,6 +1583,38 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
     # discount nor silently delete the one the customer already received.
     stored_disc = round(float(order.get("discount") or 0), 2)
     stored_disc_gst = round(float(order.get("discount_gst") or 0), 2)
+
+    # Manual discounts are editable from the edit screen. Website discounts
+    # stay locked: they must keep matching what the customer paid online. An
+    # order whose stored discount predates the config fields is treated as
+    # website too, which fails safe (locked rather than silently editable).
+    website_locked = bool(order.get("website_order")) or (
+        stored_disc > 0 and "discount_enabled" not in order)
+    manual_edit = (not website_locked) and ("discount_enabled" in updates)
+    if manual_edit:
+        line_items = updates.get("items") or order.get("items") or []
+        _sub = round(sum(float(i.get("amount") or 0) for i in line_items), 2)
+        _igst = round(sum(float(i.get("gst_amount") or 0) for i in line_items), 2)
+        import types as _t
+        shim = _t.SimpleNamespace(
+            discount_enabled=bool(updates.get("discount_enabled")),
+            discount_mode=str(updates.get("discount_mode") or "total"),
+            discount_value=float(updates.get("discount_value") or 0),
+            discount_is_percent=bool(updates.get("discount_is_percent")),
+            gst_applicable=bool(updates.get("gst_applicable",
+                                            order.get("gst_applicable"))),
+            items=[_t.SimpleNamespace(
+                discount=float(i.get("discount") or 0),
+                discount_is_percent=bool(i.get("discount_is_percent")))
+                for i in line_items])
+        stored_disc, stored_disc_gst = compute_manual_discount(shim, line_items, _sub, _igst)
+        updates["discount"] = stored_disc
+        updates["discount_gst"] = stored_disc_gst
+        updates["discount_label"] = "Discount"
+        if "additional_charges" not in updates:
+            updates["additional_charges"] = [
+                c for c in (order.get("additional_charges") or [])
+                if float(c.get("amount") or 0) >= 0]
     if "additional_charges" in updates:
         cleaned = [c for c in (updates.get("additional_charges") or [])
                    if float(c.get("amount") or 0) >= 0]
@@ -1590,10 +1627,10 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
             })
         updates["additional_charges"] = cleaned
 
-    if stored_disc > 0:
-        # The edit screen rounds the grand total up and cannot see the
-        # protected discount, so the authoritative figure is rebuilt here and
-        # left at exact paise to match what was paid on the website.
+    if stored_disc > 0 or manual_edit:
+        # The edit screen cannot compute the discount authoritatively, so the
+        # figure is rebuilt here: website orders keep exact paise to match
+        # what was paid online, manual orders keep the round-up-to-rupee.
         updates["discount"] = stored_disc
         updates["discount_gst"] = stored_disc_gst
         charges = updates.get("additional_charges") or order.get("additional_charges") or []
@@ -1605,6 +1642,8 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
         add_amt = round(sum(float(c.get("amount") or 0) for c in charges), 2)
         add_gst = round(sum(float(c.get("gst_amount") or 0) for c in charges), 2)
         gt = round(sub_amt + item_gst + ship + ship_gst + add_amt + add_gst, 2)
+        if not website_locked:
+            gt = float(math.ceil(gt))
         updates["subtotal"] = sub_amt
         updates["total_gst"] = round(item_gst + ship_gst + add_gst, 2)
         updates["grand_total"] = gt
@@ -3594,6 +3633,10 @@ async def create_pi(req: PICreate, user=Depends(get_current_user)):
         "pi_number": pi_number,
         "company": company["key"],
         "bank_account": req.bank_account if req.bank_account else "",
+        "discount_enabled": bool(getattr(req, "discount_enabled", False)),
+        "discount_mode": getattr(req, "discount_mode", "total") or "total",
+        "discount_value": float(getattr(req, "discount_value", 0) or 0),
+        "discount_is_percent": bool(getattr(req, "discount_is_percent", False)),
         "customer_id": req.customer_id,
         "customer_name": customer["name"],
         "items": items,
@@ -3740,6 +3783,10 @@ async def update_pi(pi_id: str, req: PICreate, user=Depends(get_current_user)):
         "customer_name": customer["name"] if customer else pi["customer_name"],
         "company": company_of({"company": req.company})["key"],
         "bank_account": req.bank_account if req.bank_account else "",
+        "discount_enabled": bool(getattr(req, "discount_enabled", False)),
+        "discount_mode": getattr(req, "discount_mode", "total") or "total",
+        "discount_value": float(getattr(req, "discount_value", 0) or 0),
+        "discount_is_percent": bool(getattr(req, "discount_is_percent", False)),
         "items": items,
         "gst_applicable": req.gst_applicable,
         "show_rate": req.show_rate,
@@ -3911,6 +3958,10 @@ async def make_pi_from_order(order_id: str, req: MakePIRequest, user=Depends(get
         "pi_number": pi_number,
         "company": company["key"],
         "bank_account": req.bank_account if req.bank_account else "",
+        "discount_enabled": bool(getattr(req, "discount_enabled", False)),
+        "discount_mode": getattr(req, "discount_mode", "total") or "total",
+        "discount_value": float(getattr(req, "discount_value", 0) or 0),
+        "discount_is_percent": bool(getattr(req, "discount_is_percent", False)),
         "customer_id": order.get("customer_id", ""),
         "customer_name": order.get("customer_name", ""),
         "items": items,

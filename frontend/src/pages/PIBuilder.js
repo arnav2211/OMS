@@ -482,6 +482,8 @@ export default function PIBuilder() {
                               setSelectedCustomer(cust || { id: d.customer_id, name: d.customer_name });
                               setItems(d.items?.length ? d.items.map(i => ({ ...i })) : [emptyItem()]);
                               setGstApplicable(d.gst_applicable); setCompany(d.company || "citspray");
+                              setDiscountEnabled(!!d.discount_enabled); setDiscountMode(d.discount_mode || "total");
+                              setDiscountValue(d.discount_value || 0); setDiscountIsPercent(!!d.discount_is_percent);
                               setShowRate(d.show_rate !== false);
                               setShippingCharge(d.shipping_charge || 0);
                               setAdditionalCharges(stripCarrierRisk(d.additional_charges));

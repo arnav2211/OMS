@@ -409,6 +409,10 @@ export default function EditOrder() {
   const [items, setItems] = useState([emptyItem()]);
   const [gstApplicable, setGstApplicable] = useState(false);
   const [company, setCompany] = useState("citspray");
+  const [discountEnabled, setDiscountEnabled] = useState(false);
+  const [discountMode, setDiscountMode] = useState("total");
+  const [discountValue, setDiscountValue] = useState(0);
+  const [discountIsPercent, setDiscountIsPercent] = useState(false);
   const [shippingMethod, setShippingMethod] = useState("");
   const [courierName, setCourierName] = useState("");
   const [transporterName, setTransporterName] = useState("");
@@ -451,6 +455,8 @@ export default function EditOrder() {
       setItems(o.items?.length ? o.items.map(i => ({ ...i })) : [emptyItem()]);
       setGstApplicable(o.gst_applicable || false);
       setCompany(o.company || "citspray");
+      setDiscountEnabled(!!o.discount_enabled); setDiscountMode(o.discount_mode || "total");
+      setDiscountValue(o.discount_value || 0); setDiscountIsPercent(!!o.discount_is_percent);
       setShippingMethod(o.shipping_method || "");
       setCourierName(o.courier_name || "");
       setTransporterName(o.transporter_name || "");
@@ -516,14 +522,37 @@ export default function EditOrder() {
   const carrierRisk = carrierRiskApplicable
     ? resolveCarrierRiskCharge(carrierRiskBase, gstApplicable)
     : null;
-  // A protected website discount is netted off last. Those orders keep exact
-  // paise so the total still matches what the customer paid online.
-  const protectedDiscount = +(order?.discount || 0);
-  const protectedDiscountGst = +(order?.discount_gst || 0);
+  // A website discount is locked and netted off at exact paise; a manual
+  // discount is editable here and previews like the create form.
+  const websiteLocked = !!order?.website_order ||
+    (+(order?.discount || 0) > 0 && order?.discount_enabled === undefined);
+  const protectedDiscount = websiteLocked ? +(order?.discount || 0) : 0;
+  const protectedDiscountGst = websiteLocked ? +(order?.discount_gst || 0) : 0;
+  let discountPreview = 0, discountGstPreview = 0;
+  if (!websiteLocked && discountEnabled && subtotal > 0) {
+    if (discountMode === "items") {
+      for (const i of items) {
+        const v = parseFloat(i.discount) || 0;
+        if (v <= 0) continue;
+        const di = Math.min(i.discount_is_percent ? i.amount * v / 100 : v, i.amount);
+        discountPreview += di;
+        if (gstApplicable && i.gst_rate > 0) discountGstPreview += di * i.gst_rate / 100;
+      }
+    } else {
+      const v = parseFloat(discountValue) || 0;
+      if (v > 0) {
+        discountPreview = Math.min(discountIsPercent ? subtotal * v / 100 : v, subtotal);
+        if (gstApplicable && totalItemGst > 0)
+          discountGstPreview = totalItemGst * (discountPreview / subtotal);
+      }
+    }
+    discountPreview = +discountPreview.toFixed(2);
+    discountGstPreview = +discountGstPreview.toFixed(2);
+  }
   const preDiscountTotal = carrierRiskBase + (carrierRisk ? carrierRisk.total : 0);
-  const grandTotal = protectedDiscount > 0
+  const grandTotal = websiteLocked
     ? +(preDiscountTotal - protectedDiscount - protectedDiscountGst).toFixed(2)
-    : Math.ceil(preDiscountTotal);
+    : Math.ceil(preDiscountTotal - discountPreview - discountGstPreview);
   const balanceAmount = paymentStatus === "full" ? 0 : paymentStatus === "partial" ? Math.max(0, grandTotal - amountPaid) : grandTotal;
 
   // Carrier risk is a DTDC charge, so selecting DTDC turns it on by default.
@@ -624,10 +653,15 @@ export default function EditOrder() {
     try {
       const payload = {
         purpose,
-        items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description, formulation }) => ({
+        items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description, formulation, discount, discount_is_percent }) => ({
           product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description, formulation: formulation || "",
+          discount: parseFloat(discount) || 0, discount_is_percent: !!discount_is_percent,
         })),
         gst_applicable: gstApplicable,
+        discount_enabled: discountEnabled,
+        discount_mode: discountMode,
+        discount_value: parseFloat(discountValue) || 0,
+        discount_is_percent: discountIsPercent,
         shipping_method: shippingMethod,
         courier_name: courierName,
         transporter_name: transporterName,
@@ -857,6 +891,80 @@ export default function EditOrder() {
               </div>
             </CardContent>
           </Card>
+
+          {!websiteLocked && (
+            <Card>
+              <CardContent className="pt-6 space-y-3">
+                <div className="flex items-center gap-3">
+                  <Checkbox id="editDisc" checked={discountEnabled} onCheckedChange={setDiscountEnabled} data-testid="edit-discount-checkbox" />
+                  <Label htmlFor="editDisc" className="cursor-pointer">Discount</Label>
+                </div>
+                {discountEnabled && (
+                  <div className="space-y-3 pt-1">
+                    <div className="flex flex-wrap items-center gap-4">
+                      {[["total", "On total"], ["items", "Per item"]].map(([m, lbl]) => (
+                        <label key={m} className="flex items-center gap-1.5 cursor-pointer text-sm">
+                          <input type="radio" name="editDiscMode" checked={discountMode === m}
+                                 onChange={() => setDiscountMode(m)} /> {lbl}
+                        </label>
+                      ))}
+                    </div>
+                    {discountMode === "total" ? (
+                      <div className="flex items-center gap-2 max-w-xs">
+                        <Input type="number" min="0" value={discountValue}
+                               onChange={(e) => setDiscountValue(e.target.value)}
+                               data-testid="edit-discount-value" />
+                        <Select value={discountIsPercent ? "pct" : "amt"}
+                                onValueChange={(v) => setDiscountIsPercent(v === "pct")}>
+                          <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="amt">{"\u20B9"}</SelectItem>
+                            <SelectItem value="pct">%</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {items.filter(it => it.product_name).map((it) => (
+                          <div key={items.indexOf(it)} className="flex items-center gap-2">
+                            <span className="text-sm w-52 truncate">{it.product_name}
+                              <span className="text-muted-foreground"> ({"\u20B9"}{(it.amount || 0).toFixed(0)})</span>
+                            </span>
+                            <Input type="number" min="0" className="w-28" value={it.discount || ""}
+                                   placeholder="0"
+                                   onChange={(e) => {
+                                     const u = [...items];
+                                     u[items.indexOf(it)] = { ...it, discount: e.target.value };
+                                     setItems(u);
+                                   }} />
+                            <Select value={it.discount_is_percent ? "pct" : "amt"}
+                                    onValueChange={(v) => {
+                                      const u = [...items];
+                                      u[items.indexOf(it)] = { ...it, discount_is_percent: v === "pct" };
+                                      setItems(u);
+                                    }}>
+                              <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="amt">{"\u20B9"}</SelectItem>
+                                <SelectItem value="pct">%</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {discountPreview > 0 && (
+                      <p className="text-sm text-emerald-700 dark:text-emerald-400">
+                        Discount {"\u20B9"}{discountPreview.toFixed(2)}
+                        {gstApplicable && discountGstPreview > 0 &&
+                          ` (+ \u20B9${discountGstPreview.toFixed(2)} GST reduction)`}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {/* Items */}
           <Card>
@@ -1108,6 +1216,9 @@ export default function EditOrder() {
                 )}
                 {protectedDiscount > 0 && (
                   <div className="flex justify-between"><span className="text-muted-foreground">{order?.discount_label || "Discount"}</span><span className="font-mono text-emerald-500">-₹{protectedDiscount.toFixed(2)}</span></div>
+                )}
+                {discountPreview > 0 && (
+                  <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="font-mono text-emerald-500">-₹{(discountPreview + discountGstPreview).toFixed(2)}</span></div>
                 )}
                 <Separator />
                 <div className="flex justify-between text-base font-bold"><span>{protectedDiscount > 0 ? "Grand Total" : "Grand Total (Rounded Up)"}</span><span className="font-mono">₹{grandTotal}</span></div>
