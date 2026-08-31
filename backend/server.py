@@ -4338,31 +4338,34 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     # ─────────────────────────────────────────────────────────────
     # ── D. TOTALS (logic unchanged, layout improved) ─────────────
     # ─────────────────────────────────────────────────────────────
+    # Order: Subtotal -> Discount -> Shipping (excl GST) -> other charges ->
+    # one combined GST figure (items + shipping + charges, net of discount
+    # reversal) -> Grand Total. Every line is pre-GST so the column adds up.
     totals = []
     totals.append([Paragraph("Subtotal", tr), Paragraph(f"{pi.get('subtotal', 0):.2f}", tr)])
-    if is_gst:
+    combined_gst = round(float(pi.get("total_gst", 0) or 0) + float(pi.get("shipping_gst", 0) or 0), 2)
+    for charge in pi.get("additional_charges", []):
+        charge_amt = float(charge.get("amount", 0) or 0)
+        combined_gst = round(combined_gst + float(charge.get("gst_amount", 0) or 0), 2)
+        if charge_amt < 0:
+            totals.append([Paragraph(charge.get("name", "Discount"), tr),
+                           Paragraph(f"- {abs(charge_amt):.2f}", tr)])
+    if pi.get("shipping_charge", 0) > 0:
+        totals.append([Paragraph("Shipping Charges", tr), Paragraph(f"{pi['shipping_charge']:.2f}", tr)])
+    for charge in pi.get("additional_charges", []):
+        charge_amt = float(charge.get("amount", 0) or 0)
+        if charge_amt > 0:
+            totals.append([Paragraph(charge.get("name", "Charge"), tr), Paragraph(f"{charge_amt:.2f}", tr)])
+    if is_gst and combined_gst > 0:
         cust_state = ""
         if pi.get("billing_address"):
             cust_state = pi["billing_address"].get("state", "")
         if cust_state.lower() == "maharashtra":
-            cgst = round(pi.get("total_gst", 0) / 2, 2)
+            cgst = round(combined_gst / 2, 2)
             totals.append([Paragraph("CGST", tr), Paragraph(f"{cgst:.2f}", tr)])
-            totals.append([Paragraph("SGST", tr), Paragraph(f"{cgst:.2f}", tr)])
+            totals.append([Paragraph("SGST", tr), Paragraph(f"{combined_gst - cgst:.2f}", tr)])
         else:
-            totals.append([Paragraph("IGST", tr), Paragraph(f"{pi.get('total_gst', 0):.2f}", tr)])
-    if pi.get("shipping_charge", 0) > 0:
-        totals.append([Paragraph("Shipping Charges", tr), Paragraph(f"{pi['shipping_charge']:.2f}", tr)])
-        if pi.get("shipping_gst", 0) > 0:
-            totals.append([Paragraph("Shipping GST (18%)", tr), Paragraph(f"{pi['shipping_gst']:.2f}", tr)])
-    # Additional charges in PI PDF
-    for charge in pi.get("additional_charges", []):
-        charge_label = charge.get("name", "Charge")
-        charge_amt = charge.get("amount", 0)
-        charge_gst = charge.get("gst_amount", 0)
-        if charge_amt > 0:
-            totals.append([Paragraph(charge_label, tr), Paragraph(f"{charge_amt:.2f}", tr)])
-        if charge_gst > 0:
-            totals.append([Paragraph(f"{charge_label} GST ({charge.get('gst_percent', 0)}%)", tr), Paragraph(f"{charge_gst:.2f}", tr)])
+            totals.append([Paragraph("IGST", tr), Paragraph(f"{combined_gst:.2f}", tr)])
     totals.append([Paragraph("<b>GRAND TOTAL</b>", trb), Paragraph(f"<b>INR {pi.get('grand_total', 0):.0f}</b>", trb)])
 
     tt = Table(totals, colWidths=[pw - 62*mm, 62*mm])
