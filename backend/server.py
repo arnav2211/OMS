@@ -135,12 +135,12 @@ BANK_FRAGVANSH = {
 def company_bank(company: dict, gst_applicable: bool) -> dict:
     """Bank block for a company's PI.
 
-    FragVansh banks under its own account regardless of GST applicability;
-    CitSpray keeps the existing GST / non-GST split.
+    Non-GST PIs use the personal account whatever the company; GST PIs use
+    the respective company's account.
     """
-    if company["key"] == "fragvansh":
-        return BANK_FRAGVANSH
-    return BANK_GST if gst_applicable else BANK_NON_GST
+    if not gst_applicable:
+        return BANK_NON_GST
+    return BANK_FRAGVANSH if company["key"] == "fragvansh" else BANK_GST
 
 
 async def next_document_number(company: dict, kind: str) -> str:
@@ -197,19 +197,19 @@ def _bank_by_key(key: str):
 
 
 # The three slots an admin can point at any account, from Settings. A slot
-# with no mapping keeps its historical default, so out of the box nothing
-# changes: GST -> Mangalam Agro, non-GST -> Lata Agrawal, FragVansh -> its own.
+# with no mapping keeps its historical default. Non-GST PIs use the personal
+# account whatever the company; GST PIs use the respective company's account.
 BANK_SLOTS = {
-    "citspray_gst":    {"label": "CitSpray - GST PIs",     "default": "citspray_gst"},
-    "citspray_nongst": {"label": "CitSpray - non-GST PIs", "default": "citspray_nongst"},
-    "fragvansh":       {"label": "FragVansh PIs",          "default": "fragvansh"},
+    "citspray_gst":    {"label": "CitSpray - GST PIs",          "default": "citspray_gst"},
+    "citspray_nongst": {"label": "Non-GST PIs (all companies)", "default": "citspray_nongst"},
+    "fragvansh":       {"label": "FragVansh - GST PIs",         "default": "fragvansh"},
 }
 
 
 def _bank_slot_for(company: dict, gst_applicable: bool) -> str:
-    if company["key"] == "fragvansh":
-        return "fragvansh"
-    return "citspray_gst" if gst_applicable else "citspray_nongst"
+    if not gst_applicable:
+        return "citspray_nongst"
+    return "fragvansh" if company["key"] == "fragvansh" else "citspray_gst"
 
 
 async def resolve_pi_bank(pi: dict, company: dict, gst_applicable: bool) -> dict:
