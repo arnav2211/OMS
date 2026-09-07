@@ -60,11 +60,30 @@ export default function DTDCBookPanel() {
   const [bulkBooking, setBulkBooking] = useState(false);
   const [bulkResult, setBulkResult] = useState(null);
 
+
+  // Zero-total orders (free samples) need a declared value typed in by the
+  // booker. Returns undefined when not needed, null when the user cancelled.
+  const askDeclared = (o) => {
+    if (+(o.grand_total || 0) > 0) return undefined;
+    const v = window.prompt(`Order ${o.order_number} total is \u20b90. Enter the declared value (\u20b9) for this shipment:`);
+    if (v === null) return null;
+    const n = parseFloat(v);
+    if (!n || n <= 0) { toast.error("Enter a valid amount greater than 0"); return null; }
+    return n;
+  };
+
   const bulkBook = async () => {
     if (unbookedSelected.length === 0) return;
+    const declaredValues = {};
+    for (const id of unbookedSelected) {
+      const o = orders.find(x => x.id === id);
+      const dv = askDeclared(o || {});
+      if (dv === null) return;            // cancelled - abort the whole batch
+      if (dv !== undefined) declaredValues[id] = dv;
+    }
     setBulkBooking(true);
     try {
-      const res = await api.post("/dtdc/bulk-book", { order_ids: unbookedSelected });
+      const res = await api.post("/dtdc/bulk-book", { order_ids: unbookedSelected, declared_values: declaredValues });
       setBulkResult(res.data);
       if (res.data.booked_count) toast.success(`Booked ${res.data.booked_count} consignment(s)`);
       if (res.data.failed_count) toast.error(`${res.data.failed_count} failed — see the summary`);
@@ -96,9 +115,11 @@ export default function DTDCBookPanel() {
 
   const doBook = async () => {
     if (!confirm) return;
+    const dv = askDeclared(confirm.order);
+    if (dv === null) return;
     setBooking(true);
     try {
-      const res = await api.post("/dtdc/book", { order_id: confirm.order.id });
+      const res = await api.post("/dtdc/book", { order_id: confirm.order.id, declared_value: dv });
       toast.success(`Booked on ${res.data.shipment?.account} — ${res.data.shipment?.awb || res.data.shipment?.reference_number}`, { duration: 9000 });
       setConfirm(null);
       load();

@@ -72,12 +72,30 @@ export default function AmazonBookPanel() {
     window.open(`${process.env.REACT_APP_BACKEND_URL}/api/amazon/labels-sheet?ids=${bookedSelected.join(",")}&token=${token}`, "_blank");
   };
 
+  // Zero-total orders (free samples) need a declared value typed in by the
+  // booker. Returns undefined when not needed, null when the user cancelled.
+  const askDeclared = (o) => {
+    if (+(o.grand_total || 0) > 0) return undefined;
+    const v = window.prompt(`Order ${o.order_number} total is \u20b90. Enter the declared value (\u20b9) for this shipment:`);
+    if (v === null) return null;
+    const n = parseFloat(v);
+    if (!n || n <= 0) { toast.error("Enter a valid amount greater than 0"); return null; }
+    return n;
+  };
+
   const bulkBook = async () => {
     if (selectedIds.length === 0) return;
+    const declaredValues = {};
+    for (const id of selectedIds) {
+      const o = orders.find(x => x.id === id);
+      const dv = askDeclared(o || {});
+      if (dv === null) return;            // cancelled - abort the whole batch
+      if (dv !== undefined) declaredValues[id] = dv;
+    }
     setBulkBooking(true);
     try {
       const res = await api.post("/amazon/bulk-book",
-                                 { order_ids: selectedIds, payment_mode: bulkMode });
+                                 { order_ids: selectedIds, payment_mode: bulkMode, declared_values: declaredValues });
       setBulkResult(res.data);
       if (res.data.booked_count) toast.success(`Booked ${res.data.booked_count} shipment(s)`);
       if (res.data.failed_count) toast.error(`${res.data.failed_count} failed — see the summary`);
@@ -114,12 +132,15 @@ export default function AmazonBookPanel() {
 
   const doBook = async () => {
     if (!confirm || !selectedRate) return;
+    const dv = askDeclared(confirm.order);
+    if (dv === null) return;
     setBooking(true);
     try {
       const res = await api.post("/amazon/book", {
         order_id: confirm.order.id,
         service_id: selectedRate.service_id || selectedRate.rate_id,
         payment_mode: payMode,
+        declared_value: dv,
       });
       toast.success(`Booked! Tracking: ${res.data.shipment?.tracking_id || "—"}`, { duration: 8000 });
       setConfirm(null);

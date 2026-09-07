@@ -5290,6 +5290,7 @@ async def dtdc_bookable_orders(user=Depends(get_current_user)):
         out.append({
             "id": o["id"], "order_number": o.get("order_number"),
             "customer_name": o.get("customer_name"), "status": o.get("status"),
+            "grand_total": o.get("grand_total"),
             "weight_kg": pkg.get("weight_kg"), "num_boxes": pkg.get("num_boxes") or "1",
             "shipping_address": {"city": sa.get("city"), "pincode": sa.get("pincode")},
             "carrier_risk": bool(o.get("carrier_risk_applicable")),
@@ -5307,6 +5308,9 @@ class DtdcBookRequest(BaseModel):
     # Force a specific account instead of the automatic routing (admin testing).
     account: Optional[str] = None
     allow_rebook: Optional[bool] = False
+    # Declared value entered at booking time; required when the order total is 0
+    # (free samples), ignored otherwise.
+    declared_value: Optional[float] = None
 
 
 @api_router.post("/dtdc/preview")
@@ -5337,6 +5341,11 @@ async def dtdc_book(req: DtdcBookRequest, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("dtdc_shipment") or {}).get("reference_number") and not req.allow_rebook:
         raise HTTPException(status_code=400, detail="This order is already booked with DTDC")
+    if req.declared_value and float(req.declared_value) > 0:
+        order["declared_value_override"] = float(req.declared_value)
+    elif float(order.get("grand_total") or 0) <= 0:
+        raise HTTPException(status_code=400,
+                            detail="Order total is \u20b90 - enter a declared value for the shipment before booking")
     p = await _dtdc_prepare(order, force_account=req.account)
     async with httpx.AsyncClient(timeout=45) as c:
         r = await c.post(f"{DTDC_BASE_URL}{DTDC_PATH_BOOK}",
@@ -5400,6 +5409,8 @@ async def dtdc_book(req: DtdcBookRequest, user=Depends(get_current_user)):
 class BulkBookRequest(BaseModel):
     order_ids: List[str]
     payment_mode: Optional[str] = None      # Amazon only; prepaid unless stated
+    # order_id -> declared value for zero-total orders in the batch.
+    declared_values: Optional[dict] = None
 
 
 async def _bulk_book(order_ids, book_one, user, label):
@@ -5444,7 +5455,9 @@ async def dtdc_bulk_book(req: BulkBookRequest, user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Not authorized to book")
 
     async def one(oid):
-        return await dtdc_book(DtdcBookRequest(order_id=oid), user=user)
+        return await dtdc_book(DtdcBookRequest(
+            order_id=oid,
+            declared_value=(req.declared_values or {}).get(oid)), user=user)
 
     return await _bulk_book(req.order_ids, one, user, "DTDC")
 
@@ -6677,6 +6690,9 @@ def _declared_value(order: dict) -> float:
     Non-GST invoices are grossed up by 18% so the declared value reflects the
     true worth of the goods.
     """
+    override = float(order.get("declared_value_override") or 0)
+    if override > 0:
+        return round(override, 2)       # the booker's explicit figure, as-is
     total = float(order.get("grand_total") or 0)
     if order.get("gst_applicable"):
         return round(total, 2)          # GST invoices already include tax
@@ -6881,6 +6897,9 @@ class AmazonBookRequest(BaseModel):
     # Payment mode is chosen explicitly at booking and defaults to prepaid, so a
     # COD shipment is never booked by omission. None falls back to the order flag.
     payment_mode: Optional[str] = None          # "prepaid" | "cod"
+    # Declared value entered at booking time; required when the order total is 0
+    # (free samples), ignored otherwise.
+    declared_value: Optional[float] = None
 
 
 # Couriers are free text ("Amazon", "Amazon shipping", ...), so match loosely.
@@ -7007,6 +7026,11 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("amazon_shipment") or {}).get("shipment_id"):
         raise HTTPException(status_code=400, detail="This order is already booked with Amazon")
+    if req.declared_value and float(req.declared_value) > 0:
+        order["declared_value_override"] = float(req.declared_value)
+    elif float(order.get("grand_total") or 0) <= 0:
+        raise HTTPException(status_code=400,
+                            detail="Order total is \u20b90 - enter a declared value for the shipment before booking")
     pkg = order.get("packaging") or {}
     if not str(pkg.get("weight_kg", "")).strip():
         raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
@@ -7149,7 +7173,8 @@ async def amazon_bulk_book(req: BulkBookRequest, user=Depends(get_current_user))
 
     async def one(oid):
         return await amazon_book_order(
-            AmazonBookRequest(order_id=oid, payment_mode=mode), user=user)
+            AmazonBookRequest(order_id=oid, payment_mode=mode,
+                              declared_value=(req.declared_values or {}).get(oid)), user=user)
 
     return await _bulk_book(req.order_ids, one, user, "Amazon")
 
