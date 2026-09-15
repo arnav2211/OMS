@@ -7255,11 +7255,22 @@ async def _amazon_cancel_one(order_id: str, user) -> dict:
                             detail="Order is already dispatched - undo the dispatch before cancelling the label")
     token = await _amazon_access_token()
     async with httpx.AsyncClient(timeout=40) as c:
-        r = await c.put(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/{sid}/cancellation",
+        r = await c.put(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/{sid}/cancel",
                         headers={"x-amz-access-token": token, "content-type": "application/json"})
     if r.status_code not in (200, 202, 204):
-        logging.error(f"Amazon cancel failed for {sid}: {r.status_code} {r.text[:400]}")
-        raise HTTPException(status_code=400, detail=f"Amazon cancel failed: {r.text[:300]}")
+        # A shipment Amazon calls ineligible after a stale booking is a dead
+        # label (expired, never picked up) - clear it locally so the order can
+        # be rebooked. A fresh booking that is refused stays put: it may be
+        # live at a delivery station already.
+        stale = False
+        try:
+            booked = datetime.fromisoformat(str(shp.get("booked_at")))
+            stale = (datetime.now(timezone.utc) - booked).total_seconds() > 48 * 3600
+        except (TypeError, ValueError):
+            pass
+        if not ("ineligible state" in r.text.lower() and stale):
+            logging.error(f"Amazon cancel failed for {sid}: {r.status_code} {r.text[:400]}")
+            raise HTTPException(status_code=400, detail=f"Amazon cancel failed: {r.text[:300]}")
     now = datetime.now(timezone.utc).isoformat()
     await db.orders.update_one({"id": order_id}, {
         "$push": {"cancelled_shipments": {"courier": "Amazon", **shp,
