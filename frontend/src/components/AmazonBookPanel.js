@@ -153,6 +153,31 @@ export default function AmazonBookPanel() {
     }
   };
 
+  const cancelOne = async (o) => {
+    if (!window.confirm(`Cancel the Amazon label for ${o.order_number}? The shipment is voided and you can rebook after.`)) return;
+    try {
+      const res = await api.post("/amazon/cancel", { order_id: o.id });
+      toast.success(`Label cancelled (${res.data.cancelled || o.order_number})`);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Cancel failed", { duration: 9000 });
+    }
+  };
+
+  const bulkCancel = async () => {
+    if (bookedSelected.length === 0) return;
+    if (!window.confirm(`Cancel ${bookedSelected.length} Amazon label(s)? The shipments are voided and you can rebook after.`)) return;
+    try {
+      const res = await api.post("/amazon/bulk-cancel", { order_ids: bookedSelected });
+      toast.success(`${res.data.booked_count} cancelled${res.data.failed_count ? `, ${res.data.failed_count} failed` : ""}`);
+      if (res.data.failed_count) setBulkResult(res.data);
+      setSelected(new Set());
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Bulk cancel failed");
+    }
+  };
+
   const printLabel = (order) => {
     const token = localStorage.getItem("token");
     // Single print uses the same quarter-A4 sheet as bulk — one label, one quarter.
@@ -220,6 +245,12 @@ export default function AmazonBookPanel() {
                     disabled={bookedSelected.length === 0}
                     data-testid="amz-print-sheet">
               <Printer className="w-4 h-4 mr-1" /> Print Labels ({bookedSelected.length}) — 4/A4
+            </Button>
+            <Button variant="outline" size="sm" onClick={bulkCancel}
+                    disabled={bookedSelected.length === 0}
+                    className="text-destructive"
+                    data-testid="amz-bulk-cancel">
+              Cancel Labels ({bookedSelected.length})
             </Button>
             <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())} disabled={bulkBooking}>
               Clear
@@ -326,6 +357,10 @@ export default function AmazonBookPanel() {
                               onClick={() => { setDispatchFor(o); setDocketNo(sh.tracking_id || ""); }}
                               data-testid={`amz-dispatch-${o.id}`}>
                               Dispatch
+                            </Button>
+                            <Button variant="outline" size="sm" className="text-xs h-7 text-destructive"
+                              onClick={() => cancelOne(o)} data-testid={`amz-cancel-${o.id}`}>
+                              Cancel
                             </Button>
                           </div>
                         ) : (

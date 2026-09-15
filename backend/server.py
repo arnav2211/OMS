@@ -5462,6 +5462,68 @@ async def dtdc_bulk_book(req: BulkBookRequest, user=Depends(get_current_user)):
     return await _bulk_book(req.order_ids, one, user, "DTDC")
 
 
+class CancelLabelRequest(BaseModel):
+    order_id: str
+
+
+async def _dtdc_cancel_one(order_id: str, user) -> dict:
+    """Cancels a booked DTDC consignment and clears it off the order."""
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    shp = order.get("dtdc_shipment") or {}
+    awb = shp.get("reference_number") or shp.get("awb")
+    if not awb:
+        raise HTTPException(status_code=400, detail="No DTDC booking on this order")
+    if (order.get("status") or "") == "dispatched":
+        raise HTTPException(status_code=400,
+                            detail="Order is already dispatched - undo the dispatch before cancelling the label")
+    account = DTDC_ACCOUNTS.get(shp.get("account") or "") or {}
+    if not account.get("api_key"):
+        raise HTTPException(status_code=400, detail=f"No API key for account {shp.get('account')}")
+    async with httpx.AsyncClient(timeout=45) as c:
+        r = await c.post(f"{DTDC_BASE_URL}{DTDC_PATH_CANCEL}",
+                         headers={"api-key": account["api_key"], "content-type": "application/json"},
+                         json={"AWBNo": [awb], "customerCode": account.get("customer_code")})
+    try:
+        data = r.json()
+    except Exception:
+        data = {"raw": r.text[:400]}
+    blob = str(data).lower()
+    # Shipsy reports per-AWB outcomes; a failure line means it stays booked.
+    if r.status_code not in (200, 201) or data.get("success") is False or "failure" in blob:
+        logging.error(f"DTDC cancel failed for {awb}: {r.status_code} {str(data)[:400]}")
+        raise HTTPException(status_code=400, detail=f"DTDC cancel failed: {str(data)[:300]}")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.orders.update_one({"id": order_id}, {
+        "$push": {"cancelled_shipments": {"courier": "DTDC", **shp,
+                                          "cancelled_by": user["name"], "cancelled_at": now}},
+        "$unset": {"dtdc_shipment": ""},
+        "$set": {"updated_at": now},
+    })
+    return {"ok": True, "cancelled": awb}
+
+
+@api_router.post("/dtdc/cancel")
+async def dtdc_cancel(req: CancelLabelRequest, user=Depends(get_current_user)):
+    """Cancels one DTDC consignment so the order can be rebooked."""
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return await _dtdc_cancel_one(req.order_id, user)
+
+
+@api_router.post("/dtdc/bulk-cancel")
+async def dtdc_bulk_cancel(req: BulkBookRequest, user=Depends(get_current_user)):
+    """Cancels several DTDC consignments, one result line each."""
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    async def one(oid):
+        return await _dtdc_cancel_one(oid, user)
+
+    return await _bulk_book(req.order_ids, one, user, "DTDC cancel")
+
+
 @api_router.get("/dtdc/labels-sheet")
 async def dtdc_labels_sheet(ids: str, token: str = "", user=None):
     """Selected DTDC labels, each label page on its own full A4 page.
@@ -7177,6 +7239,55 @@ async def amazon_bulk_book(req: BulkBookRequest, user=Depends(get_current_user))
                               declared_value=(req.declared_values or {}).get(oid)), user=user)
 
     return await _bulk_book(req.order_ids, one, user, "Amazon")
+
+
+async def _amazon_cancel_one(order_id: str, user) -> dict:
+    """Cancels a purchased Amazon shipment and clears it off the order."""
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    shp = order.get("amazon_shipment") or {}
+    sid = shp.get("shipment_id")
+    if not sid:
+        raise HTTPException(status_code=400, detail="No Amazon booking on this order")
+    if (order.get("status") or "") == "dispatched":
+        raise HTTPException(status_code=400,
+                            detail="Order is already dispatched - undo the dispatch before cancelling the label")
+    token = await _amazon_access_token()
+    async with httpx.AsyncClient(timeout=40) as c:
+        r = await c.put(f"{AMAZON_SHIP['endpoint']}/shipping/v2/shipments/{sid}/cancellation",
+                        headers={"x-amz-access-token": token, "content-type": "application/json"})
+    if r.status_code not in (200, 202, 204):
+        logging.error(f"Amazon cancel failed for {sid}: {r.status_code} {r.text[:400]}")
+        raise HTTPException(status_code=400, detail=f"Amazon cancel failed: {r.text[:300]}")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.orders.update_one({"id": order_id}, {
+        "$push": {"cancelled_shipments": {"courier": "Amazon", **shp,
+                                          "cancelled_by": user["name"], "cancelled_at": now}},
+        "$unset": {"amazon_shipment": ""},
+        "$set": {"updated_at": now},
+    })
+    return {"ok": True, "cancelled": shp.get("tracking_id") or sid}
+
+
+@api_router.post("/amazon/cancel")
+async def amazon_cancel(req: CancelLabelRequest, user=Depends(get_current_user)):
+    """Cancels one Amazon shipment so the order can be rebooked."""
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return await _amazon_cancel_one(req.order_id, user)
+
+
+@api_router.post("/amazon/bulk-cancel")
+async def amazon_bulk_cancel(req: BulkBookRequest, user=Depends(get_current_user)):
+    """Cancels several Amazon shipments, one result line each."""
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    async def one(oid):
+        return await _amazon_cancel_one(oid, user)
+
+    return await _bulk_book(req.order_ids, one, user, "Amazon cancel")
 
 
 AMAZON_PICKUP_EVENTS = {"PickupDone", "PickedUp", "Departed"}

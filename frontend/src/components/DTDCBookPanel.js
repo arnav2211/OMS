@@ -146,6 +146,31 @@ export default function DTDCBookPanel() {
     }
   };
 
+  const cancelOne = async (o) => {
+    if (!window.confirm(`Cancel the DTDC consignment for ${o.order_number}? The docket is voided and you can rebook after.`)) return;
+    try {
+      const res = await api.post("/dtdc/cancel", { order_id: o.id });
+      toast.success(`Consignment cancelled (${res.data.cancelled || o.order_number})`);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Cancel failed", { duration: 9000 });
+    }
+  };
+
+  const bulkCancel = async () => {
+    if (bookedSelected.length === 0) return;
+    if (!window.confirm(`Cancel ${bookedSelected.length} DTDC consignment(s)? The dockets are voided and you can rebook after.`)) return;
+    try {
+      const res = await api.post("/dtdc/bulk-cancel", { order_ids: bookedSelected });
+      toast.success(`${res.data.booked_count} cancelled${res.data.failed_count ? `, ${res.data.failed_count} failed` : ""}`);
+      if (res.data.failed_count) setBulkResult(res.data);
+      setSelected(new Set());
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Bulk cancel failed");
+    }
+  };
+
   const syncNow = async () => {
     try {
       const res = await api.post("/dtdc/sync-tracking");
@@ -177,6 +202,10 @@ export default function DTDCBookPanel() {
           </Button>
           <Button variant="outline" size="sm" onClick={printBulk} disabled={bookedSelected.length === 0} data-testid="dtdc-bulk-print">
             <Printer className="w-4 h-4 mr-1" /> Print Slips ({bookedSelected.length})
+          </Button>
+          <Button variant="outline" size="sm" onClick={bulkCancel} disabled={bookedSelected.length === 0}
+                  className="text-destructive" data-testid="dtdc-bulk-cancel">
+            Cancel Labels ({bookedSelected.length})
           </Button>
           <Button variant="outline" size="sm" onClick={syncNow} data-testid="dtdc-sync">
             <PackageCheck className="w-4 h-4 mr-1" /> Check Pickups
@@ -295,6 +324,10 @@ export default function DTDCBookPanel() {
                                 onClick={() => { setDispatchFor(o); setDocketNo(sh.awb || sh.reference_number || ""); }}
                                 data-testid={`dtdc-dispatch-${o.id}`}>
                                 Dispatch
+                              </Button>
+                              <Button variant="outline" size="sm" className="text-xs h-7 text-destructive"
+                                onClick={() => cancelOne(o)} data-testid={`dtdc-cancel-${o.id}`}>
+                                Cancel
                               </Button>
                             </>
                           )}
