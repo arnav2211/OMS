@@ -5185,7 +5185,14 @@ def _dtdc_softdata_payload(order, account, service, risk, weight, boxes, phones)
         # reference_number is DTDC's consignment number and must come from the
         # D/M series that matches the service type — omitting it makes DTDC
         # allocate the correct one. Our order number goes in the customer ref.
-        "customer_reference_number": order.get("order_number") or order["id"][:20],
+        # DTDC dedupes on this ref, and a cancelled consignment keeps it locked
+        # ("Consignment is already complete"), so each rebook gets -R<n>.
+        "customer_reference_number": (
+            (order.get("order_number") or order["id"][:20])
+            + (f"-R{sum(1 for c in (order.get('cancelled_shipments') or []) if (c.get('courier') or '').upper() == 'DTDC')}"
+               if any((c.get("courier") or "").upper() == "DTDC"
+                      for c in (order.get("cancelled_shipments") or [])) else "")
+        ),
         "service_type_id": service,
         "is_risk_surcharge_applicable": bool(risk),
         "dimension_unit": "cm",
