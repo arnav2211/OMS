@@ -11,7 +11,7 @@ import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
   FileText, TrendingUp, Bell, ShoppingBag, Calculator, MapPinCheck, Megaphone,
-  ChevronDown, Layers, Navigation, IndianRupee, Mail, Timer, Activity,
+  ChevronDown, Layers, Navigation, IndianRupee, Mail, Timer, Activity, CalendarDays,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -24,6 +24,7 @@ const NAV_ITEMS = {
     { label: "Create Order", icon: Plus, path: "/create-order" },
     { label: "Customers", icon: Users, path: "/customers" },
     { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
+    { label: "My Leave", icon: CalendarDays, path: "/my-leave" },
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
@@ -86,6 +87,7 @@ const NAV_ITEMS = {
     { label: "Dashboard", icon: Home, path: "/" },
     { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Customers", icon: Users, path: "/customers" },
+    { label: "My Leave", icon: CalendarDays, path: "/my-leave" },
     { label: "Packing Live", icon: Activity, path: "/packing-live" },
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },

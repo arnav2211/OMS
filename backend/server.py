@@ -38,6 +38,10 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
+# The CRM shares this MongoDB. Attendance and leaves live there and stay the
+# single source of truth: the OMS only reads attendance and writes leave
+# requests in the CRM's own document shape, so the CRM shows them as its own.
+crm_db = client[os.environ.get("CRM_DB_NAME", "crm_database")]
 
 # Auth
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -2907,8 +2911,13 @@ async def work_config(user=Depends(get_current_user)):
 @api_router.get("/work/staff")
 async def work_staff(user=Depends(get_current_user)):
     staff = await db.packaging_staff.find({"active": True}, {"_id": 0, "name": 1}).sort("name", 1).to_list(100)
-    pins = {p["name"] for p in await db.staff_pins.find({}, {"_id": 0, "name": 1}).to_list(200)}
-    return [{"name": s["name"], "has_pin": s["name"] in pins} for s in staff]
+    pins = {p["name"]: p for p in await db.staff_pins.find({}, {"_id": 0, "name": 1, "pin": 1}).to_list(200)}
+    is_admin = user["role"] == "admin"
+    return [{"name": s["name"], "has_pin": s["name"] in pins,
+             # Admins see the digits; PINs set before this field existed show
+             # as None until reset.
+             "pin": (pins.get(s["name"]) or {}).get("pin") if is_admin else None}
+            for s in staff]
 
 
 @api_router.put("/work/pin")
@@ -2922,6 +2931,7 @@ async def work_set_pin(req: WorkPinRequest, admin=Depends(require_admin)):
         raise HTTPException(status_code=404, detail="Name not found")
     await db.staff_pins.update_one({"name": staff["name"]},
                                    {"$set": {"pin_hash": hash_password(pin),
+                                             "pin": pin,   # admin-visible lookup
                                              "updated_at": _work_now().isoformat(),
                                              "updated_by": admin["name"]}}, upsert=True)
     return {"ok": True, "name": staff["name"]}
@@ -3030,7 +3040,10 @@ async def work_me(name: str, user=Depends(get_current_user)):
     today = await db.work_sessions.find({"staff": name, "started_at": {"$gte": start, "$lt": end}},
                                         {"_id": 0}).sort("started_at", -1).to_list(200)
     pub = [_work_public(s) for s in today]
+    uid = (await _crm_map_for_staff()).get(name)
+    attendance = dict((await _crm_attendance([uid]))[uid], linked=True) if uid else {"linked": False}
     return {"name": name, "day": day, "active": _work_public(active) if active else None,
+            "attendance": attendance,
             "today": pub, "today_total_sec": sum(s["duration_sec"] for s in pub),
             "today_orders": len({s["order_id"] for s in pub if s.get("order_id")})}
 
@@ -3074,11 +3087,15 @@ async def work_live(user=Depends(get_current_user)):
         {"_id": 0}).sort("started_at", 1).to_list(2000)]
     staff_names = [s["name"] for s in await db.packaging_staff.find({"active": True}, {"_id": 0, "name": 1}).sort("name", 1).to_list(100)]
     summary = _work_staff_summary(sessions)
+    crm_map = await _crm_map_for_staff()
+    att = await _crm_attendance(list(set(crm_map.values())))
     people = []
     for n in staff_names:
         h = summary.get(n) or {"staff": n, "total_sec": 0, "order_sec": 0, "other_sec": 0,
                                "sessions": 0, "orders": [], "orders_count": 0, "auto_closed": 0,
                                "first_start": None, "last_end": None, "current": None}
+        uid = crm_map.get(n)
+        h["attendance"] = dict(att.get(uid) or {}, linked=bool(uid))
         people.append(h)
     # orders touched today, with per-step progress
     orders = {}
@@ -3183,6 +3200,219 @@ async def work_report(from_date: str = "", to_date: str = "", user=Depends(get_c
         for name, h in sorted(_work_staff_summary(days[d]).items()):
             rows.append({"day": d, **{k: v for k, v in h.items() if k != "current"}})
     return {"from": from_d.isoformat(), "to": to_d.isoformat(), "rows": rows}
+
+
+# ── CRM bridge: attendance (read) and leave requests (write) ────────────────
+# Packing executives have no OMS login, so they are linked to their CRM user
+# by name (packing_staff_crm_map). OMS logins (accounts, telecallers) reuse
+# the CRM's own user_mappings collection, which already links them.
+def _ist_today() -> str:
+    return datetime.now(IST).strftime("%Y-%m-%d")
+
+
+async def _crm_user(uid: str) -> Optional[dict]:
+    if not uid:
+        return None
+    return await crm_db.users.find_one({"id": uid}, {"_id": 0, "id": 1, "name": 1, "username": 1,
+                                                     "department": 1, "active": 1, "role": 1})
+
+
+async def _crm_map_for_staff() -> dict:
+    rows = await db.packing_staff_crm_map.find({}, {"_id": 0}).to_list(300)
+    return {r["staff_name"]: r["crm_user_id"] for r in rows if r.get("crm_user_id")}
+
+
+async def _crm_user_for_oms_user(user: dict) -> Optional[dict]:
+    m = await db.user_mappings.find_one({"oms_user_id": user["id"]}, {"_id": 0, "crm_user_id": 1})
+    return await _crm_user((m or {}).get("crm_user_id"))
+
+
+async def _crm_attendance(crm_ids: list, day: Optional[str] = None) -> dict:
+    """{crm_user_id: {present, check_in, check_out, on_leave, leave_pending}} for one IST day."""
+    day = day or _ist_today()
+    out = {uid: {"date": day, "present": False, "check_in": None, "check_out": None,
+                 "att_status": None, "on_leave": False, "leave_pending": False} for uid in crm_ids}
+    if not crm_ids:
+        return out
+    async for log in crm_db.attendance_logs.find({"user_id": {"$in": crm_ids}, "date": day}, {"_id": 0}):
+        o = out.get(log["user_id"])
+        if o is None:
+            continue
+        o["present"] = "check_in" in log
+        o["check_in"] = (log.get("check_in") or {}).get("time")
+        o["check_out"] = (log.get("check_out") or {}).get("time")
+        o["att_status"] = log.get("status")
+    async for lv in crm_db.leaves.find({"user_id": {"$in": crm_ids}, "cancelled": {"$ne": True},
+                                        "status": {"$ne": "rejected"},
+                                        "start_date": {"$lte": day}, "end_date": {"$gte": day}}, {"_id": 0}):
+        o = out.get(lv["user_id"])
+        if o is None:
+            continue
+        if lv.get("status") == "pending":
+            o["leave_pending"] = True
+        else:
+            o["on_leave"] = True
+    return out
+
+
+def _valid_day(s: str) -> bool:
+    try:
+        return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", s or "")) and datetime.strptime(s, "%Y-%m-%d") is not None
+    except ValueError:
+        return False
+
+
+async def _crm_apply_leave(crm_user: dict, start_date: str, end_date: str, reason: str) -> dict:
+    """Same document, activity log and admin alert the CRM's own /leaves/apply
+    writes, so the request shows up in the CRM exactly like one made there."""
+    if not _valid_day(start_date) or not _valid_day(end_date):
+        raise HTTPException(status_code=400, detail="Pick the dates")
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="Start date cannot be after end date")
+    reason = (reason or "").strip()
+    if len(reason) < 5:
+        raise HTTPException(status_code=400, detail="Please give a proper reason for the leave")
+    if not crm_user.get("active", True):
+        raise HTTPException(status_code=400, detail="Your CRM user is inactive - ask admin")
+    overlap = await crm_db.leaves.find_one({
+        "user_id": crm_user["id"], "cancelled": {"$ne": True}, "status": {"$ne": "rejected"},
+        "start_date": {"$lte": end_date}, "end_date": {"$gte": start_date}}, {"_id": 0, "id": 1})
+    if overlap:
+        raise HTTPException(status_code=409, detail="You already have a leave request on these dates")
+    now = datetime.now(timezone.utc).isoformat()
+    leave = {"id": str(uuid.uuid4()), "user_id": crm_user["id"],
+             "start_date": start_date, "end_date": end_date, "reason": reason,
+             "status": "pending", "cancelled": False, "created_at": now,
+             "created_by": crm_user["id"], "source": "oms"}
+    await crm_db.leaves.insert_one(dict(leave))
+    await crm_db.activity_logs.insert_one({"id": str(uuid.uuid4()), "actor_id": crm_user["id"],
+                                           "action": "leave_applied", "lead_id": None,
+                                           "meta": {"start_date": start_date, "end_date": end_date, "source": "oms"},
+                                           "at": now})
+    admin_ids = [a["id"] for a in await crm_db.users.find({"role": "admin", "active": True},
+                                                          {"_id": 0, "id": 1}).to_list(50)]
+    if admin_ids:
+        await crm_db.admin_alerts.insert_one({
+            "id": str(uuid.uuid4()),
+            "title": f"Leave request: {crm_user['name']}",
+            "message": f"{crm_user['name']} applied for leave {start_date} \u2192 {end_date} (from OMS). Reason: {reason}",
+            "sent_by": "System", "sent_by_id": None, "order_id": "", "customer_name": "",
+            "recipient_ids": admin_ids, "recipient_roles": [], "acknowledgements": {},
+            "created_at": now, "meta": {"type": "leave_request", "dedup_key": f"leave_request:{leave['id']}"},
+        })
+    return leave
+
+
+async def _crm_my_leaves(crm_user_id: str) -> list:
+    rows = await crm_db.leaves.find({"user_id": crm_user_id, "cancelled": {"$ne": True}},
+                                    {"_id": 0}).sort("start_date", -1).to_list(30)
+    for lv in rows:
+        lv["status"] = lv.get("status") or "approved"
+    return rows
+
+
+class WorkLeaveRequest(BaseModel):
+    name: str
+    pin: str
+    start_date: str
+    end_date: str
+    reason: str
+
+
+class LeaveApplyRequest(BaseModel):
+    start_date: str
+    end_date: str
+    reason: str
+
+
+class CrmMapRequest(BaseModel):
+    staff_name: str
+    crm_user_id: Optional[str] = ""     # empty clears the link
+
+
+@api_router.get("/work/crm-map")
+async def work_crm_map(admin=Depends(require_admin)):
+    """Admin: link each packing name to its CRM user (attendance + leave)."""
+    staff = await db.packaging_staff.find({"active": True}, {"_id": 0, "name": 1}).sort("name", 1).to_list(100)
+    mapping = await _crm_map_for_staff()
+    users = await crm_db.users.find({"active": True, "role": {"$ne": "admin"},
+                                     "username": {"$nin": ["scanner", "test_user"]}},
+                                    {"_id": 0, "id": 1, "name": 1, "username": 1, "department": 1, "role": 1}
+                                    ).sort("name", 1).to_list(300)
+    by_id = {u["id"]: u for u in users}
+    out = []
+    for st in staff:
+        uid = mapping.get(st["name"])
+        # suggestion: exact name, else first word match, packing department first
+        key = st["name"].strip().lower()
+        sugg = [u for u in users if u["name"].strip().lower() == key] or \
+               [u for u in users if key in u["name"].lower() or u["name"].lower().split()[0] == key.split()[0]]
+        sugg.sort(key=lambda u: (u.get("department") != "packing", u["name"]))
+        out.append({"staff_name": st["name"], "crm_user_id": uid,
+                    "crm_user": by_id.get(uid), "suggested": sugg[0] if sugg else None})
+    return {"staff": out, "crm_users": users}
+
+
+@api_router.put("/work/crm-map")
+async def work_set_crm_map(req: CrmMapRequest, admin=Depends(require_admin)):
+    name = req.staff_name.strip()
+    if not await db.packaging_staff.find_one({"name": name, "active": True}):
+        raise HTTPException(status_code=404, detail="Name not found")
+    uid = (req.crm_user_id or "").strip()
+    if not uid:
+        await db.packing_staff_crm_map.delete_one({"staff_name": name})
+        return {"ok": True, "staff_name": name, "crm_user_id": None}
+    if not await _crm_user(uid):
+        raise HTTPException(status_code=404, detail="CRM user not found")
+    await db.packing_staff_crm_map.update_one({"staff_name": name},
+                                              {"$set": {"crm_user_id": uid, "updated_by": admin["name"],
+                                                        "updated_at": _work_now().isoformat()}}, upsert=True)
+    return {"ok": True, "staff_name": name, "crm_user_id": uid}
+
+
+@api_router.post("/work/leave/apply")
+async def work_leave_apply(req: WorkLeaveRequest, user=Depends(get_current_user)):
+    """Packing executive applies for leave from the shared phone (name + PIN)."""
+    _work_require(user, WORK_DO_ROLES)
+    name = await _work_staff_auth(req.name, req.pin)
+    crm_user = await _crm_user((await _crm_map_for_staff()).get(name))
+    if not crm_user:
+        raise HTTPException(status_code=400, detail="Your name is not linked to the CRM yet. Ask admin.")
+    leave = await _crm_apply_leave(crm_user, req.start_date, req.end_date, req.reason)
+    return {"ok": True, "leave": leave}
+
+
+@api_router.get("/work/leave/my")
+async def work_leave_my(name: str, user=Depends(get_current_user)):
+    _work_require(user, WORK_DO_ROLES)
+    crm_user = await _crm_user((await _crm_map_for_staff()).get((name or "").strip()))
+    if not crm_user:
+        return {"linked": False, "leaves": [], "attendance": None}
+    att = await _crm_attendance([crm_user["id"]])
+    return {"linked": True, "crm_name": crm_user["name"], "leaves": await _crm_my_leaves(crm_user["id"]),
+            "attendance": att[crm_user["id"]]}
+
+
+@api_router.post("/leave/apply")
+async def leave_apply(req: LeaveApplyRequest, user=Depends(get_current_user)):
+    """OMS login (accounts, telecallers) applies for leave; lands in the CRM."""
+    if user["role"] == "admin":
+        raise HTTPException(status_code=400, detail="Admins add leaves directly in the CRM Payroll page")
+    crm_user = await _crm_user_for_oms_user(user)
+    if not crm_user:
+        raise HTTPException(status_code=400, detail="Your login is not linked to a CRM user. Ask admin.")
+    leave = await _crm_apply_leave(crm_user, req.start_date, req.end_date, req.reason)
+    return {"ok": True, "leave": leave}
+
+
+@api_router.get("/leave/my")
+async def leave_my(user=Depends(get_current_user)):
+    crm_user = await _crm_user_for_oms_user(user)
+    if not crm_user:
+        return {"linked": False, "leaves": [], "attendance": None}
+    att = await _crm_attendance([crm_user["id"]])
+    return {"linked": True, "crm_name": crm_user["name"], "leaves": await _crm_my_leaves(crm_user["id"]),
+            "attendance": att[crm_user["id"]]}
 
 
 # Courier Options

@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Mic, MicOff, Loader2, Play, Square, ArrowLeft, UserCircle, Package, Wrench } from "lucide-react";
+import { Mic, MicOff, Loader2, Play, Square, ArrowLeft, UserCircle, Package, Wrench, CalendarDays } from "lucide-react";
 
 // Shared-phone work screen for packing executives. Deliberately simple:
 // big buttons, short words, one thing at a time. Identity is name + PIN kept
@@ -41,6 +41,29 @@ export default function MyWork() {
   const [note, setNote] = useState("");
   const [listening, setListening] = useState(false);
   const recRef = useRef(null);
+  const [leaveInfo, setLeaveInfo] = useState(null);
+  const [leaveFrom, setLeaveFrom] = useState("");
+  const [leaveTo, setLeaveTo] = useState("");
+  const [leaveReason, setLeaveReason] = useState("");
+
+  const loadLeaves = useCallback(async () => {
+    if (!identity) return;
+    try { const r = await api.get("/work/leave/my", { params: { name: identity.name } }); setLeaveInfo(r.data); }
+    catch { /* ignore */ }
+  }, [identity]);
+  useEffect(() => { if (screen === "leave") loadLeaves(); }, [screen, loadLeaves]);
+
+  const applyLeave = async () => {
+    setBusy(true);
+    try {
+      await api.post("/work/leave/apply", { name: identity.name, pin: identity.pin,
+        start_date: leaveFrom, end_date: leaveTo || leaveFrom, reason: leaveReason });
+      toast.success("Leave request sent to admin");
+      setLeaveFrom(""); setLeaveTo(""); setLeaveReason("");
+      loadLeaves();
+    } catch (e) { toast.error(e.response?.data?.detail || "Could not send", { duration: 8000 }); }
+    finally { setBusy(false); }
+  };
 
   useEffect(() => {
     api.get("/work/staff").then(r => setStaff(r.data)).catch(() => {});
@@ -124,7 +147,7 @@ export default function MyWork() {
 
   // ── speech to text (Chrome on Android) ──
   const canSpeak = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
-  const toggleMic = () => {
+  const toggleMic = (setter = setNote) => {
     if (listening) { recRef.current?.stop(); setListening(false); return; }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) return toast.error("Speaking is not supported on this phone. Please type.");
@@ -132,7 +155,7 @@ export default function MyWork() {
     rec.lang = "en-IN"; rec.interimResults = false; rec.maxAlternatives = 1;
     rec.onresult = (ev) => {
       const text = ev.results[0][0].transcript;
-      setNote(prev => (prev ? prev + " " : "") + text);
+      setter(prev => (prev ? prev + " " : "") + text);
     };
     rec.onerror = () => { setListening(false); toast.error("Could not hear. Try again or type."); };
     rec.onend = () => setListening(false);
@@ -237,7 +260,7 @@ export default function MyWork() {
         <textarea className="w-full border rounded-lg p-3 text-lg min-h-[110px] bg-background" value={note}
                   onChange={e => setNote(e.target.value)} placeholder="Example: cleaning the room, loading the van" />
         <div className="grid grid-cols-2 gap-3">
-          <Button variant={listening ? "destructive" : "outline"} className="h-16 text-lg" onClick={toggleMic} disabled={!canSpeak && !listening}>
+          <Button variant={listening ? "destructive" : "outline"} className="h-16 text-lg" onClick={() => toggleMic(setNote)} disabled={!canSpeak && !listening}>
             {listening ? <><MicOff className="w-6 h-6 mr-2" /> Stop</> : <><Mic className="w-6 h-6 mr-2" /> Speak</>}
           </Button>
           <Button className="h-16 text-lg" disabled={busy || !note.trim()} onClick={() => start({ kind: "other", note })}>
@@ -249,13 +272,74 @@ export default function MyWork() {
     );
   }
 
+  // ── screen: leave ──
+  if (screen === "leave") {
+    const att = leaveInfo?.attendance;
+    return (
+      <div className="max-w-md mx-auto space-y-3 p-2">
+        <Button variant="ghost" onClick={() => setScreen("home")}><ArrowLeft className="w-4 h-4 mr-1" /> Back</Button>
+        <h2 className="text-xl font-bold">Leave</h2>
+        {leaveInfo && !leaveInfo.linked && (
+          <p className="text-amber-600">Your name is not linked to the CRM yet. Ask admin.</p>
+        )}
+        {leaveInfo?.linked && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="text-sm text-muted-foreground">From date</label>
+                <Input type="date" className="h-12 text-lg" value={leaveFrom} onChange={e => setLeaveFrom(e.target.value)} /></div>
+              <div><label className="text-sm text-muted-foreground">To date</label>
+                <Input type="date" className="h-12 text-lg" value={leaveTo} onChange={e => setLeaveTo(e.target.value)} /></div>
+            </div>
+            <p className="text-xs text-muted-foreground">One day only? Fill "From date" and leave "To date" empty.</p>
+            <label className="text-sm text-muted-foreground">Why do you need leave?</label>
+            <textarea className="w-full border rounded-lg p-3 text-lg min-h-[100px] bg-background" value={leaveReason}
+                      onChange={e => setLeaveReason(e.target.value)} placeholder="Example: not well, family function" />
+            <div className="grid grid-cols-2 gap-3">
+              <Button variant={listening ? "destructive" : "outline"} className="h-14 text-lg" onClick={() => toggleMic(setLeaveReason)} disabled={!canSpeak && !listening}>
+                {listening ? <><MicOff className="w-5 h-5 mr-2" /> Stop</> : <><Mic className="w-5 h-5 mr-2" /> Speak</>}
+              </Button>
+              <Button className="h-14 text-lg" onClick={applyLeave} disabled={busy || !leaveFrom || leaveReason.trim().length < 5}>
+                {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : "Send to admin"}
+              </Button>
+            </div>
+            {att && <p className="text-sm">Today: {att.on_leave ? "on leave" : att.present ? `present since ${String(att.check_in).slice(11, 16)}` : "not punched in"}</p>}
+          </>
+        )}
+        <h3 className="font-semibold pt-2">My leave requests</h3>
+        <div className="space-y-2">
+          {(leaveInfo?.leaves || []).map(lv => (
+            <div key={lv.id} className="border rounded p-2 text-sm">
+              <div className="flex justify-between">
+                <span className="font-medium">{lv.start_date}{lv.end_date !== lv.start_date ? ` to ${lv.end_date}` : ""}</span>
+                <span className={lv.status === "pending" ? "text-amber-600" : lv.status === "rejected" ? "text-red-600" : "text-emerald-600"}>
+                  {lv.status === "pending" ? "Waiting" : lv.status === "rejected" ? "Not approved" : "Approved"}
+                </span>
+              </div>
+              <div className="text-muted-foreground">{lv.reason}</div>
+            </div>
+          ))}
+          {leaveInfo && leaveInfo.leaves.length === 0 && <p className="text-sm text-muted-foreground">No leave requests yet.</p>}
+        </div>
+      </div>
+    );
+  }
+
   // ── screen: home ──
+  const att = me?.attendance;
   return (
     <div className="max-w-md mx-auto space-y-4 p-2" data-testid="my-work-home">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Hi {identity.name}</h1>
         <Button variant="ghost" size="sm" onClick={switchPerson}>Not you? Switch</Button>
       </div>
+      {att && (
+        <p className="text-sm">
+          {!att.linked ? <span className="text-muted-foreground">Attendance not linked - ask admin</span>
+            : att.on_leave ? <span className="text-blue-600 dark:text-blue-400">You are on leave today</span>
+            : att.present ? <span className="text-emerald-600 dark:text-emerald-400">Present today · in at {String(att.check_in).slice(11, 16)}</span>
+            : <span className="text-amber-600 dark:text-amber-400">Not punched in yet - please punch attendance</span>}
+        </p>
+      )}
 
       <Card className={active ? "border-emerald-500" : ""}>
         <CardContent className="pt-5 space-y-3">
@@ -286,6 +370,9 @@ export default function MyWork() {
           <Wrench className="w-6 h-6 mr-2" /> Other work
         </Button>
       </div>
+      <Button variant="outline" className="w-full h-12 text-base" onClick={() => setScreen("leave")}>
+        <CalendarDays className="w-5 h-5 mr-2" /> Apply for leave
+      </Button>
 
       <div>
         <div className="flex justify-between items-baseline mb-2">

@@ -30,6 +30,13 @@ const daysAgo = (n) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
+const AttBadge = ({ att }) => {
+  if (!att || !att.linked) return <Badge variant="outline" className="font-normal text-muted-foreground">No CRM link</Badge>;
+  if (att.on_leave) return <Badge className="bg-blue-100 text-blue-800 font-normal">On leave</Badge>;
+  if (att.present) return <Badge className="bg-emerald-100 text-emerald-800 font-normal">In {String(att.check_in).slice(11, 16)}{att.check_out ? ` · out ${String(att.check_out).slice(11, 16)}` : ""}</Badge>;
+  return <Badge className="bg-red-100 text-red-800 font-normal">Absent{att.leave_pending ? " · leave pending" : ""}</Badge>;
+};
+
 const StatusBadge = ({ s }) => {
   if (s.status === "active") return <Badge className="bg-emerald-100 text-emerald-800">Now</Badge>;
   if (s.status === "auto_closed") return <Badge className="bg-amber-100 text-amber-800">Forgot DONE</Badge>;
@@ -56,6 +63,19 @@ export default function PackingLive() {
   const [to, setTo] = useState(todayIso());
   const [staff, setStaff] = useState([]);
   const [pins, setPins] = useState({});
+  const [crmMap, setCrmMap] = useState(null);
+
+  const loadCrmMap = useCallback(async () => {
+    try { const r = await api.get("/work/crm-map"); setCrmMap(r.data); }
+    catch (e) { toast.error(e.response?.data?.detail || "Could not load CRM users"); }
+  }, []);
+  const setCrmLink = async (staffName, crmUserId) => {
+    try {
+      await api.put("/work/crm-map", { staff_name: staffName, crm_user_id: crmUserId || "" });
+      toast.success(crmUserId ? `${staffName} linked` : `${staffName} unlinked`);
+      loadCrmMap(); loadLive();
+    } catch (e) { toast.error(e.response?.data?.detail || "Could not save"); }
+  };
 
   const loadLive = useCallback(async () => {
     try { const r = await api.get("/work/live"); setLive(r.data); }
@@ -85,6 +105,7 @@ export default function PackingLive() {
   }, [tab, loadLive]);
   useEffect(() => { if (tab === "day") loadDay(); }, [tab, loadDay]);
   useEffect(() => { if (tab === "report") loadReport(); }, [tab, loadReport]);
+  useEffect(() => { if (tab === "crm") loadCrmMap(); }, [tab, loadCrmMap]);
   void tick;
 
   const openOrder = async (o) => {
@@ -103,7 +124,7 @@ export default function PackingLive() {
   };
 
   const tabs = [["now", "Now"], ["orders", "Orders today"], ["day", "Day timeline"], ["report", "Report"]];
-  if (isAdmin) tabs.push(["pins", "PINs"]);
+  if (isAdmin) { tabs.push(["pins", "PINs"]); tabs.push(["crm", "CRM link"]); }
 
   return (
     <div className="space-y-4" data-testid="packing-live">
@@ -128,9 +149,12 @@ export default function PackingLive() {
             return (
               <Card key={p.staff} className={cur ? "border-emerald-500" : ""}>
                 <CardHeader className="pb-2">
-                  <CardTitle className="flex justify-between items-center text-base">
+                  <CardTitle className="flex justify-between items-center text-base gap-2">
                     <span>{p.staff}</span>
-                    {cur ? <Badge className="bg-emerald-100 text-emerald-800">Working</Badge> : <Badge variant="outline">Free</Badge>}
+                    <span className="flex gap-1 flex-wrap justify-end">
+                      <AttBadge att={p.attendance} />
+                      {cur ? <Badge className="bg-emerald-100 text-emerald-800">Working</Badge> : <Badge variant="outline">Free</Badge>}
+                    </span>
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm">
@@ -286,13 +310,45 @@ export default function PackingLive() {
             {staff.map(s => (
               <div key={s.name} className="flex items-center gap-2 flex-wrap">
                 <span className="w-40 font-medium">{s.name}</span>
-                {s.has_pin ? <Badge className="bg-emerald-100 text-emerald-800">PIN set</Badge> : <Badge variant="outline">No PIN</Badge>}
+                {s.has_pin
+                  ? <Badge className="bg-emerald-100 text-emerald-800 font-mono text-sm">{s.pin ? `PIN ${s.pin}` : "PIN set (reset to see)"}</Badge>
+                  : <Badge variant="outline">No PIN</Badge>}
                 <Input className="w-32" placeholder="New PIN" inputMode="numeric" value={pins[s.name] || ""}
                        onChange={e => setPins(p => ({ ...p, [s.name]: e.target.value.replace(/\D/g, "").slice(0, 6) }))} />
                 <Button size="sm" onClick={() => setPin(s.name)}>{s.has_pin ? "Reset" : "Set"}</Button>
               </div>
             ))}
             {staff.length === 0 && <p className="text-muted-foreground">No packaging staff configured yet.</p>}
+          </CardContent>
+        </Card>
+      )}
+
+      {tab === "crm" && isAdmin && (
+        <Card>
+          <CardHeader><CardTitle className="text-base">Link packing names to CRM users</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              Attendance (fingerprint punches) and leave requests come from the CRM. Link each packing name to the matching CRM user so the live board shows who is present, and leave applied from the phones reaches the CRM.
+            </p>
+            {(crmMap?.staff || []).map(row => (
+              <div key={row.staff_name} className="flex items-center gap-2 flex-wrap">
+                <span className="w-40 font-medium">{row.staff_name}</span>
+                <select className="border rounded h-9 px-2 bg-background min-w-[220px]" value={row.crm_user_id || ""}
+                        onChange={e => setCrmLink(row.staff_name, e.target.value)}>
+                  <option value="">— not linked —</option>
+                  {crmMap.crm_users.map(u => (
+                    <option key={u.id} value={u.id}>{u.name} ({u.username}{u.department ? ` · ${u.department}` : ""})</option>
+                  ))}
+                </select>
+                {!row.crm_user_id && row.suggested && (
+                  <Button size="sm" variant="outline" onClick={() => setCrmLink(row.staff_name, row.suggested.id)}>
+                    Link to {row.suggested.name}
+                  </Button>
+                )}
+                {row.crm_user_id && <Badge className="bg-emerald-100 text-emerald-800">Linked</Badge>}
+              </div>
+            ))}
+            {crmMap && crmMap.staff.length === 0 && <p className="text-muted-foreground">No packing staff configured.</p>}
           </CardContent>
         </Card>
       )}
