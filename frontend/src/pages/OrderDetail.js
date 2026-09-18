@@ -1665,6 +1665,27 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving, onDirtyChan
   const [itemPackedBy, setItemPackedBy] = useState(order.packaging?.item_packed_by || []);
   const [boxPackedBy, setBoxPackedBy] = useState(order.packaging?.box_packed_by || []);
   const [checkedBy, setCheckedBy] = useState(order.packaging?.checked_by || []);
+  // Live names from the My Work tracker; merged in so nobody selects by hand.
+  const [trackedBy, setTrackedBy] = useState({ item_packed_by: [], box_packed_by: [], checked_by: [] });
+  useEffect(() => {
+    let alive = true;
+    api.get(`/work/packed-by/${order.id}`).then(r => {
+      if (!alive) return;
+      const t = r.data || {};
+      setTrackedBy({ item_packed_by: t.item_packed_by || [], box_packed_by: t.box_packed_by || [], checked_by: t.checked_by || [] });
+      const merge = (cur, add) => [...cur, ...(add || []).filter(n => !cur.includes(n))];
+      const now = listsRef.current;
+      const next = [merge(now.itemPackedBy, t.item_packed_by), merge(now.boxPackedBy, t.box_packed_by), merge(now.checkedBy, t.checked_by)];
+      if (next[0].length === now.itemPackedBy.length && next[1].length === now.boxPackedBy.length && next[2].length === now.checkedBy.length) return;
+      autoFill.current = true;      // not a user edit: must not raise the unsaved-changes warning
+      setItemPackedBy(next[0]); setBoxPackedBy(next[1]); setCheckedBy(next[2]);
+    }).catch(() => {});
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order.id]);
+  const autoFill = useRef(false);
+  const listsRef = useRef({ itemPackedBy, boxPackedBy, checkedBy });
+  listsRef.current = { itemPackedBy, boxPackedBy, checkedBy };
   const [itemImages, setItemImages] = useState(order.packaging?.item_images || {});
   const [orderImages, setOrderImages] = useState(order.packaging?.order_images || []);
   const [packedBoxImages, setPackedBoxImages] = useState(order.packaging?.packed_box_images || []);
@@ -1676,6 +1697,7 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving, onDirtyChan
   const firstRender = useRef(true);
   useEffect(() => {
     if (firstRender.current) { firstRender.current = false; return; }
+    if (autoFill.current) { autoFill.current = false; return; }
     onDirtyChange?.(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemPackedBy, boxPackedBy, checkedBy, itemImages, orderImages, packedBoxImages, weightKg, numBoxes]);
@@ -1733,10 +1755,17 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving, onDirtyChan
 
       <Separator />
 
-      {/* Staff Selection */}
-      {[["Item Packed By", itemPackedBy, setItemPackedBy], ["Box Packed By", boxPackedBy, setBoxPackedBy], ["Checked By", checkedBy, setCheckedBy]].map(([label, list, setter]) => (
+      {/* Staff Selection - filled by the My Work tracker; tap only to correct */}
+      {Object.values(trackedBy).some(v => v.length > 0) && (
+        <p className="text-xs text-emerald-700 dark:text-emerald-400">
+          Names below are filled automatically from My Work. You do not need to select them.
+        </p>
+      )}
+      {[["Item Packed By", itemPackedBy, setItemPackedBy, "item_packed_by"], ["Box Packed By", boxPackedBy, setBoxPackedBy, "box_packed_by"], ["Checked By", checkedBy, setCheckedBy, "checked_by"]].map(([label, list, setter, field]) => (
         <div key={label}>
-          <Label className="text-sm">{label}</Label>
+          <Label className="text-sm">{label}
+            {trackedBy[field]?.length > 0 && <span className="ml-2 text-xs font-normal text-emerald-700 dark:text-emerald-400">from My Work: {trackedBy[field].join(", ")}</span>}
+          </Label>
           <div className="flex flex-wrap gap-2 mt-1">
             {staffList.map(s => (
               <Button key={s.id} variant={list.includes(s.name) ? "default" : "outline"} size="sm" onClick={() => toggleStaff(list, setter, s.name)}>

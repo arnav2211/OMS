@@ -1962,6 +1962,11 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
         packaging["box_packed_by"] = updates["box_packed_by"]
     if "checked_by" in updates:
         packaging["checked_by"] = updates["checked_by"]
+    # Names recorded by the work tracker are authoritative and merged in here.
+    # Orders the tracker never touched skip this entirely.
+    _tracked = await _work_names_for_order(order_id)
+    if any(_tracked.values()) or packaging.get("tracker_added"):
+        _work_merge_packed_by(packaging, _tracked)
     if "num_boxes" in updates:
         packaging["num_boxes"] = updates["num_boxes"]
     # Box dimensions in cm. Optional for DTDC/Amazon, but India Post prices on
@@ -2849,6 +2854,59 @@ def _work_public(sess: dict) -> dict:
     return out
 
 
+# The tracker fills the packing form's three "by" fields, so nobody picks
+# names by hand. Weighing has no field of its own.
+WORK_STEP_TO_FIELD = {"filling": "item_packed_by", "boxing": "box_packed_by", "checking": "checked_by"}
+WORK_MIN_COUNTED_SEC = 30      # a start-then-DONE slip of the finger is not credited
+
+
+async def _work_names_for_order(order_id: str) -> dict:
+    """{field: [names]} from the tracker: finished work of 30 s+, plus anything running."""
+    out = {f: [] for f in WORK_STEP_TO_FIELD.values()}
+    async for sess in db.work_sessions.find({"order_id": order_id, "kind": "order"},
+                                            {"_id": 0}).sort("started_at", 1):
+        field = WORK_STEP_TO_FIELD.get(sess.get("step") or "")
+        if not field:
+            continue
+        if sess.get("status") != "active" and int(sess.get("duration_sec") or 0) < WORK_MIN_COUNTED_SEC:
+            continue
+        if sess["staff"] not in out[field]:
+            out[field].append(sess["staff"])
+    return out
+
+
+def _work_merge_packed_by(packaging: dict, tracked: dict) -> dict:
+    """Hand-picked names stay; names the tracker added earlier are replaced by
+    what it says now (so a corrected entry propagates). Mutates and returns."""
+    prev_auto = packaging.get("tracker_added") or {}
+    for field, names in tracked.items():
+        manual = [n for n in (packaging.get(field) or []) if n not in (prev_auto.get(field) or [])]
+        packaging[field] = manual + [n for n in names if n not in manual]
+    packaging["tracker_added"] = tracked
+    return packaging
+
+
+async def _work_sync_packed_by(order_id: Optional[str]):
+    """Push tracker names onto the order. Dispatched/cancelled orders and
+    orders the tracker never touched are left exactly as they are."""
+    if not order_id:
+        return
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0, "status": 1, "packaging": 1})
+    if not order or order.get("status") in ("dispatched", "cancelled"):
+        return
+    tracked = await _work_names_for_order(order_id)
+    packaging = dict(order.get("packaging") or {})
+    if not any(tracked.values()) and not packaging.get("tracker_added"):
+        return
+    _work_merge_packed_by(packaging, tracked)
+    # Dotted paths: only these four keys change, so a photo upload saved at
+    # the same moment is never overwritten.
+    await db.orders.update_one({"id": order_id}, {"$set": {
+        **{f"packaging.{f}": packaging[f] for f in WORK_STEP_TO_FIELD.values()},
+        "packaging.tracker_added": packaging["tracker_added"],
+    }})
+
+
 async def _work_close(sess: dict, ended: datetime, status: str, remark: Optional[str] = None):
     started = datetime.fromisoformat(sess["started_at"])
     if ended < started:
@@ -2862,6 +2920,8 @@ async def _work_close(sess: dict, ended: datetime, status: str, remark: Optional
     if remark:
         fields["remark"] = remark[:300]     # what got done, e.g. "cleaned 40 diffusers"
     await db.work_sessions.update_one({"id": sess["id"]}, {"$set": fields})
+    if sess.get("kind") == "order":
+        await _work_sync_packed_by(sess.get("order_id"))
 
 
 async def _work_sweep():
@@ -3013,6 +3073,8 @@ async def work_start(req: WorkStartRequest, user=Depends(get_current_user)):
     for prev in await db.work_sessions.find({"staff": name, "status": "active"}, {"_id": 0}).to_list(10):
         await _work_close(prev, now, "done")
     await db.work_sessions.insert_one(doc)
+    if req.kind == "order":
+        await _work_sync_packed_by(req.order_id)
     return {"ok": True, "session": _work_public(doc)}
 
 
@@ -3164,6 +3226,8 @@ async def work_start_group(req: WorkGroupStartRequest, user=Depends(get_current_
                "device": (req.device or "")[:40], "logged_in_as": user.get("username") or user.get("name")}
         await db.work_sessions.insert_one(dict(doc))
         started.append(_work_public(doc))
+    if req.kind == "order":
+        await _work_sync_packed_by(req.order_id)
     return {"ok": True, "sessions": started}
 
 
@@ -3325,6 +3389,12 @@ async def work_day(date: str = "", staff: str = "", user=Depends(get_current_use
         summ = _work_staff_summary(rows)[name]
         timelines.append({"staff": name, "items": items, "summary": summ})
     return {"day": day, "timelines": timelines}
+
+
+@api_router.get("/work/packed-by/{order_id}")
+async def work_packed_by(order_id: str, user=Depends(get_current_user)):
+    """Names the tracker has for this order's packing form fields."""
+    return await _work_names_for_order(order_id)
 
 
 @api_router.get("/work/order/{order_id}")
