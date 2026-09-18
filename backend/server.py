@@ -2925,11 +2925,16 @@ async def work_staff(user=Depends(get_current_user)):
 async def work_set_pin(req: WorkPinRequest, admin=Depends(require_admin)):
     """Admin sets or resets an executive's PIN (4-6 digits)."""
     pin = req.pin.strip()
-    if not pin.isdigit() or not 4 <= len(pin) <= 6:
-        raise HTTPException(status_code=400, detail="PIN must be 4 to 6 digits")
+    if not pin.isdigit() or len(pin) != 4:
+        raise HTTPException(status_code=400, detail="PIN must be exactly 4 digits")
     staff = await db.packaging_staff.find_one({"name": req.name.strip(), "active": True})
     if not staff:
         raise HTTPException(status_code=404, detail="Name not found")
+    # The PIN alone identifies a person on the shared phones, so no two may match.
+    async for other in db.staff_pins.find({"name": {"$ne": staff["name"]}}, {"_id": 0}):
+        same = (other.get("pin") == pin) if other.get("pin") else verify_password(pin, other["pin_hash"])
+        if same:
+            raise HTTPException(status_code=409, detail="This PIN is already used by someone else. Pick another.")
     await db.staff_pins.update_one({"name": staff["name"]},
                                    {"$set": {"pin_hash": hash_password(pin),
                                              "pin": pin,   # admin-visible lookup
@@ -3029,6 +3034,160 @@ async def work_confirm(req: WorkPinRequest, user=Depends(get_current_user)):
     r = await db.work_sessions.update_many({"staff": name, "status": "active"},
                                            {"$set": {"last_confirmed_at": _work_now().isoformat()}})
     return {"ok": True, "confirmed": r.modified_count}
+
+
+WORK_PIN_MAX_FAILS = 5
+WORK_PIN_LOCK_MIN = 2
+
+
+async def _work_pin_guard(key: str):
+    doc = await db.work_pin_locks.find_one({"key": key})
+    if doc and (doc.get("locked_until") or "") > _work_now().isoformat():
+        raise HTTPException(status_code=429, detail="Too many wrong PINs. Wait 2 minutes.")
+
+
+async def _work_pin_fail(key: str):
+    doc = await db.work_pin_locks.find_one({"key": key}) or {}
+    fails = int(doc.get("fails") or 0) + 1
+    upd = {"fails": fails}
+    if fails >= WORK_PIN_MAX_FAILS:
+        upd = {"fails": 0, "locked_until": (_work_now() + timedelta(minutes=WORK_PIN_LOCK_MIN)).isoformat()}
+    await db.work_pin_locks.update_one({"key": key}, {"$set": upd}, upsert=True)
+
+
+async def _work_identify(pin: str, key: str) -> str:
+    """Who owns this PIN. Guessing is rate-limited per phone login."""
+    await _work_pin_guard(key)
+    pin = str(pin or "").strip()
+    active = {s["name"] for s in await db.packaging_staff.find({"active": True}, {"_id": 0, "name": 1}).to_list(200)}
+    matches = []
+    if pin.isdigit() and len(pin) >= 4:
+        async for rec in db.staff_pins.find({}, {"_id": 0}):
+            if rec["name"] not in active:
+                continue
+            # PINs set before the plain copy existed can only be hash-checked.
+            ok = (rec.get("pin") == pin) if rec.get("pin") else verify_password(pin, rec["pin_hash"])
+            if ok:
+                matches.append(rec["name"])
+    if len(matches) == 1:
+        await db.work_pin_locks.delete_one({"key": key})
+        return matches[0]
+    if len(matches) > 1:
+        raise HTTPException(status_code=409, detail="Two people have this PIN. Ask admin to reset.")
+    await _work_pin_fail(key)
+    raise HTTPException(status_code=403, detail="Wrong PIN")
+
+
+class WorkIdentifyRequest(BaseModel):
+    pin: str
+    device: Optional[str] = None
+
+
+class WorkGroupStartRequest(BaseModel):
+    members: List[WorkPinRequest]
+    kind: str = "order"
+    order_id: Optional[str] = None
+    step: Optional[str] = None
+    note: Optional[str] = None
+    device: Optional[str] = None
+
+
+class WorkGroupStopRequest(BaseModel):
+    pin: str
+    session_id: str
+    device: Optional[str] = None
+
+
+def _work_lock_key(user: dict, device: Optional[str]) -> str:
+    return f"{user.get('id') or user.get('username')}:{(device or '')[:40]}"
+
+
+@api_router.post("/work/pin/identify")
+async def work_identify(req: WorkIdentifyRequest, user=Depends(get_current_user)):
+    """PIN-only sign-in for the shared phones: returns whose PIN it is and
+    what that person is doing right now (starting new work will end it)."""
+    _work_require(user, WORK_DO_ROLES)
+    name = await _work_identify(req.pin, _work_lock_key(user, req.device))
+    cur = await db.work_sessions.find_one({"staff": name, "status": "active"}, {"_id": 0})
+    return {"ok": True, "name": name, "current": _work_public(cur) if cur else None}
+
+
+@api_router.post("/work/start-group")
+async def work_start_group(req: WorkGroupStartRequest, user=Depends(get_current_user)):
+    """One task picked once, started for everyone who signed it with a PIN."""
+    _work_require(user, WORK_DO_ROLES)
+    if not req.members:
+        raise HTTPException(status_code=400, detail="Nobody entered a PIN")
+    names = []
+    for m in req.members:
+        n = await _work_staff_auth(m.name, m.pin)
+        if n not in names:
+            names.append(n)
+    await _work_sweep()
+    base = {"kind": req.kind, "order_id": None, "order_number": None, "customer_name": None,
+            "step": None, "note": None}
+    if req.kind == "order":
+        if not req.order_id or req.step not in WORK_STEP_LABEL:
+            raise HTTPException(status_code=400, detail="Pick an order and a step")
+        order = await db.orders.find_one({"id": req.order_id}, {"_id": 0, "order_number": 1, "customer_name": 1})
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+        base.update({"order_id": req.order_id, "order_number": order.get("order_number"),
+                     "customer_name": order.get("customer_name"), "step": req.step})
+    elif req.kind == "other":
+        note = (req.note or "").strip()
+        if not note:
+            raise HTTPException(status_code=400, detail="Say or type what work you are doing")
+        base["note"] = note[:200]
+    else:
+        raise HTTPException(status_code=400, detail="kind must be order or other")
+    now = _work_now()
+    group_id = str(uuid.uuid4())
+    started = []
+    for name in names:
+        for prev in await db.work_sessions.find({"staff": name, "status": "active"}, {"_id": 0}).to_list(10):
+            await _work_close(prev, now, "done")
+        doc = {"id": str(uuid.uuid4()), "staff": name, **base, "group_id": group_id,
+               "started_at": now.isoformat(), "last_confirmed_at": now.isoformat(),
+               "ended_at": None, "duration_sec": None, "status": "active",
+               "device": (req.device or "")[:40], "logged_in_as": user.get("username") or user.get("name")}
+        await db.work_sessions.insert_one(dict(doc))
+        started.append(_work_public(doc))
+    return {"ok": True, "sessions": started}
+
+
+def _work_task_query(sess: dict) -> dict:
+    """Everyone active on the same task: same order+step, or the same group for other work."""
+    if sess.get("kind") == "order":
+        return {"status": "active", "kind": "order", "order_id": sess["order_id"], "step": sess["step"]}
+    return {"status": "active", "group_id": sess.get("group_id") or "-none-"} if sess.get("group_id") \
+        else {"status": "active", "id": sess["id"]}
+
+
+@api_router.post("/work/stop-group")
+async def work_stop_group(req: WorkGroupStopRequest, user=Depends(get_current_user)):
+    """'Done for all': any one member's PIN ends the task for everybody on it."""
+    _work_require(user, WORK_DO_ROLES)
+    name = await _work_identify(req.pin, _work_lock_key(user, req.device))
+    sess = await db.work_sessions.find_one({"id": req.session_id, "status": "active"}, {"_id": 0})
+    if not sess:
+        raise HTTPException(status_code=404, detail="This work is already finished")
+    members = await db.work_sessions.find(_work_task_query(sess), {"_id": 0}).to_list(50)
+    if name not in {m["staff"] for m in members}:
+        raise HTTPException(status_code=403, detail=f"{name} is not working on this. Only someone doing it can finish it for all.")
+    now = _work_now()
+    for m in members:
+        await _work_close(m, now, "done")
+    return {"ok": True, "closed": [m["staff"] for m in members], "by": name}
+
+
+@api_router.get("/work/active")
+async def work_active(user=Depends(get_current_user)):
+    """Everything running right now - the shared phone's home board."""
+    _work_require(user, WORK_DO_ROLES)
+    await _work_sweep()
+    rows = await db.work_sessions.find({"status": "active"}, {"_id": 0}).sort("started_at", 1).to_list(200)
+    return [_work_public(r) for r in rows]
 
 
 @api_router.get("/work/me")

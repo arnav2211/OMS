@@ -114,7 +114,7 @@ export default function PackingLive() {
   };
   const setPin = async (name) => {
     const pin = (pins[name] || "").trim();
-    if (!/^\d{4,6}$/.test(pin)) return toast.error("PIN must be 4 to 6 digits");
+    if (!/^\d{4}$/.test(pin)) return toast.error("PIN must be exactly 4 digits");
     try {
       await api.put("/work/pin", { name, pin });
       toast.success(`PIN set for ${name}`);
@@ -306,7 +306,7 @@ export default function PackingLive() {
         <Card>
           <CardHeader><CardTitle className="text-base">Executive PINs</CardTitle></CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-sm text-muted-foreground">Each executive needs a 4–6 digit PIN to start work on the shared phones. Names come from Packaging Staff in Settings.</p>
+            <p className="text-sm text-muted-foreground">Each executive needs their own 4-digit PIN. On the shared phones the PIN alone says who they are, so no two people can have the same one. Names come from Packaging Staff in Settings.</p>
             {staff.map(s => (
               <div key={s.name} className="flex items-center gap-2 flex-wrap">
                 <span className="w-40 font-medium">{s.name}</span>
@@ -314,7 +314,7 @@ export default function PackingLive() {
                   ? <Badge className="bg-emerald-100 text-emerald-800 font-mono text-sm">{s.pin ? `PIN ${s.pin}` : "PIN set (reset to see)"}</Badge>
                   : <Badge variant="outline">No PIN</Badge>}
                 <Input className="w-32" placeholder="New PIN" inputMode="numeric" value={pins[s.name] || ""}
-                       onChange={e => setPins(p => ({ ...p, [s.name]: e.target.value.replace(/\D/g, "").slice(0, 6) }))} />
+                       onChange={e => setPins(p => ({ ...p, [s.name]: e.target.value.replace(/\D/g, "").slice(0, 4) }))} />
                 <Button size="sm" onClick={() => setPin(s.name)}>{s.has_pin ? "Reset" : "Set"}</Button>
               </div>
             ))}
