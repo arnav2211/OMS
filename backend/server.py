@@ -5490,10 +5490,19 @@ async def upload_amazon_pdf(
 
     created = []
     duplicates = []
+    enriched = []
     for p in parsed:
         existing = await db.amazon_orders.find_one({"amazon_order_id": p["amazon_order_id"]}, {"_id": 0})
         if existing:
-            duplicates.append(p["amazon_order_id"])
+            if existing.get("source") == "sp_api" and not existing.get("pdf_enriched"):
+                # The seller API cannot see the buyer's name, street or phone.
+                await db.amazon_orders.update_one({"id": existing["id"]}, {"$set": {
+                    "customer_name": p["customer_name"], "address": p["address"],
+                    "phone": p.get("phone", ""), "pdf_enriched": True,
+                    "updated_at": datetime.now(timezone.utc).isoformat()}})
+                enriched.append(p["amazon_order_id"])
+            else:
+                duplicates.append(p["amazon_order_id"])
             continue
 
         am_number = await get_next_am_number()
@@ -5527,7 +5536,8 @@ async def upload_amazon_pdf(
         order.pop("_id", None)
         created.append(order)
 
-    return {"created": len(created), "duplicates": len(duplicates), "duplicate_ids": duplicates, "orders": created}
+    return {"created": len(created), "duplicates": len(duplicates), "duplicate_ids": duplicates,
+            "enriched": len(enriched), "enriched_ids": enriched, "orders": created}
 
 
 # ─── Amazon product formulations ─────────────────────────────────────────
@@ -8361,6 +8371,220 @@ async def amazon_manual_dispatch(req: AmazonDispatchRequest, user=Depends(get_cu
         docket=docket, slip_url=(req.slip_image_url or "").strip(),
     )
     return {"ok": True, **res}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AMAZON SELLER ORDERS (SP-API)  - separate from Amazon Shipping above.
+# Pulls marketplace orders into the existing Amazon module (amazon_orders),
+# keeps Amazon's own status on each, and closes the loop: an order Amazon
+# shows as picked up / shipped is dispatched here, a cancelled one is
+# cancelled here. Buyer name, street and phone are NOT available to this
+# app (restricted roles), so an uploaded PDF enriches a synced order.
+# ═══════════════════════════════════════════════════════════════════════════
+SPAPI = {
+    "client_id": os.environ.get("AMZ_SP_CLIENT_ID", ""),
+    "client_secret": os.environ.get("AMZ_SP_CLIENT_SECRET", ""),
+    "refresh_token": os.environ.get("AMZ_SP_REFRESH_TOKEN", ""),
+    "endpoint": os.environ.get("AMZ_SP_ENDPOINT", "https://sellingpartnerapi-eu.amazon.com").rstrip("/"),
+    "marketplace": os.environ.get("AMZ_SP_MARKETPLACE", "A21TJRUUN4KGV"),   # Amazon.in
+}
+SPAPI_SYNC_INTERVAL_SECONDS = int(os.environ.get("AMZ_SP_SYNC_SECONDS", "300"))
+_spapi_token_cache = {"token": "", "expires": 0.0}
+_spapi_sync_lock = asyncio.Lock()
+
+# Easy Ship states at or after the courier's pickup scan. Scheduling a pickup
+# is not dispatch - the parcel has to actually leave.
+SPAPI_EASYSHIP_GONE = {"PickedUp", "AtOriginFC", "AtDestinationFC", "OutForDelivery", "Delivered",
+                       "RejectedByBuyer", "Undeliverable", "ReturningToSeller", "ReturnedToSeller", "Damaged", "Lost"}
+
+
+def _spapi_configured() -> bool:
+    return bool(SPAPI["client_id"] and SPAPI["client_secret"] and SPAPI["refresh_token"])
+
+
+async def _spapi_token() -> str:
+    import time
+    if _spapi_token_cache["token"] and _spapi_token_cache["expires"] > time.time() + 60:
+        return _spapi_token_cache["token"]
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post("https://api.amazon.com/auth/o2/token", data={
+            "grant_type": "refresh_token", "refresh_token": SPAPI["refresh_token"],
+            "client_id": SPAPI["client_id"], "client_secret": SPAPI["client_secret"]})
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Amazon login failed: {r.text[:200]}")
+    data = r.json()
+    _spapi_token_cache.update(token=data["access_token"], expires=time.time() + int(data.get("expires_in", 3600)))
+    return data["access_token"]
+
+
+async def _spapi_get(path: str, params: dict) -> dict:
+    """GET with polite retries: the Orders API throttles hard (HTTP 429)."""
+    token = await _spapi_token()
+    for attempt in range(5):
+        async with httpx.AsyncClient(timeout=40) as c:
+            r = await c.get(f"{SPAPI['endpoint']}{path}", params=params,
+                            headers={"x-amz-access-token": token, "accept": "application/json"})
+        if r.status_code == 429:
+            await asyncio.sleep(3 * (attempt + 1))
+            continue
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"Amazon API {path}: {r.status_code} {r.text[:200]}")
+        return r.json().get("payload") or {}
+    raise HTTPException(status_code=502, detail=f"Amazon API {path}: still throttled")
+
+
+def _spapi_meta(o: dict) -> dict:
+    """Amazon-side facts refreshed on every sync; never touches our own fields."""
+    return {
+        "amazon_status": o.get("OrderStatus"),
+        "easy_ship_status": o.get("EasyShipShipmentStatus") or "",
+        "latest_ship_date": o.get("LatestShipDate") or "",
+        "purchase_date": o.get("PurchaseDate") or "",
+        "is_cod": (o.get("PaymentMethod") or "").upper() == "COD",
+        "is_prime": bool(o.get("IsPrime")),
+        "amazon_last_update": o.get("LastUpdateDate") or "",
+    }
+
+
+async def _spapi_build_order(o: dict) -> dict:
+    items_payload = await _spapi_get(f"/orders/v0/orders/{o['AmazonOrderId']}/orderItems", {})
+    items = []
+    for it in items_payload.get("OrderItems") or []:
+        qty = int(it.get("QuantityOrdered") or 0)
+        if qty <= 0:
+            continue
+        line = float((it.get("ItemPrice") or {}).get("Amount") or 0) + float((it.get("ItemTax") or {}).get("Amount") or 0)
+        items.append({"product_name": (it.get("Title") or "").strip(), "quantity": qty, "unit": "pcs",
+                      "unit_price": round(line / qty, 2), "amount": round(line, 2),
+                      "sku": it.get("SellerSKU") or "", "asin": it.get("ASIN") or "",
+                      "order_item_id": it.get("OrderItemId") or ""})
+    sa = o.get("ShippingAddress") or {}
+    place = ", ".join(x for x in [sa.get("City"), sa.get("StateOrRegion")] if x)
+    if sa.get("PostalCode"):
+        place = f"{place} - {sa['PostalCode']}" if place else sa["PostalCode"]
+    easy = bool(o.get("EasyShipShipmentStatus"))
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "id": str(uuid.uuid4()),
+        "am_order_number": await get_next_am_number(),
+        "amazon_order_id": o["AmazonOrderId"],
+        "ship_type": "easy_ship" if easy else "self_ship",
+        "shipping_method": "amazon" if easy else "courier",
+        "courier_name": "",
+        # Buyer name / street / phone need restricted roles; the PDF upload fills them in.
+        "customer_name": f"Amazon customer ({sa.get('City') or 'India'})",
+        "address": place, "phone": "",
+        "items": items,
+        "grand_total": float((o.get("OrderTotal") or {}).get("Amount") or sum(i["amount"] for i in items)),
+        "status": "new",
+        "packaging": {"item_packed_by": [], "box_packed_by": [], "checked_by": [],
+                      "item_images": {}, "order_images": [], "packed_box_images": []},
+        "dispatch": {},
+        "source": "sp_api",
+        **_spapi_meta(o),
+        "created_at": now, "updated_at": now,
+    }
+
+
+async def _spapi_sync(lookback_hours: Optional[int] = None) -> dict:
+    """One pass: new orders in, Amazon status refreshed, shipped -> dispatched, cancelled -> cancelled."""
+    if not _spapi_configured():
+        raise HTTPException(status_code=400, detail="Amazon seller API is not configured")
+    async with _spapi_sync_lock:
+        state = await db.settings.find_one({"_id": "spapi_sync"}) or {}
+        now = datetime.now(timezone.utc)
+        if lookback_hours:
+            since = now - timedelta(hours=lookback_hours)
+        elif state.get("last_run"):
+            since = datetime.fromisoformat(state["last_run"]) - timedelta(minutes=15)   # overlap: never miss one
+        else:
+            since = now - timedelta(days=7)
+        params = {"MarketplaceIds": SPAPI["marketplace"], "MaxResultsPerPage": 100,
+                  "LastUpdatedAfter": since.strftime("%Y-%m-%dT%H:%M:%SZ")}
+        orders, pages = [], 0
+        while True:
+            payload = await _spapi_get("/orders/v0/orders", params)
+            orders += payload.get("Orders") or []
+            pages += 1
+            nxt = payload.get("NextToken")
+            if not nxt or pages >= 10:
+                break
+            params = {"MarketplaceIds": SPAPI["marketplace"], "NextToken": nxt}
+            await asyncio.sleep(2)
+
+        res = {"seen": len(orders), "created": [], "dispatched": [], "cancelled": [], "updated": 0}
+        for o in orders:
+            aid, st = o.get("AmazonOrderId"), o.get("OrderStatus")
+            if not aid or o.get("FulfillmentChannel") == "AFN":          # FBA is not ours to pack
+                continue
+            existing = await db.amazon_orders.find_one({"amazon_order_id": aid}, {"_id": 0})
+            if not existing:
+                if st in ("Unshipped", "PartiallyShipped"):
+                    doc = await _spapi_build_order(o)
+                    await db.amazon_orders.insert_one(dict(doc))
+                    res["created"].append(doc["am_order_number"])
+                    await asyncio.sleep(2)                                # orderItems rate limit
+                continue
+            upd = {**_spapi_meta(o), "updated_at": now.isoformat()}
+            gone = (st == "Shipped") if not o.get("EasyShipShipmentStatus") \
+                else (o.get("EasyShipShipmentStatus") in SPAPI_EASYSHIP_GONE)
+            if st == "Canceled" and existing.get("status") not in ("dispatched", "cancelled"):
+                upd["status"] = "cancelled"
+                upd["cancelled_at"] = now.isoformat()
+                res["cancelled"].append(existing.get("am_order_number"))
+            elif gone and existing.get("status") not in ("dispatched", "cancelled"):
+                upd["status"] = "dispatched"
+                upd["dispatch"] = {**(existing.get("dispatch") or {}), "dispatched_at": now.isoformat(),
+                                   "dispatched_by": "Amazon (auto)", "auto": True,
+                                   "was_status": existing.get("status")}
+                res["dispatched"].append(existing.get("am_order_number"))
+            else:
+                res["updated"] += 1
+            await db.amazon_orders.update_one({"id": existing["id"]}, {"$set": upd})
+        await db.settings.update_one({"_id": "spapi_sync"}, {"$set": {
+            "last_run": now.isoformat(), "last_result": {k: (v if isinstance(v, int) else len(v)) for k, v in res.items()},
+            "last_error": ""}}, upsert=True)
+        return res
+
+
+@api_router.post("/amazon/sp/sync")
+async def spapi_sync_now(hours: int = 0, user=Depends(get_current_user)):
+    """Pull from Amazon right now. `hours` widens the look-back (admin catch-up)."""
+    if user["role"] not in ["admin", "packaging", "dispatch"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return await _spapi_sync(min(max(hours, 0), 24 * 30) or None)
+
+
+@api_router.get("/amazon/sp/status")
+async def spapi_status(user=Depends(get_current_user)):
+    state = await db.settings.find_one({"_id": "spapi_sync"}, {"_id": 0}) or {}
+    pending = await db.amazon_orders.count_documents({"easy_ship_status": "PendingSchedule",
+                                                      "status": {"$nin": ["dispatched", "cancelled"]}})
+    return {"configured": _spapi_configured(), "interval_seconds": SPAPI_SYNC_INTERVAL_SECONDS,
+            "pending_schedule": pending, **state}
+
+
+async def _spapi_sync_loop():
+    await asyncio.sleep(45)
+    while True:
+        try:
+            await _spapi_sync()
+        except Exception as e:
+            logging.error(f"Amazon seller sync error: {e}")
+            try:
+                await db.settings.update_one({"_id": "spapi_sync"}, {"$set": {
+                    "last_error": str(getattr(e, "detail", e))[:300],
+                    "last_error_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+            except Exception:
+                pass
+        await asyncio.sleep(SPAPI_SYNC_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def _start_spapi_sync():
+    if _spapi_configured():
+        asyncio.create_task(_spapi_sync_loop())
+        logging.info(f"Amazon seller order sync every {SPAPI_SYNC_INTERVAL_SECONDS}s")
 
 
 async def _amazon_sync_loop():

@@ -18,6 +18,7 @@ const STATUS_BADGE = {
   packaging: "bg-yellow-100 text-yellow-800 border-yellow-200",
   packed: "bg-purple-100 text-purple-800 border-purple-200",
   dispatched: "bg-green-100 text-green-800 border-green-200",
+  cancelled: "bg-red-100 text-red-800 border-red-200",
 };
 
 const COURIERS = ["DTDC", "Anjani", "India Post", "Others"];
@@ -37,6 +38,21 @@ export default function AmazonOrders() {
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   useEffect(() => { loadOrders(); }, []);
+
+  const [sp, setSp] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const loadSp = async () => { try { const r = await api.get("/amazon/sp/status"); setSp(r.data); } catch { /* optional */ } };
+  const syncAmazon = async () => {
+    setSyncing(true);
+    try {
+      const r = await api.post("/amazon/sp/sync");
+      const d = r.data;
+      toast.success(`Amazon: ${d.created.length} new, ${d.dispatched.length} dispatched, ${d.cancelled.length} cancelled`);
+      loadOrders(); loadSp();
+    } catch (e) { toast.error(e.response?.data?.detail || "Amazon sync failed"); }
+    finally { setSyncing(false); }
+  };
+  useEffect(() => { loadSp(); }, []);
 
   const loadOrders = async () => {
     setLoading(true);
@@ -90,11 +106,25 @@ export default function AmazonOrders() {
     <div className="space-y-4" data-testid="amazon-orders-page">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-xl font-bold">Amazon Orders</h1>
-        {isAdmin && (
-          <Button onClick={() => { setShowUpload(true); setUploadResult(null); }} data-testid="upload-pdf-btn">
-            <Upload className="w-4 h-4 mr-2" /> Upload PDF
-          </Button>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {sp?.configured && (
+            <span className="text-xs text-muted-foreground">
+              Amazon sync: {sp.last_run ? new Date(sp.last_run).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "not yet"}
+              {sp.pending_schedule > 0 && <span className="ml-2 text-amber-600 font-medium">{sp.pending_schedule} to schedule pickup</span>}
+              {sp.last_error && <span className="ml-2 text-red-600">sync error</span>}
+            </span>
+          )}
+          {sp?.configured && (
+            <Button variant="outline" onClick={syncAmazon} disabled={syncing} data-testid="amazon-sync-btn">
+              <RefreshCw className={`w-4 h-4 mr-2 ${syncing ? "animate-spin" : ""}`} /> Sync from Amazon
+            </Button>
+          )}
+          {isAdmin && (
+            <Button onClick={() => { setShowUpload(true); setUploadResult(null); }} data-testid="upload-pdf-btn">
+              <Upload className="w-4 h-4 mr-2" /> Upload PDF
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -148,7 +178,17 @@ export default function AmazonOrders() {
                     <TableCell>
                       <Link to={`/amazon-orders/${o.id}`} className="font-mono text-sm text-primary hover:underline font-medium" data-testid={`am-link-${o.id}`}>{o.am_order_number}</Link>
                     </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{o.amazon_order_id}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {o.amazon_order_id}
+                      {o.source === "sp_api" && (
+                        <div className="font-sans mt-0.5 flex gap-1 flex-wrap">
+                          {o.easy_ship_status && <Badge variant="outline" className={`text-[10px] ${o.easy_ship_status === "PendingSchedule" ? "border-amber-500 text-amber-600" : ""}`}>{o.easy_ship_status.replace(/([a-z])([A-Z])/g, "$1 $2")}</Badge>}
+                          {o.status !== "dispatched" && o.latest_ship_date && <span className="text-[10px]">ship by {new Date(o.latest_ship_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</span>}
+                          {o.is_cod && <Badge variant="outline" className="text-[10px]">COD</Badge>}
+                          {!o.pdf_enriched && o.ship_type === "self_ship" && <span className="text-[10px] text-amber-600">upload PDF for address</span>}
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell className="text-sm">{o.customer_name}</TableCell>
                     <TableCell className="text-sm font-mono">{"\u20B9"}{o.grand_total?.toLocaleString("en-IN")}</TableCell>
                     <TableCell className="text-sm whitespace-nowrap">
