@@ -74,7 +74,10 @@ export default function MyWork() {
   const [note, setNote] = useState("");
   const [listening, setListening] = useState(false);
   const recRef = useRef(null);
-  const [pinAsk, setPinAsk] = useState(null);      // {title, hint, run(pin) -> true | "error"}
+  const [pinAsk, setPinAsk] = useState(null);      // {title, hint, remark?, run(pin) -> true | "error"}
+  const [remark, setRemark] = useState("");        // optional note typed/spoken while finishing
+  const remarkRef = useRef("");
+  useEffect(() => { remarkRef.current = remark; }, [remark]);
   const [mine, setMine] = useState(null);          // my-day / my-leave data after PIN
   const [leaveFrom, setLeaveFrom] = useState("");
   const [leaveTo, setLeaveTo] = useState("");
@@ -134,17 +137,17 @@ export default function MyWork() {
 
   // ── PIN-confirmed actions from the board ──
   const askDoneOne = (s) => setPinAsk({
-    title: `${s.staff}: enter your PIN`, hint: `Finish ${taskText(s)}`,
+    title: `${s.staff}: enter your PIN`, hint: `Finish ${taskText(s)}`, remark: true,
     run: async (pin) => {
-      try { await api.post("/work/stop", { name: s.staff, pin }); toast.success(`${s.staff} done. Good work!`); refresh(); return true; }
+      try { await api.post("/work/stop", { name: s.staff, pin, remark: remarkRef.current }); toast.success(`${s.staff} done. Good work!`); refresh(); return true; }
       catch (e) { return err(e, "Wrong PIN"); }
     },
   });
   const askDoneAll = (s, names) => setPinAsk({
-    title: "Done for all", hint: `Any one of ${names.join(", ")}: enter your PIN`,
+    title: "Done for all", hint: `Any one of ${names.join(", ")}: enter your PIN`, remark: true,
     run: async (pin) => {
       try {
-        const r = await api.post("/work/stop-group", { pin, session_id: s.id, device: deviceId() });
+        const r = await api.post("/work/stop-group", { pin, session_id: s.id, device: deviceId(), remark: remarkRef.current });
         toast.success(`Finished for ${r.data.closed.join(", ")}`); refresh(); return true;
       } catch (e) { return err(e, "Wrong PIN"); }
     },
@@ -202,16 +205,28 @@ export default function MyWork() {
   );
 
   const pinDialog = (
-    <Dialog open={!!pinAsk} onOpenChange={(o) => !o && setPinAsk(null)}>
+    <Dialog open={!!pinAsk} onOpenChange={(o) => { if (!o) { setPinAsk(null); setRemark(""); } }}>
       <DialogContent className="max-w-xs">
         <DialogHeader><DialogTitle className="text-xl">{pinAsk?.title}</DialogTitle></DialogHeader>
         {pinAsk?.hint && <p className="text-sm text-muted-foreground -mt-2">{pinAsk.hint}</p>}
+        {pinAsk?.remark && (
+          <div className="space-y-1">
+            <label className="text-sm text-muted-foreground">Note about the work (you can skip this)</label>
+            <div className="flex gap-2">
+              <textarea className="flex-1 border rounded-lg p-2 text-base min-h-[56px] bg-background" value={remark}
+                        onChange={e => setRemark(e.target.value)} placeholder="Example: cleaned 40 diffusers" />
+              <Button variant={listening ? "destructive" : "outline"} className="h-14 w-14 shrink-0" onClick={() => toggleMic(setRemark)} disabled={!canSpeak && !listening}>
+                {listening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+              </Button>
+            </div>
+          </div>
+        )}
         {pinAsk && (
           <PinPad busy={busy} onPin={async (pin) => {
             setBusy(true);
             const res = await pinAsk.run(pin);
             setBusy(false);
-            if (res === true) setPinAsk(null); else toast.error(res);
+            if (res === true) { setPinAsk(null); setRemark(""); } else toast.error(res);
           }} />
         )}
       </DialogContent>
@@ -395,6 +410,7 @@ export default function MyWork() {
               <span>
                 <span className="font-mono text-muted-foreground">{fmtClock(s.started_at)}{s.ended_at ? `–${fmtClock(s.ended_at)}` : ""}</span>
                 {" "}{taskText(s)}
+                {s.remark && <span className="block text-xs text-muted-foreground">Note: {s.remark}</span>}
                 {s.status === "auto_closed" && <span className="text-amber-600 text-xs ml-1">(you forgot DONE)</span>}
               </span>
               <span className="font-mono">{fmtDur(s.status === "active" ? liveSec(s) : s.duration_sec)}</span>

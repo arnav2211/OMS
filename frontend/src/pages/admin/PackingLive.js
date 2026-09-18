@@ -254,7 +254,8 @@ export default function PackingLive() {
                   </div>
                 ) : (
                   <div key={it.id} className={`flex justify-between items-center border rounded px-2 py-1 ${it.status === "active" ? "border-emerald-500" : ""}`}>
-                    <span><span className="font-mono text-muted-foreground mr-2">{fmtClock(it.started_at)}–{it.ended_at ? fmtClock(it.ended_at) : "now"}</span>{what(it)} <StatusBadge s={it} /></span>
+                    <span><span className="font-mono text-muted-foreground mr-2">{fmtClock(it.started_at)}–{it.ended_at ? fmtClock(it.ended_at) : "now"}</span>{what(it)} <StatusBadge s={it} />
+                      {it.remark && <span className="block text-xs text-blue-700 dark:text-blue-300">Note: {it.remark}</span>}</span>
                     <span className="font-mono">{fmtDur(liveSec(it))}</span>
                   </div>
                 ))}
@@ -371,7 +372,7 @@ export default function PackingLive() {
                   <div className="mt-1 space-y-0.5">
                     {st.sessions.map(s => (
                       <div key={s.id} className="flex justify-between text-xs">
-                        <span>{s.staff} · {fmtClock(s.started_at)}–{s.ended_at ? fmtClock(s.ended_at) : "now"} <StatusBadge s={s} /></span>
+                        <span>{s.staff} · {fmtClock(s.started_at)}–{s.ended_at ? fmtClock(s.ended_at) : "now"} <StatusBadge s={s} />{s.remark && <span className="text-blue-700 dark:text-blue-300"> · Note: {s.remark}</span>}</span>
                         <span className="font-mono">{fmtDur(liveSec(s))}</span>
                       </div>
                     ))}

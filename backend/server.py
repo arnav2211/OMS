@@ -2849,15 +2849,19 @@ def _work_public(sess: dict) -> dict:
     return out
 
 
-async def _work_close(sess: dict, ended: datetime, status: str):
+async def _work_close(sess: dict, ended: datetime, status: str, remark: Optional[str] = None):
     started = datetime.fromisoformat(sess["started_at"])
     if ended < started:
         ended = started
-    await db.work_sessions.update_one({"id": sess["id"]}, {"$set": {
+    fields = {
         "ended_at": ended.isoformat(),
         "duration_sec": int((ended - started).total_seconds()),
         "status": status,
-    }})
+    }
+    remark = (remark or "").strip()
+    if remark:
+        fields["remark"] = remark[:300]     # what got done, e.g. "cleaned 40 diffusers"
+    await db.work_sessions.update_one({"id": sess["id"]}, {"$set": fields})
 
 
 async def _work_sweep():
@@ -3012,14 +3016,20 @@ async def work_start(req: WorkStartRequest, user=Depends(get_current_user)):
     return {"ok": True, "session": _work_public(doc)}
 
 
+class WorkStopRequest(BaseModel):
+    name: str
+    pin: str
+    remark: Optional[str] = None
+
+
 @api_router.post("/work/stop")
-async def work_stop(req: WorkPinRequest, user=Depends(get_current_user)):
+async def work_stop(req: WorkStopRequest, user=Depends(get_current_user)):
     _work_require(user, WORK_DO_ROLES)
     name = await _work_staff_auth(req.name, req.pin)
     now = _work_now()
     closed = []
     for sess in await db.work_sessions.find({"staff": name, "status": "active"}, {"_id": 0}).to_list(10):
-        await _work_close(sess, now, "done")
+        await _work_close(sess, now, "done", req.remark)
         closed.append(sess["id"])
     if not closed:
         raise HTTPException(status_code=400, detail="Nothing is running for you")
@@ -3096,6 +3106,7 @@ class WorkGroupStopRequest(BaseModel):
     pin: str
     session_id: str
     device: Optional[str] = None
+    remark: Optional[str] = None
 
 
 def _work_lock_key(user: dict, device: Optional[str]) -> str:
@@ -3177,7 +3188,7 @@ async def work_stop_group(req: WorkGroupStopRequest, user=Depends(get_current_us
         raise HTTPException(status_code=403, detail=f"{name} is not working on this. Only someone doing it can finish it for all.")
     now = _work_now()
     for m in members:
-        await _work_close(m, now, "done")
+        await _work_close(m, now, "done", req.remark)
     return {"ok": True, "closed": [m["staff"] for m in members], "by": name}
 
 
