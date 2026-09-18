@@ -4943,8 +4943,12 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     is_gst = pi.get("gst_applicable", False)
 
     # ── Colours & shared styles ──
-    GREEN   = colors.HexColor('#15803D')
-    LGREEN  = colors.HexColor('#F0FDF4')
+    # Accent colours follow the company's logo: CitSpray green, FragVansh the
+    # navy of its flask mark. The names stay GREEN/LGREEN for the code below.
+    if company["key"] == "fragvansh":
+        ACCENT_HEX, GREEN, LGREEN = '#1B2F5E', colors.HexColor('#1B2F5E'), colors.HexColor('#EEF2FA')
+    else:
+        ACCENT_HEX, GREEN, LGREEN = '#15803D', colors.HexColor('#15803D'), colors.HexColor('#F0FDF4')
     SGRAY   = colors.HexColor('#E5E7EB')
     DGRAY   = colors.HexColor('#374151')
     MGRAY   = colors.HexColor('#6B7280')
@@ -4984,7 +4988,7 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
 
         co_para = Paragraph(
             f"<b><font size=13>{company['name']}</font></b><br/>"
-            f"<font size=8 color='#15803D'><i>{company['brand']}</i></font><br/>"
+            f"<font size=8 color='{ACCENT_HEX}'><i>{company['brand']}</i></font><br/>"
             f"<font size=7.5 color='#374151'>{company['address']}</font><br/>"
             f"<font size=7.5 color='#6B7280'>"
             f"Ph: {company['mobile']}  |  {company['email']}  |  {company['website']}</font><br/>"
