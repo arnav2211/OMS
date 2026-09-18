@@ -99,19 +99,32 @@ export default function MyWork() {
 
   // ── identity ──
   const choosePerson = (name) => { setPendingName(name); setPin(""); };
-  const submitPin = async () => {
-    if (pin.length < 4) return;
+  // `silent` is the automatic try at 4 digits for a PIN of unknown length: a
+  // miss keeps the digits so a longer PIN can still be finished with OK.
+  const submitPin = async (value = pin, silent = false) => {
+    if (value.length < 4 || busy) return;
     setBusy(true);
     try {
-      await api.post("/work/pin/check", { name: pendingName, pin });
-      const id = { name: pendingName, pin };
+      await api.post("/work/pin/check", { name: pendingName, pin: value });
+      const id = { name: pendingName, pin: value };
       sessionStorage.setItem(ID_KEY, JSON.stringify(id));
       setIdentity(id); setPendingName(null); setPin(""); setScreen("home");
     } catch (e) {
-      toast.error(e.response?.data?.detail || "Wrong PIN");
-      setPin("");
+      if (!silent) {
+        toast.error(e.response?.data?.detail || "Wrong PIN");
+        setPin("");
+      }
     } finally { setBusy(false); }
   };
+
+  // No OK tap needed: the PIN checks itself the moment the last digit is in.
+  useEffect(() => {
+    if (!pendingName || pin.length < 4) return;
+    const len = staff.find(s => s.name === pendingName)?.pin_len;
+    if (len) { if (pin.length === len) submitPin(pin, false); }
+    else if (pin.length === 4) submitPin(pin, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pin, pendingName]);
   const switchPerson = () => {
     sessionStorage.removeItem(ID_KEY);
     setIdentity(null); setMe(null); setScreen("home");
@@ -193,7 +206,7 @@ export default function MyWork() {
               ))}
               <Button variant="ghost" className="h-14" onClick={() => setPin("")}>Clear</Button>
               <Button variant="outline" className="h-14 text-2xl" onClick={() => pin.length < 6 && setPin(pin + "0")}>0</Button>
-              <Button className="h-14 text-lg" onClick={submitPin} disabled={busy || pin.length < 4}>
+              <Button className="h-14 text-lg" onClick={() => submitPin(pin, false)} disabled={busy || pin.length < 4}>
                 {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : "OK"}
               </Button>
             </div>

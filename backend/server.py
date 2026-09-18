@@ -2911,9 +2911,10 @@ async def work_config(user=Depends(get_current_user)):
 @api_router.get("/work/staff")
 async def work_staff(user=Depends(get_current_user)):
     staff = await db.packaging_staff.find({"active": True}, {"_id": 0, "name": 1}).sort("name", 1).to_list(100)
-    pins = {p["name"]: p for p in await db.staff_pins.find({}, {"_id": 0, "name": 1, "pin": 1}).to_list(200)}
+    pins = {p["name"]: p for p in await db.staff_pins.find({}, {"_id": 0, "name": 1, "pin": 1, "pin_len": 1}).to_list(200)}
     is_admin = user["role"] == "admin"
     return [{"name": s["name"], "has_pin": s["name"] in pins,
+             "pin_len": (pins.get(s["name"]) or {}).get("pin_len"),
              # Admins see the digits; PINs set before this field existed show
              # as None until reset.
              "pin": (pins.get(s["name"]) or {}).get("pin") if is_admin else None}
@@ -2932,6 +2933,7 @@ async def work_set_pin(req: WorkPinRequest, admin=Depends(require_admin)):
     await db.staff_pins.update_one({"name": staff["name"]},
                                    {"$set": {"pin_hash": hash_password(pin),
                                              "pin": pin,   # admin-visible lookup
+                                             "pin_len": len(pin),  # lets the keypad auto-submit
                                              "updated_at": _work_now().isoformat(),
                                              "updated_by": admin["name"]}}, upsert=True)
     return {"ok": True, "name": staff["name"]}
