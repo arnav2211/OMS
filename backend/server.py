@@ -8541,10 +8541,60 @@ async def _spapi_sync(lookback_hours: Optional[int] = None) -> dict:
             else:
                 res["updated"] += 1
             await db.amazon_orders.update_one({"id": existing["id"]}, {"$set": upd})
+        res["alerts"] = await _spapi_shipby_alerts(now)
         await db.settings.update_one({"_id": "spapi_sync"}, {"$set": {
             "last_run": now.isoformat(), "last_result": {k: (v if isinstance(v, int) else len(v)) for k, v in res.items()},
             "last_error": ""}}, upsert=True)
         return res
+
+
+# Amazon's ship-by deadline is 23:59 IST of the ship-by day, long after the
+# office and the pickup slots close, so the warning fires from mid-afternoon
+# of that day (deadline minus AMZ_SP_WARN_HOURS), and again once it is missed.
+SPAPI_WARN_HOURS = int(os.environ.get("AMZ_SP_WARN_HOURS", "10"))
+
+
+async def _spapi_shipby_alerts(now: datetime) -> list:
+    """One alert per order per stage ('warn', 'overdue') to admin, packaging and dispatch."""
+    raised = []
+    horizon = (now + timedelta(hours=SPAPI_WARN_HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    pending = await db.amazon_orders.find({
+        "source": "sp_api", "status": {"$in": ["new", "packaging", "packed"]},
+        "latest_ship_date": {"$nin": ["", None], "$lte": horizon},
+    }, {"_id": 0}).to_list(200)
+    if not pending:
+        return raised
+    recipients = [u["id"] for u in await db.users.find(
+        {"role": {"$in": ["admin", "packaging", "dispatch"]}, "active": {"$ne": False}},
+        {"_id": 0, "id": 1}).to_list(200)]
+    for o in pending:
+        try:
+            deadline = datetime.fromisoformat(o["latest_ship_date"].replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        unpacked = o.get("status") in ("new", "packaging")
+        unscheduled = o.get("easy_ship_status") == "PendingSchedule"
+        if not (unpacked or unscheduled):
+            continue                       # packed and pickup booked: nothing to chase
+        stage = "overdue" if now > deadline else "warn"
+        if (o.get("shipby_alerted") or {}).get(stage):
+            continue
+        todo = " and ".join(x for x in ["not packed" if unpacked else "", "pickup not scheduled" if unscheduled else ""] if x)
+        by = deadline.astimezone(IST).strftime("%d %b")
+        title = (f"Amazon {o['am_order_number']}: ship-by date MISSED" if stage == "overdue"
+                 else f"Amazon {o['am_order_number']}: must ship today ({by})")
+        await db.admin_alerts.insert_one({
+            "id": str(uuid.uuid4()), "title": title,
+            "message": f"{o['am_order_number']} ({o['amazon_order_id']}) is {todo}. Ship-by date: {by}. "
+                       f"Items: {', '.join(str(i['quantity']) + ' x ' + i['product_name'][:40] for i in o.get('items') or [])}",
+            "sent_by": "System", "sent_by_id": None, "order_id": "", "customer_name": o.get("customer_name") or "",
+            "recipient_ids": recipients, "recipient_roles": ["admin", "packaging", "dispatch"],
+            "acknowledgements": {}, "created_at": now.isoformat(),
+            "meta": {"type": "amazon_ship_by", "stage": stage, "amazon_order_id": o["amazon_order_id"]},
+        })
+        await db.amazon_orders.update_one({"id": o["id"]}, {"$set": {f"shipby_alerted.{stage}": now.isoformat()}})
+        raised.append(f"{o['am_order_number']}:{stage}")
+    return raised
 
 
 @api_router.post("/amazon/sp/sync")

@@ -14,6 +14,17 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { RefreshCw, Camera, Image, Upload, X, CheckCircle } from "lucide-react";
 
+
+// Ship-by urgency from Amazon's latest ship date: "overdue", "today" or "".
+const shipByUrgency = (o) => {
+  if (!o?.latest_ship_date || ["dispatched", "cancelled"].includes(o.status)) return "";
+  const d = new Date(o.latest_ship_date);
+  if (d.getTime() < Date.now()) return "overdue";
+  return d.toDateString() === new Date().toDateString() ? "today" : "";
+};
+const shipByLabel = (o) => o?.latest_ship_date
+  ? new Date(o.latest_ship_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) : "";
+
 const STATUS_BADGE = {
   new: "bg-blue-100 text-blue-800",
   packaging: "bg-yellow-100 text-yellow-800",
@@ -47,6 +58,12 @@ export default function AmazonPacking() {
     if (statusFilter === "packed") return o.status === "packed";
     if (statusFilter === "dispatched") return o.status === "dispatched";
     return true;
+  }).sort((a, b) => {
+    // Work queue: earliest ship-by date first; orders without one keep their place after.
+    if (statusFilter !== "active") return 0;
+    const da = a.latest_ship_date ? new Date(a.latest_ship_date).getTime() : Infinity;
+    const dbb = b.latest_ship_date ? new Date(b.latest_ship_date).getTime() : Infinity;
+    return da - dbb;
   });
 
   const savePackaging = async (data) => {
@@ -105,9 +122,14 @@ export default function AmazonPacking() {
                 {loading && <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>}
                 {!loading && filtered.length === 0 && <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No orders</TableCell></TableRow>}
                 {filtered.map(order => (
-                  <TableRow key={order.id} data-testid={`am-pkg-row-${order.id}`}>
+                  <TableRow key={order.id} className={shipByUrgency(order) ? "bg-red-50 dark:bg-red-950/30" : ""} data-testid={`am-pkg-row-${order.id}`}>
                     <TableCell>
                       <Link to={`/amazon-orders/${order.id}`} className="font-mono text-sm text-primary hover:underline font-medium">{order.am_order_number}</Link>
+                      {shipByLabel(order) && !["dispatched", "cancelled"].includes(order.status) && (
+                        <div className={`text-[11px] ${shipByUrgency(order) ? "text-red-600 font-semibold" : "text-muted-foreground"}`}>
+                          {shipByUrgency(order) === "overdue" ? "SHIP-BY MISSED " : shipByUrgency(order) === "today" ? "SHIP TODAY " : "ship by "}{shipByLabel(order)}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell className="text-sm">{order.customer_name}</TableCell>
                     <TableCell className="text-sm whitespace-nowrap hidden sm:table-cell">

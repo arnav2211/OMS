@@ -13,6 +13,17 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Upload, RefreshCw, Search, Package, Trash2 } from "lucide-react";
 
+
+// Ship-by urgency from Amazon's latest ship date: "overdue", "today" or "".
+const shipByUrgency = (o) => {
+  if (!o?.latest_ship_date || ["dispatched", "cancelled"].includes(o.status)) return "";
+  const d = new Date(o.latest_ship_date);
+  if (d.getTime() < Date.now()) return "overdue";
+  return d.toDateString() === new Date().toDateString() ? "today" : "";
+};
+const shipByLabel = (o) => o?.latest_ship_date
+  ? new Date(o.latest_ship_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) : "";
+
 const STATUS_BADGE = {
   new: "bg-blue-100 text-blue-800 border-blue-200",
   packaging: "bg-yellow-100 text-yellow-800 border-yellow-200",
@@ -174,7 +185,7 @@ export default function AmazonOrders() {
                 {loading && <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>}
                 {!loading && filtered.length === 0 && <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No orders found</TableCell></TableRow>}
                 {filtered.map(o => (
-                  <TableRow key={o.id} className="cursor-pointer hover:bg-accent/50" data-testid={`am-row-${o.id}`}>
+                  <TableRow key={o.id} className={`cursor-pointer hover:bg-accent/50 ${shipByUrgency(o) ? "bg-red-50 dark:bg-red-950/30" : ""}`} data-testid={`am-row-${o.id}`}>
                     <TableCell>
                       <Link to={`/amazon-orders/${o.id}`} className="font-mono text-sm text-primary hover:underline font-medium" data-testid={`am-link-${o.id}`}>{o.am_order_number}</Link>
                     </TableCell>
@@ -183,7 +194,11 @@ export default function AmazonOrders() {
                       {o.source === "sp_api" && (
                         <div className="font-sans mt-0.5 flex gap-1 flex-wrap">
                           {o.easy_ship_status && <Badge variant="outline" className={`text-[10px] ${o.easy_ship_status === "PendingSchedule" ? "border-amber-500 text-amber-600" : ""}`}>{o.easy_ship_status.replace(/([a-z])([A-Z])/g, "$1 $2")}</Badge>}
-                          {o.status !== "dispatched" && o.latest_ship_date && <span className="text-[10px]">ship by {new Date(o.latest_ship_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</span>}
+                          {!["dispatched", "cancelled"].includes(o.status) && o.latest_ship_date && (
+                            <span className={`text-[10px] ${shipByUrgency(o) ? "text-red-600 font-semibold" : ""}`}>
+                              {shipByUrgency(o) === "overdue" ? "SHIP-BY MISSED " : shipByUrgency(o) === "today" ? "SHIP TODAY " : "ship by "}{shipByLabel(o)}
+                            </span>
+                          )}
                           {o.is_cod && <Badge variant="outline" className="text-[10px]">COD</Badge>}
                           {!o.pdf_enriched && o.ship_type === "self_ship" && <span className="text-[10px] text-amber-600">upload PDF for address</span>}
                         </div>
