@@ -11,7 +11,7 @@ import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
   FileText, TrendingUp, Bell, ShoppingBag, Calculator, MapPinCheck, Megaphone,
-  ChevronDown, Layers, Navigation, IndianRupee, Mail,
+  ChevronDown, Layers, Navigation, IndianRupee, Mail, Timer, Activity,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -31,6 +31,7 @@ const NAV_ITEMS = {
   packaging: [
     { label: "Dashboard", icon: Home, path: "/" },
     { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
+    { label: "My Work", icon: Timer, path: "/my-work" },
     { label: "Packaging Queue", icon: Package, path: "/packaging" },
     { label: "Amazon Orders", icon: ShoppingBag, path: "/amazon-orders" },
     { label: "Amazon Packing", icon: ShoppingBag, path: "/amazon-packing" },
@@ -45,6 +46,7 @@ const NAV_ITEMS = {
     { label: "Dashboard", icon: Home, path: "/" },
     { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Dispatch Queue", icon: Truck, path: "/dispatch" },
+    { label: "Packing Live", icon: Activity, path: "/packing-live" },
     { label: "Amazon Dispatch", icon: ShoppingBag, path: "/amazon-dispatch" },
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
@@ -59,6 +61,8 @@ const NAV_ITEMS = {
     { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
     { label: "Packaging", icon: Package, path: "/packaging" },
     { label: "Dispatch", icon: Truck, path: "/dispatch" },
+    { label: "Packing Live", icon: Activity, path: "/packing-live" },
+    { label: "My Work", icon: Timer, path: "/my-work" },
     {
       label: "Amazon", icon: ShoppingBag, group: true,
       children: [
@@ -82,6 +86,7 @@ const NAV_ITEMS = {
     { label: "Dashboard", icon: Home, path: "/" },
     { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
     { label: "Customers", icon: Users, path: "/customers" },
+    { label: "Packing Live", icon: Activity, path: "/packing-live" },
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },

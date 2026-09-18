@@ -2795,6 +2795,396 @@ async def remove_packaging_staff(staff_id: str, admin=Depends(require_admin)):
         raise HTTPException(status_code=404, detail="Staff not found")
     return {"message": "Staff member removed"}
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PACKING WORK TRACKER
+# A separate module: its own collections (work_sessions, staff_pins), its own
+# routes, and it never writes to orders or to the existing packing form data.
+# Executives share two phones, so identity is name + PIN per action instead of
+# a login. Steps mirror the packing form's three "by" fields plus weighing.
+# ═══════════════════════════════════════════════════════════════════════════
+WORK_STEPS = [
+    {"key": "filling",  "label": "Filling material"},
+    {"key": "boxing",   "label": "Making box & packing"},
+    {"key": "checking", "label": "Checking"},
+    {"key": "weighing", "label": "Weighing & label"},
+]
+WORK_STEP_LABEL = {s["key"]: s["label"] for s in WORK_STEPS}
+WORK_NUDGE_MIN = 30        # phone asks "still working?"
+WORK_AUTO_CLOSE_MIN = 45   # unanswered -> closed with a flag
+WORK_VIEW_ROLES = ["admin", "dispatch", "accounts"]
+WORK_DO_ROLES = ["packaging", "admin", "dispatch"]
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _work_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _work_day_bounds(day: Optional[str]):
+    """(utc_start_iso, utc_end_iso, day_str) for an IST calendar day."""
+    d = datetime.fromisoformat(day).date() if day else datetime.now(IST).date()
+    start = datetime(d.year, d.month, d.day, tzinfo=IST)
+    end = start + timedelta(days=1)
+    return start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat(), d.isoformat()
+
+
+def _work_public(sess: dict) -> dict:
+    """Session with a live duration and the step label filled in."""
+    out = {k: v for k, v in sess.items() if k != "_id"}
+    started = datetime.fromisoformat(sess["started_at"])
+    if sess.get("ended_at"):
+        end = datetime.fromisoformat(sess["ended_at"])
+    else:
+        end = _work_now()
+    out["duration_sec"] = max(0, int((end - started).total_seconds()))
+    out["step_label"] = WORK_STEP_LABEL.get(sess.get("step") or "", "")
+    if sess.get("status") == "active" and sess.get("last_confirmed_at"):
+        since = (_work_now() - datetime.fromisoformat(sess["last_confirmed_at"])).total_seconds()
+        out["needs_confirm"] = since >= WORK_NUDGE_MIN * 60
+    return out
+
+
+async def _work_close(sess: dict, ended: datetime, status: str):
+    started = datetime.fromisoformat(sess["started_at"])
+    if ended < started:
+        ended = started
+    await db.work_sessions.update_one({"id": sess["id"]}, {"$set": {
+        "ended_at": ended.isoformat(),
+        "duration_sec": int((ended - started).total_seconds()),
+        "status": status,
+    }})
+
+
+async def _work_sweep():
+    """Close sessions nobody confirmed for WORK_AUTO_CLOSE_MIN; they stay flagged."""
+    cutoff = (_work_now() - timedelta(minutes=WORK_AUTO_CLOSE_MIN)).isoformat()
+    stale = await db.work_sessions.find(
+        {"status": "active", "last_confirmed_at": {"$lt": cutoff}}, {"_id": 0}).to_list(200)
+    for sess in stale:
+        ended = datetime.fromisoformat(sess["last_confirmed_at"]) + timedelta(minutes=WORK_AUTO_CLOSE_MIN)
+        await _work_close(sess, ended, "auto_closed")
+
+
+async def _work_staff_auth(name: str, pin: str) -> str:
+    name = (name or "").strip()
+    staff = await db.packaging_staff.find_one({"name": name, "active": True})
+    if not staff:
+        raise HTTPException(status_code=404, detail="Name not found")
+    rec = await db.staff_pins.find_one({"name": name})
+    if not rec:
+        raise HTTPException(status_code=400, detail="No PIN set for this name. Ask admin to set it.")
+    if not verify_password(str(pin or "").strip(), rec["pin_hash"]):
+        raise HTTPException(status_code=403, detail="Wrong PIN")
+    return name
+
+
+def _work_require(user, roles):
+    if user["role"] not in roles:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+
+class WorkPinRequest(BaseModel):
+    name: str
+    pin: str
+
+
+class WorkStartRequest(BaseModel):
+    name: str
+    pin: str
+    kind: str = "order"            # "order" | "other"
+    order_id: Optional[str] = None
+    step: Optional[str] = None
+    note: Optional[str] = None
+    device: Optional[str] = None   # which phone, free text
+
+
+@api_router.get("/work/config")
+async def work_config(user=Depends(get_current_user)):
+    return {"steps": WORK_STEPS, "nudge_min": WORK_NUDGE_MIN, "auto_close_min": WORK_AUTO_CLOSE_MIN}
+
+
+@api_router.get("/work/staff")
+async def work_staff(user=Depends(get_current_user)):
+    staff = await db.packaging_staff.find({"active": True}, {"_id": 0, "name": 1}).sort("name", 1).to_list(100)
+    pins = {p["name"] for p in await db.staff_pins.find({}, {"_id": 0, "name": 1}).to_list(200)}
+    return [{"name": s["name"], "has_pin": s["name"] in pins} for s in staff]
+
+
+@api_router.put("/work/pin")
+async def work_set_pin(req: WorkPinRequest, admin=Depends(require_admin)):
+    """Admin sets or resets an executive's PIN (4-6 digits)."""
+    pin = req.pin.strip()
+    if not pin.isdigit() or not 4 <= len(pin) <= 6:
+        raise HTTPException(status_code=400, detail="PIN must be 4 to 6 digits")
+    staff = await db.packaging_staff.find_one({"name": req.name.strip(), "active": True})
+    if not staff:
+        raise HTTPException(status_code=404, detail="Name not found")
+    await db.staff_pins.update_one({"name": staff["name"]},
+                                   {"$set": {"pin_hash": hash_password(pin),
+                                             "updated_at": _work_now().isoformat(),
+                                             "updated_by": admin["name"]}}, upsert=True)
+    return {"ok": True, "name": staff["name"]}
+
+
+@api_router.post("/work/pin/check")
+async def work_check_pin(req: WorkPinRequest, user=Depends(get_current_user)):
+    _work_require(user, WORK_DO_ROLES)
+    name = await _work_staff_auth(req.name, req.pin)
+    return {"ok": True, "name": name}
+
+
+@api_router.get("/work/orders")
+async def work_orders(q: str = "", user=Depends(get_current_user)):
+    """Orders an executive can pick: anything not yet dispatched or cancelled."""
+    _work_require(user, WORK_DO_ROLES)
+    query = {"status": {"$nin": ["dispatched", "cancelled"]}}
+    q = (q or "").strip()
+    if q:
+        query["$or"] = [{"order_number": {"$regex": re.escape(q), "$options": "i"}},
+                        {"customer_name": {"$regex": re.escape(q), "$options": "i"}}]
+    orders = await db.orders.find(query, {
+        "_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "status": 1,
+        "items": 1, "packaging.weight_kg": 1, "shipping_address.city": 1,
+    }).sort("created_at", -1).to_list(40)
+    active = await db.work_sessions.find({"status": "active", "kind": "order"},
+                                         {"_id": 0, "order_id": 1, "staff": 1, "step": 1}).to_list(100)
+    busy = {}
+    for a in active:
+        busy.setdefault(a["order_id"], []).append(f"{a['staff']} ({WORK_STEP_LABEL.get(a.get('step') or '', '')})")
+    return [{
+        "id": o["id"], "order_number": o.get("order_number"), "customer_name": o.get("customer_name"),
+        "status": o.get("status"), "items_count": len(o.get("items") or []),
+        "weight_kg": (o.get("packaging") or {}).get("weight_kg") or "",
+        "city": (o.get("shipping_address") or {}).get("city") or "",
+        "working_now": busy.get(o["id"], []),
+    } for o in orders]
+
+
+@api_router.post("/work/start")
+async def work_start(req: WorkStartRequest, user=Depends(get_current_user)):
+    """Start a piece of work. Starting anything ends what that person was doing."""
+    _work_require(user, WORK_DO_ROLES)
+    name = await _work_staff_auth(req.name, req.pin)
+    await _work_sweep()
+    now = _work_now()
+    doc = {"id": str(uuid.uuid4()), "staff": name, "kind": req.kind,
+           "order_id": None, "order_number": None, "customer_name": None,
+           "step": None, "note": None,
+           "started_at": now.isoformat(), "last_confirmed_at": now.isoformat(),
+           "ended_at": None, "duration_sec": None, "status": "active",
+           "device": (req.device or "")[:40], "logged_in_as": user.get("username") or user.get("name")}
+    if req.kind == "order":
+        if not req.order_id or req.step not in WORK_STEP_LABEL:
+            raise HTTPException(status_code=400, detail="Pick an order and a step")
+        order = await db.orders.find_one({"id": req.order_id}, {"_id": 0, "order_number": 1, "customer_name": 1})
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+        doc.update({"order_id": req.order_id, "order_number": order.get("order_number"),
+                    "customer_name": order.get("customer_name"), "step": req.step})
+    elif req.kind == "other":
+        note = (req.note or "").strip()
+        if not note:
+            raise HTTPException(status_code=400, detail="Say or type what work you are doing")
+        doc["note"] = note[:200]
+    else:
+        raise HTTPException(status_code=400, detail="kind must be order or other")
+    for prev in await db.work_sessions.find({"staff": name, "status": "active"}, {"_id": 0}).to_list(10):
+        await _work_close(prev, now, "done")
+    await db.work_sessions.insert_one(doc)
+    return {"ok": True, "session": _work_public(doc)}
+
+
+@api_router.post("/work/stop")
+async def work_stop(req: WorkPinRequest, user=Depends(get_current_user)):
+    _work_require(user, WORK_DO_ROLES)
+    name = await _work_staff_auth(req.name, req.pin)
+    now = _work_now()
+    closed = []
+    for sess in await db.work_sessions.find({"staff": name, "status": "active"}, {"_id": 0}).to_list(10):
+        await _work_close(sess, now, "done")
+        closed.append(sess["id"])
+    if not closed:
+        raise HTTPException(status_code=400, detail="Nothing is running for you")
+    return {"ok": True, "closed": closed}
+
+
+@api_router.post("/work/confirm")
+async def work_confirm(req: WorkPinRequest, user=Depends(get_current_user)):
+    """The executive answered 'yes, still working' - resets the auto-close clock."""
+    _work_require(user, WORK_DO_ROLES)
+    name = await _work_staff_auth(req.name, req.pin)
+    r = await db.work_sessions.update_many({"staff": name, "status": "active"},
+                                           {"$set": {"last_confirmed_at": _work_now().isoformat()}})
+    return {"ok": True, "confirmed": r.modified_count}
+
+
+@api_router.get("/work/me")
+async def work_me(name: str, user=Depends(get_current_user)):
+    """What this person is doing now, and their day so far. Read-only, no PIN."""
+    _work_require(user, WORK_DO_ROLES)
+    await _work_sweep()
+    name = (name or "").strip()
+    active = await db.work_sessions.find_one({"staff": name, "status": "active"}, {"_id": 0})
+    start, end, day = _work_day_bounds(None)
+    today = await db.work_sessions.find({"staff": name, "started_at": {"$gte": start, "$lt": end}},
+                                        {"_id": 0}).sort("started_at", -1).to_list(200)
+    pub = [_work_public(s) for s in today]
+    return {"name": name, "day": day, "active": _work_public(active) if active else None,
+            "today": pub, "today_total_sec": sum(s["duration_sec"] for s in pub),
+            "today_orders": len({s["order_id"] for s in pub if s.get("order_id")})}
+
+
+def _work_staff_summary(sessions: list) -> dict:
+    """Per-staff totals for a list of (public) sessions."""
+    out = {}
+    for s in sessions:
+        h = out.setdefault(s["staff"], {"staff": s["staff"], "total_sec": 0, "order_sec": 0,
+                                        "other_sec": 0, "sessions": 0, "orders": set(),
+                                        "auto_closed": 0, "first_start": None, "last_end": None,
+                                        "current": None})
+        h["total_sec"] += s["duration_sec"]
+        h["sessions"] += 1
+        if s["kind"] == "order":
+            h["order_sec"] += s["duration_sec"]
+            h["orders"].add(s.get("order_number") or s.get("order_id"))
+        else:
+            h["other_sec"] += s["duration_sec"]
+        if s["status"] == "auto_closed":
+            h["auto_closed"] += 1
+        if s["status"] == "active":
+            h["current"] = s
+        h["first_start"] = min(filter(None, [h["first_start"], s["started_at"]]))
+        end = s.get("ended_at") or _work_now().isoformat()
+        h["last_end"] = max(filter(None, [h["last_end"], end]))
+    for h in out.values():
+        h["orders_count"] = len(h["orders"])
+        h["orders"] = sorted(x for x in h["orders"] if x)
+    return out
+
+
+@api_router.get("/work/live")
+async def work_live(user=Depends(get_current_user)):
+    """The live board: who is doing what right now, plus today's totals."""
+    _work_require(user, WORK_VIEW_ROLES)
+    await _work_sweep()
+    start, end, day = _work_day_bounds(None)
+    sessions = [_work_public(s) for s in await db.work_sessions.find(
+        {"$or": [{"status": "active"}, {"started_at": {"$gte": start, "$lt": end}}]},
+        {"_id": 0}).sort("started_at", 1).to_list(2000)]
+    staff_names = [s["name"] for s in await db.packaging_staff.find({"active": True}, {"_id": 0, "name": 1}).sort("name", 1).to_list(100)]
+    summary = _work_staff_summary(sessions)
+    people = []
+    for n in staff_names:
+        h = summary.get(n) or {"staff": n, "total_sec": 0, "order_sec": 0, "other_sec": 0,
+                               "sessions": 0, "orders": [], "orders_count": 0, "auto_closed": 0,
+                               "first_start": None, "last_end": None, "current": None}
+        people.append(h)
+    # orders touched today, with per-step progress
+    orders = {}
+    for s in sessions:
+        if s["kind"] != "order":
+            continue
+        o = orders.setdefault(s["order_id"], {"order_id": s["order_id"], "order_number": s["order_number"],
+                                              "customer_name": s["customer_name"], "steps": {},
+                                              "total_sec": 0, "first_start": s["started_at"], "active": False})
+        st = o["steps"].setdefault(s["step"], {"step": s["step"], "label": s["step_label"], "people": set(),
+                                               "total_sec": 0, "first_start": s["started_at"], "last_end": None, "active": False})
+        st["people"].add(s["staff"])
+        st["total_sec"] += s["duration_sec"]
+        o["total_sec"] += s["duration_sec"]
+        st["first_start"] = min(st["first_start"], s["started_at"])
+        o["first_start"] = min(o["first_start"], s["started_at"])
+        if s["status"] == "active":
+            st["active"] = True
+            o["active"] = True
+        else:
+            st["last_end"] = max(filter(None, [st["last_end"], s.get("ended_at")]))
+    order_rows = []
+    for o in orders.values():
+        steps = [dict(v, people=sorted(v["people"])) for k, v in o["steps"].items()]
+        steps.sort(key=lambda v: [x["key"] for x in WORK_STEPS].index(v["step"]))
+        order_rows.append(dict(o, steps=steps))
+    order_rows.sort(key=lambda o: (not o["active"], o["first_start"]))
+    return {"day": day, "now": _work_now().isoformat(), "people": people,
+            "orders": order_rows, "active": [s for s in sessions if s["status"] == "active"]}
+
+
+@api_router.get("/work/day")
+async def work_day(date: str = "", staff: str = "", user=Depends(get_current_user)):
+    """Full timeline for one IST day, optionally one person, with idle gaps."""
+    _work_require(user, WORK_VIEW_ROLES)
+    await _work_sweep()
+    start, end, day = _work_day_bounds(date or None)
+    q = {"started_at": {"$gte": start, "$lt": end}}
+    if staff.strip():
+        q["staff"] = staff.strip()
+    sessions = [_work_public(s) for s in await db.work_sessions.find(q, {"_id": 0}).sort("started_at", 1).to_list(3000)]
+    by_staff = {}
+    for s in sessions:
+        by_staff.setdefault(s["staff"], []).append(s)
+    timelines = []
+    for name, rows in sorted(by_staff.items()):
+        items, prev_end = [], None
+        for s in rows:
+            if prev_end and s["started_at"] > prev_end:
+                gap = int((datetime.fromisoformat(s["started_at"]) - datetime.fromisoformat(prev_end)).total_seconds())
+                if gap >= 120:
+                    items.append({"gap": True, "from": prev_end, "to": s["started_at"], "duration_sec": gap})
+            items.append(s)
+            prev_end = s.get("ended_at") or _work_now().isoformat()
+        summ = _work_staff_summary(rows)[name]
+        timelines.append({"staff": name, "items": items, "summary": summ})
+    return {"day": day, "timelines": timelines}
+
+
+@api_router.get("/work/order/{order_id}")
+async def work_order(order_id: str, user=Depends(get_current_user)):
+    """How one order was made: every step, who did it, how long."""
+    _work_require(user, WORK_VIEW_ROLES + ["packaging"])
+    sessions = [_work_public(s) for s in await db.work_sessions.find(
+        {"order_id": order_id}, {"_id": 0}).sort("started_at", 1).to_list(500)]
+    steps = []
+    for step in WORK_STEPS:
+        rows = [s for s in sessions if s["step"] == step["key"]]
+        if not rows:
+            continue
+        steps.append({"step": step["key"], "label": step["label"],
+                      "people": sorted({r["staff"] for r in rows}),
+                      "total_sec": sum(r["duration_sec"] for r in rows),
+                      "first_start": rows[0]["started_at"],
+                      "last_end": max((r.get("ended_at") or "" for r in rows), default=None) or None,
+                      "active": any(r["status"] == "active" for r in rows),
+                      "sessions": rows})
+    return {"order_id": order_id, "steps": steps, "total_sec": sum(s["duration_sec"] for s in sessions),
+            "first_start": sessions[0]["started_at"] if sessions else None,
+            "last_end": max((s.get("ended_at") or "" for s in sessions), default=None) or None}
+
+
+@api_router.get("/work/report")
+async def work_report(from_date: str = "", to_date: str = "", user=Depends(get_current_user)):
+    """Per person per day totals over a date range (IST days)."""
+    _work_require(user, WORK_VIEW_ROLES)
+    await _work_sweep()
+    to_d = datetime.fromisoformat(to_date).date() if to_date else datetime.now(IST).date()
+    from_d = datetime.fromisoformat(from_date).date() if from_date else to_d - timedelta(days=6)
+    if (to_d - from_d).days > 62:
+        raise HTTPException(status_code=400, detail="Max 62 days")
+    start, _, _ = _work_day_bounds(from_d.isoformat())
+    _, end, _ = _work_day_bounds(to_d.isoformat())
+    sessions = [_work_public(s) for s in await db.work_sessions.find(
+        {"started_at": {"$gte": start, "$lt": end}}, {"_id": 0}).to_list(20000)]
+    days = {}
+    for s in sessions:
+        d = datetime.fromisoformat(s["started_at"]).astimezone(IST).date().isoformat()
+        days.setdefault(d, []).append(s)
+    rows = []
+    for d in sorted(days):
+        for name, h in sorted(_work_staff_summary(days[d]).items()):
+            rows.append({"day": d, **{k: v for k, v in h.items() if k != "current"}})
+    return {"from": from_d.isoformat(), "to": to_d.isoformat(), "rows": rows}
+
+
 # Courier Options
 @api_router.get("/courier-options")
 async def get_courier_options(user=Depends(get_current_user)):
