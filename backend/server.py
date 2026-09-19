@@ -5486,81 +5486,6 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
 # ═══════════════════════════════════════════════
 #  AMAZON PDF ORDERS MODULE
 # ═══════════════════════════════════════════════
-import pdfplumber
-
-def parse_amazon_pdf_text(filepath, ship_type="easy_ship"):
-    """Parse Amazon PDF and extract orders."""
-    with pdfplumber.open(filepath) as pdf:
-        full_text = ""
-        for page in pdf.pages:
-            t = page.extract_text()
-            if t:
-                full_text += t + "\n"
-
-    blocks = re.split(r'(?=Ship to:\n)', full_text)
-    orders = []
-    seen_ids = set()
-
-    for block in blocks:
-        if "Ship to:" not in block or "Order ID:" not in block:
-            continue
-        if block.strip().startswith("I hereby confirm") or block.strip().startswith("I confirm"):
-            continue
-
-        oid_match = re.search(r'Order ID:\s*(\d{3}-\d{7}-\d{7})', block)
-        if not oid_match:
-            continue
-        amazon_order_id = oid_match.group(1)
-        if amazon_order_id in seen_ids:
-            continue
-        seen_ids.add(amazon_order_id)
-
-        ship_to_match = re.search(r'Ship to:\n(.+?)(?=\n)', block)
-        customer_name = ship_to_match.group(1).strip() if ship_to_match else ""
-
-        addr_match = re.search(r'Ship to:\n.+?\n(.*?)(?=Phone\s*:|Order ID:)', block, re.DOTALL)
-        address = ""
-        if addr_match:
-            addr_lines = [l.strip() for l in addr_match.group(1).strip().split('\n') if l.strip() and 'COD' not in l]
-            address = ", ".join(addr_lines)
-
-        phone = ""
-        if ship_type == "self_ship":
-            phone_match = re.search(r'Phone\s*:\s*(\d+)', block)
-            if phone_match:
-                phone = phone_match.group(1)
-
-        items = []
-        item_pattern = re.findall(r'^(\d+)\s+(.+?)\s+₹([\d,]+\.\d{2})\s*$', block, re.MULTILINE)
-        for qty_str, product_raw, price_str in item_pattern:
-            qty = int(qty_str)
-            price = float(price_str.replace(',', ''))
-            items.append({
-                "product_name": product_raw.strip(),
-                "quantity": qty,
-                "unit": "pcs",
-                "unit_price": price,
-                "amount": round(qty * price, 2),
-            })
-
-        grand_match = re.search(r'Grand total\s*₹([\d,]+\.\d{2})', block)
-        grand_total = float(grand_match.group(1).replace(',', '')) if grand_match else sum(i["amount"] for i in items)
-
-        if not items:
-            continue
-
-        orders.append({
-            "amazon_order_id": amazon_order_id,
-            "customer_name": customer_name,
-            "address": address,
-            "phone": phone,
-            "items": items,
-            "grand_total": grand_total,
-        })
-
-    return orders
-
-
 async def get_next_am_number():
     """Get next AM-XXXX order number."""
     counter = await db.amazon_counter.find_one_and_update(
@@ -5572,84 +5497,6 @@ async def get_next_am_number():
     )
     seq = counter["seq"]
     return f"AM-{seq:04d}"
-
-
-@api_router.post("/amazon/upload-pdf")
-async def upload_amazon_pdf(
-    file: UploadFile = File(...),
-    ship_type: str = Query("easy_ship"),
-    user=Depends(get_current_user)
-):
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-    if ship_type not in ["easy_ship", "self_ship"]:
-        raise HTTPException(status_code=400, detail="Invalid ship type")
-
-    tmp_path = UPLOAD_DIR / f"tmp_amazon_{uuid.uuid4().hex}.pdf"
-    try:
-        content = await file.read()
-        with open(tmp_path, "wb") as f:
-            f.write(content)
-        parsed = parse_amazon_pdf_text(str(tmp_path), ship_type)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"PDF parsing failed: {str(e)}")
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
-
-    if not parsed:
-        raise HTTPException(status_code=400, detail="No orders found in PDF")
-
-    created = []
-    duplicates = []
-    enriched = []
-    for p in parsed:
-        existing = await db.amazon_orders.find_one({"amazon_order_id": p["amazon_order_id"]}, {"_id": 0})
-        if existing:
-            if existing.get("source") == "sp_api" and not existing.get("pdf_enriched"):
-                # The seller API cannot see the buyer's name, street or phone.
-                await db.amazon_orders.update_one({"id": existing["id"]}, {"$set": {
-                    "customer_name": _pii_enc(p["customer_name"]), "address": _pii_enc(p["address"]),
-                    "phone": _pii_enc(p.get("phone", "")), "pdf_enriched": True, "has_buyer_pii": True,
-                    "address_public": existing.get("address_public") or _pii_dec(existing.get("address") or ""),
-                    "updated_at": datetime.now(timezone.utc).isoformat()}})
-                enriched.append(p["amazon_order_id"])
-            else:
-                duplicates.append(p["amazon_order_id"])
-            continue
-
-        am_number = await get_next_am_number()
-        shipping_method = "amazon" if ship_type == "easy_ship" else "courier"
-        order = {
-            "id": str(uuid.uuid4()),
-            "am_order_number": am_number,
-            "amazon_order_id": p["amazon_order_id"],
-            "ship_type": ship_type,
-            "shipping_method": shipping_method,
-            "courier_name": "",
-            "customer_name": p["customer_name"],
-            "address": p["address"],
-            "phone": p.get("phone", ""),
-            "items": p["items"],
-            "grand_total": p["grand_total"],
-            "status": "new",
-            "packaging": {
-                "item_packed_by": [],
-                "box_packed_by": [],
-                "checked_by": [],
-                "item_images": {},
-                "order_images": [],
-                "packed_box_images": [],
-            },
-            "dispatch": {},
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        await db.amazon_orders.insert_one(_pii_seal({**order, "has_buyer_pii": True}))
-        created.append(order)
-
-    return {"created": len(created), "duplicates": len(duplicates), "duplicate_ids": duplicates,
-            "enriched": len(enriched), "enriched_ids": enriched, "orders": created}
 
 
 # ─── Amazon product formulations ─────────────────────────────────────────
@@ -8498,7 +8345,7 @@ async def amazon_manual_dispatch(req: AmazonDispatchRequest, user=Depends(get_cu
 # keeps Amazon's own status on each, and closes the loop: an order Amazon
 # shows as picked up / shipped is dispatched here, a cancelled one is
 # cancelled here. Buyer name, street and phone are NOT available to this
-# app (restricted roles), so an uploaded PDF enriches a synced order.
+# app until the restricted role is granted.
 # ═══════════════════════════════════════════════════════════════════════════
 SPAPI = {
     "client_id": os.environ.get("AMZ_SP_CLIENT_ID", ""),
@@ -8590,7 +8437,7 @@ async def _spapi_build_order(o: dict) -> dict:
         "ship_type": "easy_ship" if easy else "self_ship",
         "shipping_method": "amazon" if easy else "courier",
         "courier_name": "",
-        # Buyer name / street / phone need restricted roles; the PDF upload fills them in.
+        # Buyer name / street / phone need the restricted role.
         "customer_name": f"Amazon customer ({sa.get('City') or 'India'})",
         "address": place, "phone": "",
         "items": items,

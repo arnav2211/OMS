@@ -3,15 +3,14 @@ import { Link } from "react-router-dom";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Upload, RefreshCw, Search, Package, Trash2 } from "lucide-react";
+import { RefreshCw, Search, Trash2 } from "lucide-react";
 
 
 // Ship-by urgency from Amazon's latest ship date: "overdue", "today" or "".
@@ -42,10 +41,6 @@ export default function AmazonOrders() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [shipTypeFilter, setShipTypeFilter] = useState("all");
-  const [showUpload, setShowUpload] = useState(false);
-  const [shipType, setShipType] = useState("easy_ship");
-  const [uploading, setUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   useEffect(() => { loadOrders(); }, []);
@@ -71,27 +66,6 @@ export default function AmazonOrders() {
       const res = await api.get("/amazon/orders");
       setOrders(res.data);
     } catch { } finally { setLoading(false); }
-  };
-
-  const handleUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setUploading(true);
-    setUploadResult(null);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const params = new URLSearchParams({ ship_type: shipType });
-      const res = await api.post(`/amazon/upload-pdf?${params}`, form, { headers: { "Content-Type": "multipart/form-data" } });
-      setUploadResult(res.data);
-      toast.success(`${res.data.created} orders created`);
-      loadOrders();
-    } catch (err) {
-      toast.error(err.response?.data?.detail || "Upload failed");
-    } finally {
-      setUploading(false);
-      e.target.value = "";
-    }
   };
 
   const handleDelete = async (orderId) => {
@@ -128,11 +102,6 @@ export default function AmazonOrders() {
           {sp?.configured && (
             <Button variant="outline" onClick={syncAmazon} disabled={syncing} data-testid="amazon-sync-btn">
               <RefreshCw className={`w-4 h-4 mr-2 ${syncing ? "animate-spin" : ""}`} /> Sync from Amazon
-            </Button>
-          )}
-          {isAdmin && (
-            <Button onClick={() => { setShowUpload(true); setUploadResult(null); }} data-testid="upload-pdf-btn">
-              <Upload className="w-4 h-4 mr-2" /> Upload PDF
             </Button>
           )}
         </div>
@@ -200,7 +169,6 @@ export default function AmazonOrders() {
                             </span>
                           )}
                           {o.is_cod && <Badge variant="outline" className="text-[10px]">COD</Badge>}
-                          {!o.pdf_enriched && o.ship_type === "self_ship" && <span className="text-[10px] text-amber-600">upload PDF for address</span>}
                         </div>
                       )}
                     </TableCell>
@@ -230,37 +198,6 @@ export default function AmazonOrders() {
         </CardContent>
       </Card>
 
-      {/* Upload Dialog */}
-      <Dialog open={showUpload} onOpenChange={setShowUpload}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Upload Amazon PDF</DialogTitle></DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label className="text-sm">Ship Type</Label>
-              <Select value={shipType} onValueChange={setShipType} data-testid="ship-type-select">
-                <SelectTrigger data-testid="ship-type-trigger"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="easy_ship">Easy Ship</SelectItem>
-                  <SelectItem value="self_ship">Self Ship</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-sm">PDF File</Label>
-              <Input type="file" accept=".pdf" onChange={handleUpload} disabled={uploading} data-testid="pdf-file-input" />
-            </div>
-            {uploading && <p className="text-sm text-muted-foreground">Parsing PDF...</p>}
-            {uploadResult && (
-              <div className="p-3 rounded-lg bg-green-50 border border-green-200 text-sm space-y-1" data-testid="upload-result">
-                <p className="font-medium text-green-800">{uploadResult.created} orders created</p>
-                {uploadResult.duplicates > 0 && (
-                  <p className="text-amber-700">{uploadResult.duplicates} duplicates skipped: {uploadResult.duplicate_ids?.join(", ")}</p>
-                )}
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
       {/* Delete Confirmation Dialog */}
       <Dialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
         <DialogContent className="max-w-sm">
