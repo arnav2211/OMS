@@ -17,7 +17,7 @@ services:
     depends_on:
       - mongo
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"   # reachable only through nginx
     volumes:
       - ./backend/uploads:/app/uploads
 
