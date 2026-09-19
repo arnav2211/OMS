@@ -2147,6 +2147,8 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
         {"id": order_id},
         {"$set": {"packaging": packaging, "status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
+    if new_status == "packed":
+        await _work_finish_order(order_id, "order")
     updated = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return updated
 
@@ -2168,6 +2170,7 @@ async def mark_order_packed(order_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Weight (KG) is required for courier orders before marking packed")
     packaging["packed_at"] = datetime.now(timezone.utc).isoformat()
     await db.orders.update_one({"id": order_id}, {"$set": {"status": "packed", "packaging": packaging, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    await _work_finish_order(order_id, "order")
     return await db.orders.find_one({"id": order_id}, {"_id": 0})
 
 @api_router.put("/orders/{order_id}/undo-packed")
@@ -3076,6 +3079,15 @@ async def _work_sync_amazon(amazon_order_id: Optional[str]):
     if names and ao.get("status") == "new":
         upd["status"] = "packaging"
     await db.amazon_orders.update_one({"id": amazon_order_id}, {"$set": upd})
+
+
+async def _work_finish_order(order_id: str, kind: str):
+    """Marking an order packed is the end of the work on it: whatever is still
+    running there is closed at that moment, so nobody goes back to press DONE."""
+    now = _work_now()
+    for sess in await db.work_sessions.find({"status": "active", "kind": kind, "order_id": order_id},
+                                            {"_id": 0}).to_list(50):
+        await _work_close(sess, now, "done")
 
 
 async def _work_sync_packed_by(order_id: Optional[str]):
@@ -5886,6 +5898,7 @@ async def mark_amazon_packed(order_id: str, user=Depends(get_current_user)):
         {"id": order_id},
         {"$set": {"status": "packed", "packaging.packed_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
+    await _work_finish_order(order_id, "amazon")
     return {"status": "packed"}
 
 

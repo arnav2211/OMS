@@ -4,6 +4,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import api from "@/lib/api";
 import { compressImage } from "@/lib/compressImage";
 import { useAuth } from "@/contexts/AuthContext";
+import OrderWorkStrip from "@/components/OrderWorkStrip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -712,6 +713,9 @@ export default function OrderDetail() {
           </CardContent>
         </Card>
       )}
+
+      {/* Packing work: start / continue / finish by PIN, and who is on it right now */}
+      <OrderWorkStrip kind="order" orderId={order.id} status={order.status} onChanged={loadOrder} />
 
       {/* Items */}
       <Card>

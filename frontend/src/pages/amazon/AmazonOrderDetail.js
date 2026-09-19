@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import api from "@/lib/api";
 import { compressImage } from "@/lib/compressImage";
 import { useAuth } from "@/contexts/AuthContext";
+import OrderWorkStrip from "@/components/OrderWorkStrip";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -226,6 +227,9 @@ export default function AmazonOrderDetail() {
           )}
         </CardContent>
       </Card>
+
+      {/* Packing work: one executive does the whole Amazon order, so there are no steps */}
+      <OrderWorkStrip kind="amazon" orderId={order.id} status={order.status} onChanged={loadOrder} />
 
       {/* Items */}
       <Card>
