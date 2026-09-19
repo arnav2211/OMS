@@ -55,6 +55,114 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
+# ═══════════════════════════════════════════════════════════════════════════
+# SECURITY: buyer PII encryption at rest, security log, login throttling.
+# Amazon buyer name / address / phone are stored AES-256-GCM encrypted; the
+# key lives in the environment (AMZ_PII_KEY), never in the database or the
+# repo, so a database dump or backup alone cannot reveal them.
+# ═══════════════════════════════════════════════════════════════════════════
+import base64 as _b64
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _AESGCM
+
+try:
+    _PII_KEY = _b64.b64decode(os.environ.get("AMZ_PII_KEY", ""))
+except Exception:
+    _PII_KEY = b""
+if len(_PII_KEY) != 32:
+    _PII_KEY = b""            # not configured: values pass through unchanged
+PII_FIELDS = ("customer_name", "address", "phone")
+_PII_PREFIX = "enc:v1:"
+
+
+def _pii_enc(value):
+    if not _PII_KEY or not isinstance(value, str) or not value or value.startswith(_PII_PREFIX):
+        return value
+    nonce = os.urandom(12)
+    return _PII_PREFIX + _b64.b64encode(nonce + _AESGCM(_PII_KEY).encrypt(nonce, value.encode("utf-8"), None)).decode()
+
+
+def _pii_dec(value):
+    if not isinstance(value, str) or not value.startswith(_PII_PREFIX):
+        return value
+    if not _PII_KEY:
+        return "[encrypted]"
+    try:
+        raw = _b64.b64decode(value[len(_PII_PREFIX):])
+        return _AESGCM(_PII_KEY).decrypt(raw[:12], raw[12:], None).decode("utf-8")
+    except Exception:
+        return "[unreadable]"
+
+
+def _pii_seal(doc: dict) -> dict:
+    for f in PII_FIELDS:
+        if f in doc:
+            doc[f] = _pii_enc(doc[f])
+    return doc
+
+
+def _pii_open(doc: dict) -> dict:
+    for f in PII_FIELDS:
+        if f in doc:
+            doc[f] = _pii_dec(doc[f])
+    return doc
+
+
+def _client_ip(request) -> str:
+    try:
+        return (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or \
+            (request.client.host if request.client else "")
+    except Exception:
+        return ""
+
+
+async def _sec_log(event: str, **fields):
+    """Security log: logins, lockouts, buyer-data access. Kept 400 days (TTL index)."""
+    try:
+        await db.security_log.insert_one({"event": event, "at": datetime.now(timezone.utc).isoformat(),
+                                          "at_dt": datetime.now(timezone.utc), **fields})
+    except Exception as e:
+        logging.error(f"security log write failed: {e}")
+
+
+LOGIN_MAX_FAILS = 8           # per username ...
+LOGIN_WINDOW_MIN = 15         # ... inside this window -> locked for the rest of it
+
+
+async def _login_guard(username: str, ip: str):
+    since = datetime.now(timezone.utc) - timedelta(minutes=LOGIN_WINDOW_MIN)
+    fails = await db.security_log.count_documents({"event": "login_failed", "username": username,
+                                                   "at_dt": {"$gte": since}})
+    if fails >= LOGIN_MAX_FAILS:
+        await _sec_log("login_blocked", username=username, ip=ip)
+        raise HTTPException(status_code=429, detail="Too many wrong passwords. Try again in 15 minutes.")
+
+
+async def _login_failed(username: str, ip: str):
+    await _sec_log("login_failed", username=username, ip=ip)
+    since = datetime.now(timezone.utc) - timedelta(minutes=LOGIN_WINDOW_MIN)
+    fails = await db.security_log.count_documents({"event": "login_failed", "username": username,
+                                                   "at_dt": {"$gte": since}})
+    if fails == LOGIN_MAX_FAILS:              # crossing the line: tell the admins once
+        admins = [u["id"] for u in await db.users.find({"role": "admin", "active": {"$ne": False}},
+                                                       {"_id": 0, "id": 1}).to_list(50)]
+        await db.admin_alerts.insert_one({
+            "id": str(uuid.uuid4()), "title": f"Security: login locked for '{username}'",
+            "message": f"{LOGIN_MAX_FAILS} wrong passwords for '{username}' in {LOGIN_WINDOW_MIN} minutes "
+                       f"(last from {ip or 'unknown address'}). The login is locked for 15 minutes.",
+            "sent_by": "System", "sent_by_id": None, "order_id": "", "customer_name": "",
+            "recipient_ids": admins, "recipient_roles": ["admin"], "acknowledgements": {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "meta": {"type": "security_login_lock", "username": username}})
+
+
+@app.on_event("startup")
+async def _security_indexes():
+    try:
+        await db.security_log.create_index("at_dt", expireAfterSeconds=400 * 86400)
+        await db.security_log.create_index([("event", 1), ("username", 1), ("at_dt", -1)])
+    except Exception as e:
+        logging.error(f"security index setup failed: {e}")
+
 # Company Details
 COMPANY = {
     "name": "MANGALAM AGRO",
@@ -673,12 +781,16 @@ async def startup():
 
 # Auth Routes
 @api_router.post("/auth/login")
-async def login(req: LoginRequest):
+async def login(req: LoginRequest, request: Request):
+    ip = _client_ip(request)
+    await _login_guard(req.username, ip)
     user = await db.users.find_one({"username": req.username}, {"_id": 0})
     if not user or not verify_password(req.password, user["password_hash"]):
+        await _login_failed(req.username, ip)
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not user.get("active", True):
         raise HTTPException(status_code=401, detail="Account is deactivated")
+    await _sec_log("login_ok", username=user["username"], role=user["role"], ip=ip)
     token = create_token(user["id"], user["role"], user["name"], user["username"])
     return {
         "token": token,
@@ -5497,8 +5609,9 @@ async def upload_amazon_pdf(
             if existing.get("source") == "sp_api" and not existing.get("pdf_enriched"):
                 # The seller API cannot see the buyer's name, street or phone.
                 await db.amazon_orders.update_one({"id": existing["id"]}, {"$set": {
-                    "customer_name": p["customer_name"], "address": p["address"],
-                    "phone": p.get("phone", ""), "pdf_enriched": True,
+                    "customer_name": _pii_enc(p["customer_name"]), "address": _pii_enc(p["address"]),
+                    "phone": _pii_enc(p.get("phone", "")), "pdf_enriched": True, "has_buyer_pii": True,
+                    "address_public": existing.get("address_public") or _pii_dec(existing.get("address") or ""),
                     "updated_at": datetime.now(timezone.utc).isoformat()}})
                 enriched.append(p["amazon_order_id"])
             else:
@@ -5532,8 +5645,7 @@ async def upload_amazon_pdf(
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        await db.amazon_orders.insert_one(order)
-        order.pop("_id", None)
+        await db.amazon_orders.insert_one(_pii_seal({**order, "has_buyer_pii": True}))
         created.append(order)
 
     return {"created": len(created), "duplicates": len(duplicates), "duplicate_ids": duplicates,
@@ -5668,7 +5780,10 @@ async def set_amazon_item_formulation(order_id: str, req: AmazonItemFormulationR
 async def list_amazon_orders(user=Depends(get_current_user)):
     if user["role"] not in ["admin", "packaging", "dispatch"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    orders = await db.amazon_orders.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    orders = [_pii_open(o) for o in await db.amazon_orders.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)]
+    with_pii = sum(1 for o in orders if o.get("has_buyer_pii") and not o.get("pii_purged_at"))
+    if with_pii:
+        await _sec_log("pii_list", username=user.get("username"), role=user["role"], count=with_pii)
     return await _amazon_apply_formulations(orders, user)
 
 
@@ -5679,6 +5794,10 @@ async def get_amazon_order(order_id: str, user=Depends(get_current_user)):
     order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    _pii_open(order)
+    if order.get("has_buyer_pii") and not order.get("pii_purged_at"):
+        await _sec_log("pii_view", username=user.get("username"), role=user["role"],
+                       order=order.get("am_order_number"))
     return (await _amazon_apply_formulations([order], user))[0]
 
 
@@ -8521,7 +8640,7 @@ async def _spapi_sync(lookback_hours: Optional[int] = None) -> dict:
             if not existing:
                 if st in ("Unshipped", "PartiallyShipped"):
                     doc = await _spapi_build_order(o)
-                    await db.amazon_orders.insert_one(dict(doc))
+                    await db.amazon_orders.insert_one(_pii_seal({**doc, "address_public": doc["address"]}))
                     res["created"].append(doc["am_order_number"])
                     await asyncio.sleep(2)                                # orderItems rate limit
                 continue
@@ -8542,10 +8661,33 @@ async def _spapi_sync(lookback_hours: Optional[int] = None) -> dict:
                 res["updated"] += 1
             await db.amazon_orders.update_one({"id": existing["id"]}, {"$set": upd})
         res["alerts"] = await _spapi_shipby_alerts(now)
+        res["purged"] = await _pii_purge(now)
         await db.settings.update_one({"_id": "spapi_sync"}, {"$set": {
             "last_run": now.isoformat(), "last_result": {k: (v if isinstance(v, int) else len(v)) for k, v in res.items()},
             "last_error": ""}}, upsert=True)
         return res
+
+
+PII_RETENTION_DAYS = 30
+
+
+async def _pii_purge(now: datetime) -> int:
+    """Amazon's Data Protection Policy: buyer PII goes 30 days after shipment.
+    Only the name, street address and phone are blanked; the order, its items,
+    city/pincode, photos and history all stay."""
+    cutoff = (now - timedelta(days=PII_RETENTION_DAYS)).isoformat()
+    stale = await db.amazon_orders.find({
+        "has_buyer_pii": True, "pii_purged_at": {"$exists": False},
+        "status": {"$in": ["dispatched", "cancelled"]},
+        "$or": [{"dispatch.dispatched_at": {"$lte": cutoff}}, {"cancelled_at": {"$lte": cutoff}}],
+    }, {"_id": 0, "id": 1, "address_public": 1, "am_order_number": 1}).to_list(500)
+    for o in stale:
+        await db.amazon_orders.update_one({"id": o["id"]}, {"$set": {
+            "customer_name": "Amazon customer", "address": o.get("address_public") or "",
+            "phone": "", "pii_purged_at": now.isoformat(), "has_buyer_pii": False}})
+    if stale:
+        await _sec_log("pii_purged", count=len(stale), orders=[o["am_order_number"] for o in stale][:50])
+    return len(stale)
 
 
 # Amazon's ship-by deadline is 23:59 IST of the ship-by day, long after the
@@ -8587,7 +8729,7 @@ async def _spapi_shipby_alerts(now: datetime) -> list:
             "id": str(uuid.uuid4()), "title": title,
             "message": f"{o['am_order_number']} ({o['amazon_order_id']}) is {todo}. Ship-by date: {by}. "
                        f"Items: {', '.join(str(i['quantity']) + ' x ' + i['product_name'][:40] for i in o.get('items') or [])}",
-            "sent_by": "System", "sent_by_id": None, "order_id": "", "customer_name": o.get("customer_name") or "",
+            "sent_by": "System", "sent_by_id": None, "order_id": "", "customer_name": "",
             "recipient_ids": recipients, "recipient_roles": ["admin", "packaging", "dispatch"],
             "acknowledgements": {}, "created_at": now.isoformat(),
             "meta": {"type": "amazon_ship_by", "stage": stage, "amazon_order_id": o["amazon_order_id"]},
@@ -8603,6 +8745,13 @@ async def spapi_sync_now(hours: int = 0, user=Depends(get_current_user)):
     if user["role"] not in ["admin", "packaging", "dispatch"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     return await _spapi_sync(min(max(hours, 0), 24 * 30) or None)
+
+
+@api_router.get("/security/log")
+async def security_log(event: str = "", limit: int = 200, admin=Depends(require_admin)):
+    q = {"event": event} if event else {}
+    rows = await db.security_log.find(q, {"_id": 0, "at_dt": 0}).sort("at_dt", -1).to_list(min(max(limit, 1), 1000))
+    return {"rows": rows, "encryption_configured": bool(_PII_KEY)}
 
 
 @api_router.get("/amazon/sp/status")
