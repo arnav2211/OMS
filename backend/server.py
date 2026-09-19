@@ -2964,7 +2964,7 @@ WORK_STEPS = [
 WORK_STEP_LABEL = {s["key"]: s["label"] for s in WORK_STEPS}
 # Work is never stopped mid-day: a job takes as long as it takes. The only
 # automatic close is for a DONE that was forgotten overnight.
-WORK_DAY_END_HOUR_IST = 21   # anything still running at 9 PM IST is closed and flagged
+WORK_DAY_END_HOUR_IST = 20   # anything still running at 8 PM IST is closed and flagged
 WORK_NUDGE_MIN = 0           # 0 = no "still working?" prompt
 WORK_AUTO_CLOSE_MIN = 0
 WORK_VIEW_ROLES = ["admin", "dispatch", "accounts"]
@@ -3119,18 +3119,38 @@ async def _work_close(sess: dict, ended: datetime, status: str, remark: Optional
 
 
 async def _work_sweep():
-    """Close work left running past the end of its own day (a forgotten DONE).
-    It is ended at 9 PM IST of the day it started and flagged; nothing is
-    ever closed while the day is still going."""
+    """Work is never cut off while someone is working. It ends by itself only
+    when the person punches out on the attendance device (ended at the punch
+    time) or at 8 PM IST of the day it started - whichever comes first."""
     now_ist = datetime.now(IST)
     running = await db.work_sessions.find({"status": "active"}, {"_id": 0}).to_list(300)
+    if not running:
+        return
+    crm_map = await _crm_map_for_staff()
     for sess in running:
         started_ist = datetime.fromisoformat(sess["started_at"]).astimezone(IST)
         day_end = started_ist.replace(hour=WORK_DAY_END_HOUR_IST, minute=0, second=0, microsecond=0)
-        if started_ist >= day_end:                      # started after 9 PM: give it until midnight
+        if started_ist >= day_end:                      # started after 8 PM: give it until midnight
             day_end = started_ist.replace(hour=23, minute=59, second=0, microsecond=0)
-        if now_ist > day_end:
-            await _work_close(sess, day_end.astimezone(timezone.utc), "auto_closed")
+        end_at, reason = (day_end, "day_end") if now_ist > day_end else (None, None)
+
+        uid = crm_map.get(sess["staff"])
+        if uid:
+            log = await crm_db.attendance_logs.find_one(
+                {"user_id": uid, "date": started_ist.strftime("%Y-%m-%d")}, {"_id": 0, "check_out": 1})
+            out_raw = ((log or {}).get("check_out") or {}).get("time")
+            if out_raw:
+                try:
+                    out_ist = datetime.fromisoformat(out_raw)
+                    out_ist = out_ist.replace(tzinfo=IST) if out_ist.tzinfo is None else out_ist.astimezone(IST)
+                    # a punch-out from before this work began is not about this work
+                    if out_ist >= started_ist and (end_at is None or out_ist < end_at):
+                        end_at, reason = out_ist, "punch_out"
+                except ValueError:
+                    pass
+        if end_at:
+            await db.work_sessions.update_one({"id": sess["id"]}, {"$set": {"auto_reason": reason}})
+            await _work_close(sess, end_at.astimezone(timezone.utc), "auto_closed")
 
 
 async def _work_staff_auth(name: str, pin: str) -> str:

@@ -39,7 +39,7 @@ const AttBadge = ({ att }) => {
 
 const StatusBadge = ({ s }) => {
   if (s.status === "active") return <Badge className="bg-emerald-100 text-emerald-800">Now</Badge>;
-  if (s.status === "auto_closed") return <Badge className="bg-amber-100 text-amber-800">Forgot DONE</Badge>;
+  if (s.status === "auto_closed") return <Badge className="bg-amber-100 text-amber-800">{s.auto_reason === "punch_out" ? "Ended at punch-out" : s.auto_reason === "day_end" ? "Ended at 8 PM" : "Forgot DONE"}</Badge>;
   return null;
 };
 

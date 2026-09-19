@@ -471,7 +471,7 @@ export default function MyWork() {
                 <span className="font-mono text-muted-foreground">{fmtClock(s.started_at)}{s.ended_at ? `–${fmtClock(s.ended_at)}` : ""}</span>
                 {" "}{taskText(s)}
                 {s.remark && <span className="block text-xs text-muted-foreground">Note: {s.remark}</span>}
-                {s.status === "auto_closed" && <span className="text-amber-600 text-xs ml-1">(you forgot DONE)</span>}
+                {s.status === "auto_closed" && <span className="text-amber-600 text-xs ml-1">({s.auto_reason === "punch_out" ? "ended when you punched out" : s.auto_reason === "day_end" ? "ended at 8 PM" : "you forgot DONE"})</span>}
               </span>
               <span className="font-mono">{fmtDur(s.status === "active" ? liveSec(s) : s.duration_sec)}</span>
             </div>
