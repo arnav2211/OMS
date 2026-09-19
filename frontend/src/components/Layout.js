@@ -16,6 +16,7 @@ import {
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { AlertListener } from "@/components/AlertListener";
+import WorkingNowBar from "@/components/WorkingNowBar";
 
 const NAV_ITEMS = {
   telecaller: [
@@ -373,6 +374,9 @@ export default function Layout({ children }) {
             </DropdownMenuContent>
           </DropdownMenu>
         </header>
+
+        {/* Packing login: running work with a DONE on each, on every page */}
+        <WorkingNowBar />
 
         {/* Page Content */}
         <main className="flex-1 overflow-y-auto p-4 lg:p-6" data-testid="main-content">
