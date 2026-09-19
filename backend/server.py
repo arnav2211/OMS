@@ -2963,8 +2963,11 @@ WORK_STEPS = [
     {"key": "weighing", "label": "Weighing & label"},
 ]
 WORK_STEP_LABEL = {s["key"]: s["label"] for s in WORK_STEPS}
-WORK_NUDGE_MIN = 30        # phone asks "still working?"
-WORK_AUTO_CLOSE_MIN = 45   # unanswered -> closed with a flag
+# Work is never stopped mid-day: a job takes as long as it takes. The only
+# automatic close is for a DONE that was forgotten overnight.
+WORK_DAY_END_HOUR_IST = 21   # anything still running at 9 PM IST is closed and flagged
+WORK_NUDGE_MIN = 0           # 0 = no "still working?" prompt
+WORK_AUTO_CLOSE_MIN = 0
 WORK_VIEW_ROLES = ["admin", "dispatch", "accounts"]
 WORK_DO_ROLES = ["packaging", "admin", "dispatch"]
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -2994,7 +2997,7 @@ def _work_public(sess: dict) -> dict:
     out["step_label"] = WORK_STEP_LABEL.get(sess.get("step") or "", "")
     if sess.get("status") == "active" and sess.get("last_confirmed_at"):
         since = (_work_now() - datetime.fromisoformat(sess["last_confirmed_at"])).total_seconds()
-        out["needs_confirm"] = since >= WORK_NUDGE_MIN * 60
+        out["needs_confirm"] = bool(WORK_NUDGE_MIN) and since >= WORK_NUDGE_MIN * 60
     return out
 
 
@@ -3069,13 +3072,18 @@ async def _work_close(sess: dict, ended: datetime, status: str, remark: Optional
 
 
 async def _work_sweep():
-    """Close sessions nobody confirmed for WORK_AUTO_CLOSE_MIN; they stay flagged."""
-    cutoff = (_work_now() - timedelta(minutes=WORK_AUTO_CLOSE_MIN)).isoformat()
-    stale = await db.work_sessions.find(
-        {"status": "active", "last_confirmed_at": {"$lt": cutoff}}, {"_id": 0}).to_list(200)
-    for sess in stale:
-        ended = datetime.fromisoformat(sess["last_confirmed_at"]) + timedelta(minutes=WORK_AUTO_CLOSE_MIN)
-        await _work_close(sess, ended, "auto_closed")
+    """Close work left running past the end of its own day (a forgotten DONE).
+    It is ended at 9 PM IST of the day it started and flagged; nothing is
+    ever closed while the day is still going."""
+    now_ist = datetime.now(IST)
+    running = await db.work_sessions.find({"status": "active"}, {"_id": 0}).to_list(300)
+    for sess in running:
+        started_ist = datetime.fromisoformat(sess["started_at"]).astimezone(IST)
+        day_end = started_ist.replace(hour=WORK_DAY_END_HOUR_IST, minute=0, second=0, microsecond=0)
+        if started_ist >= day_end:                      # started after 9 PM: give it until midnight
+            day_end = started_ist.replace(hour=23, minute=59, second=0, microsecond=0)
+        if now_ist > day_end:
+            await _work_close(sess, day_end.astimezone(timezone.utc), "auto_closed")
 
 
 async def _work_staff_auth(name: str, pin: str) -> str:
