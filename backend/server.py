@@ -635,6 +635,26 @@ DEFAULT_PI_TERMS = [
 ]
 
 # Auth Helpers
+PASSWORD_MAX_AGE_DAYS = 365
+
+
+def check_password_policy(password: str):
+    """12+ characters with upper and lower case, a digit and a special character.
+    Applied whenever a password is set or changed; existing logins are not interrupted."""
+    pw = password or ""
+    problems = []
+    if len(pw) < 12:
+        problems.append("at least 12 characters")
+    if not re.search(r"[a-z]", pw) or not re.search(r"[A-Z]", pw):
+        problems.append("upper and lower case letters")
+    if not re.search(r"\d", pw):
+        problems.append("a number")
+    if not re.search(r"[^A-Za-z0-9]", pw):
+        problems.append("a special character")
+    if problems:
+        raise HTTPException(status_code=400, detail="Password needs " + ", ".join(problems) + ".")
+
+
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
@@ -790,14 +810,21 @@ async def login(req: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not user.get("active", True):
         raise HTTPException(status_code=401, detail="Account is deactivated")
-    await _sec_log("login_ok", username=user["username"], role=user["role"], ip=ip)
+    changed = user.get("password_changed_at") or user.get("created_at") or ""
+    try:
+        pw_age = (datetime.now(timezone.utc) - datetime.fromisoformat(changed)).days if changed else None
+    except ValueError:
+        pw_age = None
+    pw_expired = pw_age is not None and pw_age > PASSWORD_MAX_AGE_DAYS
+    await _sec_log("login_ok", username=user["username"], role=user["role"], ip=ip, password_expired=pw_expired)
     token = create_token(user["id"], user["role"], user["name"], user["username"])
     return {
         "token": token,
         "user": {
             "id": user["id"], "username": user["username"],
             "name": user["name"], "role": user["role"]
-        }
+        },
+        "password_expired": pw_expired,
     }
 
 @api_router.get("/auth/me")
@@ -812,10 +839,12 @@ async def create_user(req: UserCreate, admin=Depends(require_admin)):
     existing = await db.users.find_one({"username": req.username})
     if existing:
         raise HTTPException(status_code=400, detail="Username already exists")
+    check_password_policy(req.password)
     user_doc = {
         "id": str(uuid.uuid4()),
         "username": req.username,
         "password_hash": hash_password(req.password),
+        "password_changed_at": datetime.now(timezone.utc).isoformat(),
         "name": req.name,
         "role": req.role,
         "active": True,
@@ -842,7 +871,10 @@ async def update_user(user_id: str, req: UserUpdate, admin=Depends(require_admin
     if req.role is not None:
         update["role"] = req.role
     if req.password is not None:
+        check_password_policy(req.password)
         update["password_hash"] = hash_password(req.password)
+        update["password_changed_at"] = datetime.now(timezone.utc).isoformat()
+        await _sec_log("password_changed", username=admin.get("username"), target_user_id=user_id)
     if req.active is not None:
         update["active"] = req.active
     if not update:
@@ -2338,7 +2370,7 @@ async def upload_invoice_with_eway(
     eway_bill: Optional[UploadFile] = File(None),
     user=Depends(get_current_user),
 ):
-    from PyPDF2 import PdfReader, PdfWriter
+    from pypdf import PdfReader, PdfWriter
     if user["role"] not in ["admin", "accounts"]:
         raise HTTPException(status_code=403, detail="Accounts or admin only")
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
