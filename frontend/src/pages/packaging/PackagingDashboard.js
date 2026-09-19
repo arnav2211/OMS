@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import api from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
+import OrderWorkStrip from "@/components/OrderWorkStrip";
 import { compressImage } from "@/lib/compressImage";
 import { mobilePrintPdf } from "@/lib/mobilePrint";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,10 +16,21 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { Package, Upload, Camera, Check, Eye, X, Printer, History, Search } from "lucide-react";
 
-function MultiSelect({ label, options, value, onChange, testId }) {
+function MultiSelect({ label, options, value, onChange, testId, readOnly }) {
+  if (readOnly) {
+    return (
+      <div data-testid={testId}>
+        <Label className="text-sm font-medium">{label}</Label>
+        <p className="mt-1 text-sm font-medium">
+          {value.length > 0 ? value.join(", ")
+            : <span className="text-amber-600 font-normal">Not started yet. Use the Packing work box above with your PIN.</span>}
+        </p>
+      </div>
+    );
+  }
   return (
     <div>
-      <Label className="text-sm font-medium">{label} *</Label>
+      <Label className="text-sm font-medium">{label} * <span className="text-[11px] font-normal text-muted-foreground">(admin override)</span></Label>
       <div className="flex flex-wrap gap-2 mt-1">
         {options.map((opt) => {
           const selected = value.includes(opt.name);
@@ -46,9 +59,35 @@ function MultiSelect({ label, options, value, onChange, testId }) {
 }
 
 export default function PackagingDashboard() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [pkgSearch, setPkgSearch] = useState("");
+  // who is working on which order right now (from the work tracker)
+  const [working, setWorking] = useState({});
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const r = await api.get("/work/active");
+        const map = {};
+        for (const w of r.data) if (w.kind === "order") (map[w.order_id] = map[w.order_id] || []).push(w);
+        setWorking(map);
+      } catch { /* tracker optional */ }
+    };
+    load();
+    const p = setInterval(load, 10000);
+    const t = setInterval(() => setTick(x => x + 1), 30000);
+    return () => { clearInterval(p); clearInterval(t); };
+  }, []);
+  const refreshNames = async () => {
+    if (!selectedOrder) return;
+    try {
+      const pk = (await api.get(`/orders/${selectedOrder.id}`)).data.packaging || {};
+      setItemPackedBy(pk.item_packed_by || []); setBoxPackedBy(pk.box_packed_by || []); setCheckedBy(pk.checked_by || []);
+    } catch { /* keep what is shown */ }
+  };
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [showDetail, setShowDetail] = useState(false);
   const [itemPackedBy, setItemPackedBy] = useState([]);
@@ -150,9 +189,11 @@ export default function PackagingDashboard() {
     if (!selectedOrder) return;
     const isCourier = selectedOrder?.shipping_method === "courier";
     if (markPacked) {
-      if (!itemPackedBy.length) return toast.error("Select who packed the items");
-      if (!boxPackedBy.length) return toast.error("Select who packed the box");
-      if (!checkedBy.length) return toast.error("Select who checked the order");
+      if (isAdmin) {
+        if (!itemPackedBy.length) return toast.error("Select who packed the items");
+        if (!boxPackedBy.length) return toast.error("Select who packed the box");
+        if (!checkedBy.length) return toast.error("Select who checked the order");
+      }
       if (isCourier && !String(weightKg).trim()) return toast.error("Enter the parcel weight (KG) before marking packed — it's needed to book the courier");
     }
     // Typos here are expensive: the weight drives the courier charge.
@@ -269,7 +310,16 @@ export default function PackagingDashboard() {
                     <TableCell className="font-mono font-medium text-sm">
                       <Link to={`/orders/${order.id}`} className="text-primary hover:underline" data-testid={`pkg-order-link-${order.order_number}`}>{order.order_number}</Link>
                     </TableCell>
-                    <TableCell className="text-sm">{order.customer_name}{order.customer_alias ? <span className="text-xs text-muted-foreground ml-1">({order.customer_alias})</span> : ""}</TableCell>
+                    <TableCell className="text-sm">
+                      {order.customer_name}{order.customer_alias ? <span className="text-xs text-muted-foreground ml-1">({order.customer_alias})</span> : ""}
+                      {working[order.id] ? (
+                        <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400 mt-0.5" data-testid={`pkg-working-${order.order_number}`}>
+                          ● {working[order.id].map(w => w.staff).join(", ")} · {working[order.id][0].step_label} · {Math.max(1, Math.round((Date.now() - new Date(working[order.id][0].started_at).getTime()) / 60000))} min
+                        </div>
+                      ) : (
+                        <div className="text-xs text-muted-foreground mt-0.5">free</div>
+                      )}
+                    </TableCell>
                     <TableCell className="text-sm whitespace-nowrap hidden sm:table-cell" data-testid={`pkg-shipping-${order.order_number}`}>
                       {order.shipping_method === "courier" ? (order.courier_name || "Courier") : order.shipping_method === "transport" ? (order.transporter_name || "Transport") : order.shipping_method?.replace(/_/g, " ") || "-"}
                     </TableCell>
@@ -501,10 +551,11 @@ export default function PackagingDashboard() {
                 </p>
               )}
 
-              {/* Three mandatory multi-select fields */}
-              <MultiSelect label="Item Packed By" options={packagingStaff} value={itemPackedBy} onChange={setItemPackedBy} testId="item-packed-by" />
-              <MultiSelect label="Box Packed By" options={packagingStaff} value={boxPackedBy} onChange={setBoxPackedBy} testId="box-packed-by" />
-              <MultiSelect label="Checked By" options={packagingStaff} value={checkedBy} onChange={setCheckedBy} testId="checked-by" />
+              {/* Work is started / continued / finished here by PIN; the names below follow it */}
+              {selectedOrder && <OrderWorkStrip kind="order" orderId={selectedOrder.id} status={selectedOrder.status} onChanged={refreshNames} />}
+              <MultiSelect label="Item Packed By" options={packagingStaff} value={itemPackedBy} onChange={setItemPackedBy} testId="item-packed-by" readOnly={!isAdmin} />
+              <MultiSelect label="Box Packed By" options={packagingStaff} value={boxPackedBy} onChange={setBoxPackedBy} testId="box-packed-by" readOnly={!isAdmin} />
+              <MultiSelect label="Checked By" options={packagingStaff} value={checkedBy} onChange={setCheckedBy} testId="checked-by" readOnly={!isAdmin} />
             </div>
           )}
 
