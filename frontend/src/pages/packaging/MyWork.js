@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Mic, MicOff, Loader2, Play, Square, ArrowLeft, Package, Wrench, CalendarDays, X, Check, User, Users } from "lucide-react";
+import { Mic, MicOff, Loader2, Play, Square, ArrowLeft, Package, Wrench, CalendarDays, X, Check, User, Users, ShoppingBag, ArrowRight } from "lucide-react";
 
 // Shared-phone work screen for packing executives. Task first, people second:
 // the order and step are picked once, then everyone doing it types only a
@@ -29,8 +29,10 @@ const fmtDur = (sec) => {
   return `${s} sec`;
 };
 const liveSec = (sess) => (Date.now() - new Date(sess.started_at).getTime()) / 1000;
-const taskText = (s) => s.kind === "order" ? `${s.order_number} · ${s.step_label}` : s.note;
-const taskKey = (s) => s.kind === "order" ? `o:${s.order_id}:${s.step}` : `g:${s.group_id || s.id}`;
+const taskText = (s) => s.kind === "order" ? `${s.order_number} · ${s.step_label}`
+  : s.kind === "amazon" ? `${s.order_number} · Amazon order` : s.note;
+const taskKey = (s) => s.kind === "order" ? `o:${s.order_id}:${s.step}`
+  : s.kind === "amazon" ? `a:${s.order_id}` : `g:${s.group_id || s.id}`;
 
 // Keypad that fires on the 4th digit. onPin resolves true to close/reset,
 // or a string to show as the error and clear the digits.
@@ -69,7 +71,8 @@ export default function MyWork() {
   const [orders, setOrders] = useState([]);
   const [q, setQ] = useState("");
   const [order, setOrder] = useState(null);
-  const [task, setTask] = useState(null);          // {kind, order, step, note}
+  const [amazonOrders, setAmazonOrders] = useState([]);
+  const [task, setTask] = useState(null);          // {kind: order|amazon|other, order, step, note}
   const [members, setMembers] = useState([]);      // [{name, pin, current}]
   const [note, setNote] = useState("");
   const [listening, setListening] = useState(false);
@@ -105,6 +108,16 @@ export default function MyWork() {
     const t = setTimeout(() => loadOrders(q), 300);
     return () => clearTimeout(t);
   }, [screen, q, loadOrders]);
+
+  const loadAmazon = useCallback(async (query) => {
+    try { const r = await api.get("/work/amazon-orders", { params: { q: query || "" } }); setAmazonOrders(r.data); }
+    catch { toast.error("Could not load Amazon orders"); }
+  }, []);
+  useEffect(() => {
+    if (screen !== "pickAmazon") return;
+    const t = setTimeout(() => loadAmazon(q), 300);
+    return () => clearTimeout(t);
+  }, [screen, q, loadAmazon]);
 
   const err = (e, fallback) => e.response?.data?.detail || fallback;
   const identify = async (pin) => (await api.post("/work/pin/identify", { pin, device: deviceId() })).data;
@@ -149,6 +162,20 @@ export default function MyWork() {
       try {
         const r = await api.post("/work/stop-group", { pin, session_id: s.id, device: deviceId(), remark: remarkRef.current });
         toast.success(`Finished for ${r.data.closed.join(", ")}`); refresh(); return true;
+      } catch (e) { return err(e, "Wrong PIN"); }
+    },
+  });
+  const nextStepOf = (s) => {
+    const i = steps.findIndex(x => x.key === s.step);
+    return i >= 0 && i + 1 < steps.length ? steps[i + 1] : null;
+  };
+  const askNext = (s, names, nxt) => setPinAsk({
+    title: `Next: ${nxt.label}`, remark: true,
+    hint: names.length > 1 ? `Same people continue. Any one of ${names.join(", ")}: enter your PIN` : `${names[0]}: enter your PIN to continue`,
+    run: async (pin) => {
+      try {
+        const r = await api.post("/work/next-step", { pin, session_id: s.id, device: deviceId(), remark: remarkRef.current });
+        toast.success(`${r.data.people.join(", ")}: now ${r.data.step_label}`); refresh(); return true;
       } catch (e) { return err(e, "Wrong PIN"); }
     },
   });
@@ -264,6 +291,38 @@ export default function MyWork() {
     );
   }
 
+  // ── screen: pick Amazon order (one person does the whole order: no steps) ──
+  if (screen === "pickAmazon") {
+    return (
+      <div className="max-w-md mx-auto space-y-3 p-2">
+        <Back />
+        <h2 className="text-xl font-bold">Which Amazon order?</h2>
+        <Input placeholder="Type AM number or product name" value={q} onChange={e => setQ(e.target.value)} className="h-12 text-lg" />
+        <div className="space-y-2">
+          {amazonOrders.map(o => {
+            const due = o.ship_by ? new Date(o.ship_by) : null;
+            const urgent = due && (due.getTime() < Date.now() || due.toDateString() === new Date().toDateString());
+            return (
+              <button key={o.id} className={`w-full text-left border rounded-lg p-3 hover:bg-accent active:bg-accent ${urgent ? "border-red-400" : ""}`}
+                      onClick={() => { setTask({ kind: "amazon", order: o }); setMembers([]); setScreen("who"); }}>
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-lg">{o.order_number}</span>
+                  {due && <span className={`text-xs ${urgent ? "text-red-600 font-semibold" : "text-muted-foreground"}`}>
+                    {urgent ? "SHIP TODAY" : "ship by"} {due.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</span>}
+                </div>
+                <div className="text-sm">{o.customer_name}</div>
+                {o.working_now?.length > 0 && (
+                  <div className="text-xs text-emerald-700 dark:text-emerald-400 mt-1">Now: {o.working_now.join(", ")}</div>
+                )}
+              </button>
+            );
+          })}
+          {amazonOrders.length === 0 && <p className="text-center text-muted-foreground py-6">No Amazon orders waiting</p>}
+        </div>
+      </div>
+    );
+  }
+
   // ── screen: pick step ──
   if (screen === "pickStep" && order) {
     return (
@@ -309,11 +368,12 @@ export default function MyWork() {
   if (screen === "who" && task) {
     return (
       <div className="max-w-md mx-auto space-y-3 p-2">
-        <Back to={task.kind === "order" ? "pickStep" : "other"} />
+        <Back to={task.kind === "order" ? "pickStep" : task.kind === "amazon" ? "pickAmazon" : "other"} />
         <div className="border rounded-lg p-3 bg-accent/40">
           <p className="text-sm text-muted-foreground">Work</p>
-          <p className="text-xl font-bold">{task.kind === "order" ? `${task.order.order_number} · ${task.step.label}` : task.note}</p>
-          {task.kind === "order" && <p className="text-sm text-muted-foreground">{task.order.customer_name}</p>}
+          <p className="text-xl font-bold">{task.kind === "order" ? `${task.order.order_number} · ${task.step.label}`
+            : task.kind === "amazon" ? `${task.order.order_number} · Amazon order` : task.note}</p>
+          {task.kind !== "other" && <p className="text-sm text-muted-foreground">{task.order.customer_name}</p>}
         </div>
         <h2 className="text-xl font-bold">Who is doing this?</h2>
         <p className="text-muted-foreground -mt-2">Each person: type your PIN. Then press Start.</p>
@@ -437,10 +497,13 @@ export default function MyWork() {
         <Button className="h-20 text-lg" onClick={() => setScreen("pickOrder")}>
           <Package className="w-6 h-6 mr-2" /> Start order
         </Button>
-        <Button className="h-20 text-lg" variant="secondary" onClick={() => setScreen("other")}>
-          <Wrench className="w-6 h-6 mr-2" /> Other work
+        <Button className="h-20 text-lg bg-amber-500 hover:bg-amber-600 text-black" onClick={() => setScreen("pickAmazon")} data-testid="mywork-amazon">
+          <ShoppingBag className="w-6 h-6 mr-2" /> Amazon order
         </Button>
       </div>
+      <Button className="w-full h-16 text-lg" variant="secondary" onClick={() => setScreen("other")}>
+        <Wrench className="w-6 h-6 mr-2" /> Other work
+      </Button>
       <div className="grid grid-cols-2 gap-3">
         <Button variant="outline" className="h-12" onClick={() => setScreen("leaveForm")}>
           <CalendarDays className="w-5 h-5 mr-2" /> Apply for leave
@@ -460,7 +523,7 @@ export default function MyWork() {
             <CardContent className="pt-4 space-y-2">
               <div>
                 <p className="text-lg font-bold leading-tight">{taskText(first)}</p>
-                {first.kind === "order" && <p className="text-sm text-muted-foreground">{first.customer_name}</p>}
+                {first.kind !== "other" && <p className="text-sm text-muted-foreground">{first.customer_name}</p>}
               </div>
               {g.rows.map(s => (
                 <div key={s.id} className="flex items-center justify-between gap-2 border rounded-lg px-3 py-2">
@@ -476,6 +539,11 @@ export default function MyWork() {
                   </Button>
                 </div>
               ))}
+              {first.kind === "order" && nextStepOf(first) && (
+                <Button className="w-full h-14 text-base" onClick={() => askNext(first, names, nextStepOf(first))} data-testid="mywork-next-step">
+                  Next step: {nextStepOf(first).label} <ArrowRight className="w-5 h-5 ml-2" />
+                </Button>
+              )}
               {g.rows.length > 1 && (
                 <Button variant="outline" className="w-full h-12 text-base border-destructive text-destructive" onClick={() => askDoneAll(first, names)}>
                   Done for all ({g.rows.length})

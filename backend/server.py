@@ -2100,12 +2100,12 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
         packaging["order_images"] = updates["order_images"]
     if "packed_box_images" in updates:
         packaging["packed_box_images"] = updates["packed_box_images"]
-    if "item_packed_by" in updates:
-        packaging["item_packed_by"] = updates["item_packed_by"]
-    if "box_packed_by" in updates:
-        packaging["box_packed_by"] = updates["box_packed_by"]
-    if "checked_by" in updates:
-        packaging["checked_by"] = updates["checked_by"]
+    # Who packed is recorded by the My Work tracker (PIN), never picked by hand.
+    # Only an admin may set names directly, as an override for exceptions.
+    if user["role"] == "admin":
+        for _f in ("item_packed_by", "box_packed_by", "checked_by"):
+            if _f in updates:
+                packaging[_f] = updates[_f]
     # Names recorded by the work tracker are authoritative and merged in here.
     # Orders the tracker never touched skip this entirely.
     _tracked = await _work_names_for_order(order_id)
@@ -2138,12 +2138,7 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
         new_status = "packaging"
     if new_status == "packed":
         # Validate mandatory fields
-        if not packaging.get("item_packed_by"):
-            raise HTTPException(status_code=400, detail="Item Packed By is required")
-        if not packaging.get("box_packed_by"):
-            raise HTTPException(status_code=400, detail="Box Packed By is required")
-        if not packaging.get("checked_by"):
-            raise HTTPException(status_code=400, detail="Checked By is required")
+        _work_require_tracked(packaging, user)
         if order.get("shipping_method") == "courier" and not str(packaging.get("weight_kg", "")).strip():
             raise HTTPException(status_code=400, detail="Weight (KG) is required for courier orders before marking packed")
         packaging["packed_at"] = datetime.now(timezone.utc).isoformat()
@@ -2165,6 +2160,10 @@ async def mark_order_packed(order_id: str, user=Depends(get_current_user)):
     if order["status"] not in ["new", "packaging"]:
         raise HTTPException(status_code=400, detail="Can only mark new/packaging orders as packed")
     packaging = order.get("packaging", {})
+    _tracked = await _work_names_for_order(order_id)
+    if any(_tracked.values()) or packaging.get("tracker_added"):
+        _work_merge_packed_by(packaging, _tracked)
+    _work_require_tracked(packaging, user)
     if order.get("shipping_method") == "courier" and not str(packaging.get("weight_kg", "")).strip():
         raise HTTPException(status_code=400, detail="Weight (KG) is required for courier orders before marking packed")
     packaging["packed_at"] = datetime.now(timezone.utc).isoformat()
@@ -2994,7 +2993,7 @@ def _work_public(sess: dict) -> dict:
     else:
         end = _work_now()
     out["duration_sec"] = max(0, int((end - started).total_seconds()))
-    out["step_label"] = WORK_STEP_LABEL.get(sess.get("step") or "", "")
+    out["step_label"] = "Amazon order" if sess.get("kind") == "amazon" else WORK_STEP_LABEL.get(sess.get("step") or "", "")
     if sess.get("status") == "active" and sess.get("last_confirmed_at"):
         since = (_work_now() - datetime.fromisoformat(sess["last_confirmed_at"])).total_seconds()
         out["needs_confirm"] = bool(WORK_NUDGE_MIN) and since >= WORK_NUDGE_MIN * 60
@@ -3033,6 +3032,52 @@ def _work_merge_packed_by(packaging: dict, tracked: dict) -> dict:
     return packaging
 
 
+WORK_FIELD_STEP = {"item_packed_by": "Filling material", "box_packed_by": "Making box & packing", "checked_by": "Checking"}
+
+
+def _work_require_tracked(packaging: dict, user: dict):
+    """An order cannot be marked packed until every step has a name, and names
+    only come from My Work. Admins are exempt (phones down, genuine exceptions)."""
+    if user.get("role") == "admin":
+        return
+    missing = [label for f, label in WORK_FIELD_STEP.items() if not packaging.get(f)]
+    if missing:
+        raise HTTPException(status_code=400, detail=(
+            "Not started in My Work: " + ", ".join(missing) +
+            ". Start it there with your PIN first, then mark packed."))
+
+
+async def _work_amazon_names(amazon_order_id: str) -> list:
+    names = []
+    async for sess in db.work_sessions.find({"kind": "amazon", "order_id": amazon_order_id},
+                                            {"_id": 0}).sort("started_at", 1):
+        if sess.get("status") != "active" and int(sess.get("duration_sec") or 0) < WORK_MIN_COUNTED_SEC:
+            continue
+        if sess["staff"] not in names:
+            names.append(sess["staff"])
+    return names
+
+
+async def _work_sync_amazon(amazon_order_id: Optional[str]):
+    """One executive does a whole Amazon order, so her name fills all three
+    fields, and starting it moves the order from new to packaging."""
+    if not amazon_order_id:
+        return
+    ao = await db.amazon_orders.find_one({"id": amazon_order_id}, {"_id": 0, "status": 1, "packaging": 1})
+    if not ao or ao.get("status") in ("dispatched", "cancelled"):
+        return
+    names = await _work_amazon_names(amazon_order_id)
+    packaging = dict(ao.get("packaging") or {})
+    if not names and not packaging.get("tracker_added"):
+        return
+    _work_merge_packed_by(packaging, {f: list(names) for f in WORK_FIELD_STEP})
+    upd = {**{f"packaging.{f}": packaging[f] for f in WORK_FIELD_STEP},
+           "packaging.tracker_added": packaging["tracker_added"]}
+    if names and ao.get("status") == "new":
+        upd["status"] = "packaging"
+    await db.amazon_orders.update_one({"id": amazon_order_id}, {"$set": upd})
+
+
 async def _work_sync_packed_by(order_id: Optional[str]):
     """Push tracker names onto the order. Dispatched/cancelled orders and
     orders the tracker never touched are left exactly as they are."""
@@ -3069,6 +3114,8 @@ async def _work_close(sess: dict, ended: datetime, status: str, remark: Optional
     await db.work_sessions.update_one({"id": sess["id"]}, {"$set": fields})
     if sess.get("kind") == "order":
         await _work_sync_packed_by(sess.get("order_id"))
+    elif sess.get("kind") == "amazon":
+        await _work_sync_amazon(sess.get("order_id"))
 
 
 async def _work_sweep():
@@ -3359,13 +3406,21 @@ async def work_start_group(req: WorkGroupStartRequest, user=Depends(get_current_
             raise HTTPException(status_code=404, detail="Order not found")
         base.update({"order_id": req.order_id, "order_number": order.get("order_number"),
                      "customer_name": order.get("customer_name"), "step": req.step})
+    elif req.kind == "amazon":
+        ao = await db.amazon_orders.find_one({"id": req.order_id or ""}, {"_id": 0, "am_order_number": 1, "status": 1, "items": 1})
+        if not ao:
+            raise HTTPException(status_code=404, detail="Amazon order not found")
+        if ao.get("status") in ("dispatched", "cancelled"):
+            raise HTTPException(status_code=400, detail=f"This Amazon order is already {ao['status']}")
+        base.update({"order_id": req.order_id, "order_number": ao.get("am_order_number"),
+                     "customer_name": _work_amazon_summary(ao)})
     elif req.kind == "other":
         note = (req.note or "").strip()
         if not note:
             raise HTTPException(status_code=400, detail="Say or type what work you are doing")
         base["note"] = note[:200]
     else:
-        raise HTTPException(status_code=400, detail="kind must be order or other")
+        raise HTTPException(status_code=400, detail="kind must be order, amazon or other")
     now = _work_now()
     group_id = str(uuid.uuid4())
     started = []
@@ -3380,11 +3435,21 @@ async def work_start_group(req: WorkGroupStartRequest, user=Depends(get_current_
         started.append(_work_public(doc))
     if req.kind == "order":
         await _work_sync_packed_by(req.order_id)
+    elif req.kind == "amazon":
+        await _work_sync_amazon(req.order_id)
     return {"ok": True, "sessions": started}
+
+
+def _work_amazon_summary(ao: dict) -> str:
+    items = ao.get("items") or []
+    text = ", ".join(f"{i.get('quantity')} x {(i.get('product_name') or '')[:38]}" for i in items[:2])
+    return text + (f" +{len(items) - 2} more" if len(items) > 2 else "")
 
 
 def _work_task_query(sess: dict) -> dict:
     """Everyone active on the same task: same order+step, or the same group for other work."""
+    if sess.get("kind") == "amazon":
+        return {"status": "active", "kind": "amazon", "order_id": sess["order_id"]}
     if sess.get("kind") == "order":
         return {"status": "active", "kind": "order", "order_id": sess["order_id"], "step": sess["step"]}
     return {"status": "active", "group_id": sess.get("group_id") or "-none-"} if sess.get("group_id") \
@@ -3406,6 +3471,63 @@ async def work_stop_group(req: WorkGroupStopRequest, user=Depends(get_current_us
     for m in members:
         await _work_close(m, now, "done", req.remark)
     return {"ok": True, "closed": [m["staff"] for m in members], "by": name}
+
+
+@api_router.get("/work/amazon-orders")
+async def work_amazon_orders(q: str = "", user=Depends(get_current_user)):
+    """Amazon orders still to be packed, most urgent ship-by date first."""
+    _work_require(user, WORK_DO_ROLES)
+    query = {"status": {"$in": ["new", "packaging"]}}
+    q = (q or "").strip()
+    if q:
+        query["$or"] = [{"am_order_number": {"$regex": re.escape(q), "$options": "i"}},
+                        {"amazon_order_id": {"$regex": re.escape(q), "$options": "i"}},
+                        {"items.product_name": {"$regex": re.escape(q), "$options": "i"}}]
+    rows = await db.amazon_orders.find(query, {"_id": 0, "id": 1, "am_order_number": 1, "amazon_order_id": 1,
+                                               "status": 1, "items": 1, "latest_ship_date": 1,
+                                               "ship_type": 1}).to_list(200)
+    rows.sort(key=lambda o: o.get("latest_ship_date") or "9999")
+    busy = {}
+    async for a in db.work_sessions.find({"status": "active", "kind": "amazon"}, {"_id": 0, "order_id": 1, "staff": 1}):
+        busy.setdefault(a["order_id"], []).append(a["staff"])
+    return [{"id": o["id"], "order_number": o.get("am_order_number"), "amazon_order_id": o.get("amazon_order_id"),
+             "customer_name": _work_amazon_summary(o), "status": o.get("status"),
+             "ship_by": o.get("latest_ship_date") or "", "ship_type": o.get("ship_type"),
+             "working_now": busy.get(o["id"], [])} for o in rows[:60]]
+
+
+@api_router.post("/work/next-step")
+async def work_next_step(req: WorkGroupStopRequest, user=Depends(get_current_user)):
+    """Same people, same order, next step: ends the current step and starts the
+    following one for everyone on it at the same instant - no re-selecting."""
+    _work_require(user, WORK_DO_ROLES)
+    name = await _work_identify(req.pin, _work_lock_key(user, req.device))
+    sess = await db.work_sessions.find_one({"id": req.session_id, "status": "active"}, {"_id": 0})
+    if not sess:
+        raise HTTPException(status_code=404, detail="This work is already finished")
+    if sess.get("kind") != "order":
+        raise HTTPException(status_code=400, detail="Only order work has steps")
+    keys = [x["key"] for x in WORK_STEPS]
+    idx = keys.index(sess["step"])
+    if idx + 1 >= len(keys):
+        raise HTTPException(status_code=400, detail="This is the last step. Press DONE.")
+    members = await db.work_sessions.find(_work_task_query(sess), {"_id": 0}).to_list(50)
+    if name not in {m["staff"] for m in members}:
+        raise HTTPException(status_code=403, detail=f"{name} is not working on this.")
+    now = _work_now()
+    nxt, group_id, started = keys[idx + 1], str(uuid.uuid4()), []
+    for m in members:
+        await _work_close(m, now, "done", req.remark)
+        doc = {"id": str(uuid.uuid4()), "staff": m["staff"], "kind": "order", "order_id": sess["order_id"],
+               "order_number": sess.get("order_number"), "customer_name": sess.get("customer_name"),
+               "step": nxt, "note": None, "group_id": group_id,
+               "started_at": now.isoformat(), "last_confirmed_at": now.isoformat(),
+               "ended_at": None, "duration_sec": None, "status": "active",
+               "device": (req.device or "")[:40], "logged_in_as": user.get("username") or user.get("name")}
+        await db.work_sessions.insert_one(dict(doc))
+        started.append(m["staff"])
+    await _work_sync_packed_by(sess["order_id"])
+    return {"ok": True, "step": nxt, "step_label": WORK_STEP_LABEL[nxt], "people": started, "by": name}
 
 
 @api_router.get("/work/active")
@@ -3446,7 +3568,7 @@ def _work_staff_summary(sessions: list) -> dict:
                                         "current": None})
         h["total_sec"] += s["duration_sec"]
         h["sessions"] += 1
-        if s["kind"] == "order":
+        if s["kind"] in ("order", "amazon"):
             h["order_sec"] += s["duration_sec"]
             h["orders"].add(s.get("order_number") or s.get("order_id"))
         else:
@@ -3488,8 +3610,10 @@ async def work_live(user=Depends(get_current_user)):
     # orders touched today, with per-step progress
     orders = {}
     for s in sessions:
-        if s["kind"] != "order":
+        if s["kind"] not in ("order", "amazon"):
             continue
+        if s["kind"] == "amazon":
+            s = dict(s, step="amazon")
         o = orders.setdefault(s["order_id"], {"order_id": s["order_id"], "order_number": s["order_number"],
                                               "customer_name": s["customer_name"], "steps": {},
                                               "total_sec": 0, "first_start": s["started_at"], "active": False})
@@ -3508,7 +3632,8 @@ async def work_live(user=Depends(get_current_user)):
     order_rows = []
     for o in orders.values():
         steps = [dict(v, people=sorted(v["people"])) for k, v in o["steps"].items()]
-        steps.sort(key=lambda v: [x["key"] for x in WORK_STEPS].index(v["step"]))
+        _order = [x["key"] for x in WORK_STEPS]
+        steps.sort(key=lambda v: _order.index(v["step"]) if v["step"] in _order else 99)
         order_rows.append(dict(o, steps=steps))
     order_rows.sort(key=lambda o: (not o["active"], o["first_start"]))
     return {"day": day, "now": _work_now().isoformat(), "people": people,
@@ -3567,6 +3692,12 @@ async def work_order(order_id: str, user=Depends(get_current_user)):
                       "last_end": max((r.get("ended_at") or "" for r in rows), default=None) or None,
                       "active": any(r["status"] == "active" for r in rows),
                       "sessions": rows})
+    am = [s for s in sessions if s.get("kind") == "amazon"]
+    if am:
+        steps.append({"step": "amazon", "label": "Amazon order", "people": sorted({r["staff"] for r in am}),
+                      "total_sec": sum(r["duration_sec"] for r in am), "first_start": am[0]["started_at"],
+                      "last_end": max((r.get("ended_at") or "" for r in am), default=None) or None,
+                      "active": any(r["status"] == "active" for r in am), "sessions": am})
     return {"order_id": order_id, "steps": steps, "total_sec": sum(s["duration_sec"] for s in sessions),
             "first_start": sessions[0]["started_at"] if sessions else None,
             "last_end": max((s.get("ended_at") or "" for s in sessions), default=None) or None}
@@ -5700,8 +5831,13 @@ async def update_amazon_packaging(order_id: str, updates: dict, user=Depends(get
 
     packaging = order.get("packaging", {})
     for key in ["item_packed_by", "box_packed_by", "checked_by", "item_images", "order_images", "packed_box_images"]:
+        if key in WORK_FIELD_STEP and user["role"] != "admin":
+            continue                      # names come from My Work, never picked by hand
         if key in updates:
             packaging[key] = updates[key]
+    _names = await _work_amazon_names(order_id)
+    if _names or packaging.get("tracker_added"):
+        _work_merge_packed_by(packaging, {f: list(_names) for f in WORK_FIELD_STEP})
 
     new_status = order.get("status", "new")
     if new_status == "new":
@@ -5721,6 +5857,11 @@ async def mark_amazon_packed(order_id: str, user=Depends(get_current_user)):
     order = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    await _work_sync_amazon(order_id)
+    fresh = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0, "packaging": 1}) or {}
+    if user["role"] != "admin" and not (fresh.get("packaging") or {}).get("item_packed_by"):
+        raise HTTPException(status_code=400, detail="Not started in My Work. Open My Work, tap Amazon orders, "
+                                                    "pick this order and enter your PIN first.")
     await db.amazon_orders.update_one(
         {"id": order_id},
         {"$set": {"status": "packed", "packaging.packed_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()}}

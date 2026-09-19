@@ -45,7 +45,9 @@ const StatusBadge = ({ s }) => {
 
 const what = (s) => s.kind === "order"
   ? <><Link to={`/orders/${s.order_id}`} className="font-semibold hover:underline">{s.order_number}</Link> · {s.step_label}<span className="text-muted-foreground"> · {s.customer_name}</span></>
-  : <span className="italic">{s.note}</span>;
+  : s.kind === "amazon"
+    ? <><Link to={`/amazon-orders/${s.order_id}`} className="font-semibold hover:underline">{s.order_number}</Link> · Amazon order<span className="text-muted-foreground"> · {s.customer_name}</span></>
+    : <span className="italic">{s.note}</span>;
 
 export default function PackingLive() {
   const { user } = useAuth();

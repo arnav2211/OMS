@@ -1662,6 +1662,8 @@ function PaymentSection({ order, user, canEditPayment, isDispatched, isAdmin, or
 }
 
 function PackagingForm({ order, staffList, onSave, onCancel, saving, onDirtyChange }) {
+  const { user: formUser } = useAuth();
+  const canPickNames = formUser?.role === "admin";     // everyone else: names come from My Work only
   const [itemPackedBy, setItemPackedBy] = useState(order.packaging?.item_packed_by || []);
   const [boxPackedBy, setBoxPackedBy] = useState(order.packaging?.box_packed_by || []);
   const [checkedBy, setCheckedBy] = useState(order.packaging?.checked_by || []);
@@ -1758,7 +1760,7 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving, onDirtyChan
       {/* Staff Selection - filled by the My Work tracker; tap only to correct */}
       {Object.values(trackedBy).some(v => v.length > 0) && (
         <p className="text-xs text-emerald-700 dark:text-emerald-400">
-          Names below are filled automatically from My Work. You do not need to select them.
+          Names are filled automatically from My Work (PIN). They cannot be selected here.
         </p>
       )}
       {[["Item Packed By", itemPackedBy, setItemPackedBy, "item_packed_by"], ["Box Packed By", boxPackedBy, setBoxPackedBy, "box_packed_by"], ["Checked By", checkedBy, setCheckedBy, "checked_by"]].map(([label, list, setter, field]) => (
@@ -1766,14 +1768,21 @@ function PackagingForm({ order, staffList, onSave, onCancel, saving, onDirtyChan
           <Label className="text-sm">{label}
             {trackedBy[field]?.length > 0 && <span className="ml-2 text-xs font-normal text-emerald-700 dark:text-emerald-400">from My Work: {trackedBy[field].join(", ")}</span>}
           </Label>
-          <div className="flex flex-wrap gap-2 mt-1">
-            {staffList.map(s => (
-              <Button key={s.id} variant={list.includes(s.name) ? "default" : "outline"} size="sm" onClick={() => toggleStaff(list, setter, s.name)}>
-                {s.name}
-              </Button>
-            ))}
-            {staffList.length === 0 && <p className="text-xs text-muted-foreground">No staff configured</p>}
-          </div>
+          {canPickNames ? (
+            <div className="flex flex-wrap gap-2 mt-1">
+              {staffList.map(s => (
+                <Button key={s.id} variant={list.includes(s.name) ? "default" : "outline"} size="sm" onClick={() => toggleStaff(list, setter, s.name)}>
+                  {s.name}
+                </Button>
+              ))}
+              <p className="w-full text-[11px] text-muted-foreground">Admin override. Staff cannot pick names.</p>
+            </div>
+          ) : (
+            <p className="mt-1 text-sm font-medium">
+              {list.length > 0 ? list.join(", ")
+                : <span className="text-amber-600 font-normal">Not started in My Work yet. Start this step there with your PIN.</span>}
+            </p>
+          )}
         </div>
       ))}
 

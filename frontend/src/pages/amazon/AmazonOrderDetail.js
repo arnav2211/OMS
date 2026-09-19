@@ -385,6 +385,8 @@ export default function AmazonOrderDetail() {
 }
 
 function AmazonPackagingForm({ order, staffList, onSave, onCancel, saving }) {
+  const { user: formUser } = useAuth();
+  const canPickNames = formUser?.role === "admin";     // everyone else: names come from My Work only
   const [itemPackedBy, setItemPackedBy] = useState(order.packaging?.item_packed_by || []);
   const [boxPackedBy, setBoxPackedBy] = useState(order.packaging?.box_packed_by || []);
   const [checkedBy, setCheckedBy] = useState(order.packaging?.checked_by || []);
@@ -425,11 +427,17 @@ function AmazonPackagingForm({ order, staffList, onSave, onCancel, saving }) {
       {[["Item Packed By", itemPackedBy, setItemPackedBy], ["Box Packed By", boxPackedBy, setBoxPackedBy], ["Checked By", checkedBy, setCheckedBy]].map(([label, list, setter]) => (
         <div key={label}>
           <Label className="text-sm">{label}</Label>
-          <div className="flex flex-wrap gap-2 mt-1">
-            {staffList.map(s => (
-              <Button key={s.id} variant={list.includes(s.name) ? "default" : "outline"} size="sm" onClick={() => toggleStaff(list, setter, s.name)}>{s.name}</Button>
-            ))}
-          </div>
+          {canPickNames ? (
+            <div className="flex flex-wrap gap-2 mt-1">
+              {staffList.map(s => <Button key={s.id} variant={list.includes(s.name) ? "default" : "outline"} size="sm" onClick={() => toggleStaff(list, setter, s.name)}>{s.name}</Button>)}
+              <p className="w-full text-[11px] text-muted-foreground">Admin override. Staff cannot pick names.</p>
+            </div>
+          ) : (
+            <p className="mt-1 text-sm font-medium">
+              {list.length > 0 ? list.join(", ")
+                : <span className="text-amber-600 font-normal">Not started yet. In My Work tap "Amazon order", pick this order and enter your PIN.</span>}
+            </p>
+          )}
         </div>
       ))}
       <Separator />
