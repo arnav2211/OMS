@@ -8757,7 +8757,7 @@ SPAPI = {
     "endpoint": os.environ.get("AMZ_SP_ENDPOINT", "https://sellingpartnerapi-eu.amazon.com").rstrip("/"),
     "marketplace": os.environ.get("AMZ_SP_MARKETPLACE", "A21TJRUUN4KGV"),   # Amazon.in
 }
-SPAPI_SYNC_INTERVAL_SECONDS = int(os.environ.get("AMZ_SP_SYNC_SECONDS", "300"))
+SPAPI_SYNC_INTERVAL_SECONDS = int(os.environ.get("AMZ_SP_SYNC_SECONDS", "120"))
 _spapi_token_cache = {"token": "", "expires": 0.0}
 _spapi_sync_lock = asyncio.Lock()
 
@@ -8888,7 +8888,13 @@ async def _spapi_sync(lookback_hours: Optional[int] = None) -> dict:
                 continue
             existing = await db.amazon_orders.find_one({"amazon_order_id": aid}, {"_id": 0})
             if not existing:
-                if st in ("Unshipped", "PartiallyShipped"):
+                # Scheduling an Easy Ship pickup flips Amazon's OrderStatus to
+                # "Shipped" while the parcel is still on our table. Such an order
+                # is still ours to pack, so it is imported as long as the courier
+                # has not collected it yet.
+                easy = o.get("EasyShipShipmentStatus") or ""
+                still_with_us = bool(easy) and easy not in SPAPI_EASYSHIP_GONE and st not in ("Canceled", "Pending")
+                if st in ("Unshipped", "PartiallyShipped") or still_with_us:
                     doc = await _spapi_build_order(o)
                     await db.amazon_orders.insert_one(_pii_seal({**doc, "address_public": doc["address"]}))
                     res["created"].append(doc["am_order_number"])
