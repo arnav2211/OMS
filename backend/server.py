@@ -8377,6 +8377,48 @@ SHIP_ROLES = ["admin", "dispatch", "packaging", "accounts"]
 SHIP_API_COURIERS = ["DTDC", "Amazon", "Shiprocket"]
 
 
+# Amazon Shipping exposes no wallet-balance API. The balance shown is therefore
+# an ESTIMATE: the figure someone typed in after the last recharge, minus every
+# Amazon label the OMS has bought since (cancelled labels drop out again).
+AMAZON_WALLET_EDIT_ROLES = ["admin", "accounts"]
+
+
+class AmazonWalletRequest(BaseModel):
+    balance: float
+
+
+@api_router.get("/amazon/wallet")
+async def amazon_wallet(user=Depends(get_current_user)):
+    if user["role"] not in SHIP_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    doc = await db.settings.find_one({"_id": "amazon_wallet"}) or {}
+    out = {"tracked": "balance" in doc, "can_edit": user["role"] in AMAZON_WALLET_EDIT_ROLES,
+           "empty_at": doc.get("empty_at") or ""}
+    if not out["tracked"]:
+        return out
+    spent, count = 0.0, 0
+    async for o in db.orders.find({"amazon_shipment.booked_at": {"$gte": doc["set_at"]}},
+                                  {"_id": 0, "amazon_shipment.amount": 1}):
+        spent += float((o.get("amazon_shipment") or {}).get("amount") or 0) * (1 + COMPARE_GST / 100.0)
+        count += 1
+    return {**out, "balance_set": doc["balance"], "set_at": doc["set_at"], "set_by": doc.get("set_by") or "",
+            "spent": round(spent, 2), "shipments": count, "estimated": round(float(doc["balance"]) - spent, 2)}
+
+
+@api_router.post("/amazon/wallet")
+async def amazon_wallet_set(req: AmazonWalletRequest, user=Depends(get_current_user)):
+    """Record the real Amazon Shipping balance (read off Amazon's site after a recharge)."""
+    if user["role"] not in AMAZON_WALLET_EDIT_ROLES:
+        raise HTTPException(status_code=403, detail="Only admin or accounts can update the wallet balance")
+    if req.balance < 0 or req.balance > 10_000_000:
+        raise HTTPException(status_code=400, detail="Enter a valid balance")
+    await db.settings.update_one({"_id": "amazon_wallet"}, {
+        "$set": {"balance": round(float(req.balance), 2), "set_at": datetime.now(timezone.utc).isoformat(),
+                 "set_by": user["name"]},
+        "$unset": {"empty_at": ""}}, upsert=True)
+    return await amazon_wallet(user=user)
+
+
 @api_router.get("/shipments/bookable")
 async def shipments_bookable(user=Depends(get_current_user)):
     if user["role"] not in SHIP_ROLES:
@@ -9005,7 +9047,13 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
                           headers=headers, json=purchase)
     if pr.status_code not in (200, 201):
         logging.error(f"Amazon purchase failed: {pr.status_code} {pr.text[:500]}")
+        if re.search(r"A-303|insufficient|low balance", pr.text or "", re.I):
+            # Amazon has no balance API, so a refused purchase is the only hard signal we get.
+            await db.settings.update_one({"_id": "amazon_wallet"},
+                                         {"$set": {"empty_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+            raise HTTPException(status_code=400, detail="Amazon booking failed: the Amazon Shipping wallet does not have enough balance. Recharge it and book again.")
         raise HTTPException(status_code=400, detail=f"Amazon booking failed: {pr.text[:300]}")
+    await db.settings.update_one({"_id": "amazon_wallet"}, {"$unset": {"empty_at": ""}})
 
     pp = pr.json().get("payload") or pr.json()
     tracking_id, label_b64, label_fmt = "", "", "PNG"
