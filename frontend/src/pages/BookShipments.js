@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { toast } from "sonner";
 import {
   Loader2, RefreshCw, Printer, PackageCheck, Clock, AlertTriangle, Truck, Wallet, ShieldCheck, Scale, Trophy,
-  Pencil, ExternalLink,
+  ExternalLink,
 } from "lucide-react";
 import { fmtAmazonRate, fmtAmazonRateBreakdown } from "@/lib/amazonShipping";
 
@@ -25,7 +25,7 @@ const COURIERS = {
 };
 const FILTERS = ["All", "DTDC", "Amazon", "Shiprocket", "Unassigned"];
 // Neither courier has a recharge API - money is added on their own sites.
-const RECHARGE_URL = { Shiprocket: "https://app.shiprocket.in/", Amazon: "https://ship.amazon.in/" };
+const RECHARGE_URL = { Shiprocket: "https://app.shiprocket.in/" };
 const LOW_WALLET = 500;
 const inr = (n) => `₹${Number(n || 0).toFixed(2)}`;
 
@@ -43,7 +43,6 @@ export default function BookShipments() {
   const [loadErrors, setLoadErrors] = useState({});
   const [loading, setLoading] = useState(true);
   const [wallet, setWallet] = useState(null);
-  const [amzWallet, setAmzWallet] = useState(null);
   const [filter, setFilter] = useState("All");
   const [selected, setSelected] = useState(new Set());
   const [busy, setBusy] = useState({});
@@ -74,25 +73,7 @@ export default function BookShipments() {
       setLoading(false);
     }
     api.get("/shiprocket/wallet").then(r => setWallet(r.data.balance)).catch(() => {});
-    api.get("/amazon/wallet").then(r => setAmzWallet(r.data)).catch(() => {});
   }, []);
-
-  // Amazon has no balance API: someone types the real figure in after a
-  // recharge and the OMS counts down from it as labels are bought.
-  const editAmazonWallet = async () => {
-    const v = window.prompt("Amazon Shipping wallet balance right now (₹), as shown on ship.amazon.in:",
-                            amzWallet?.tracked ? String(amzWallet.estimated) : "");
-    if (v === null) return;
-    const n = parseFloat(v);
-    if (!Number.isFinite(n) || n < 0) return toast.error("Enter a valid amount");
-    try {
-      const res = await api.post("/amazon/wallet", { balance: n });
-      setAmzWallet(res.data);
-      toast.success("Amazon wallet balance updated");
-    } catch (err) {
-      toast.error(err.response?.data?.detail || "Could not update the balance");
-    }
-  };
 
   useEffect(() => { load(); }, [load]);
 
@@ -330,26 +311,6 @@ export default function BookShipments() {
               </a>
             </Badge>
           )}
-          {amzWallet && (() => {
-            const low = !!amzWallet.empty_at || (amzWallet.tracked && amzWallet.estimated < LOW_WALLET);
-            return (
-              <Badge variant="outline" className={`gap-1.5 py-1 ${low ? "border-red-400 text-red-600" : ""}`} data-testid="ship-amz-wallet"
-                     title={amzWallet.tracked
-                       ? `Estimate. ${inr(amzWallet.balance_set)} entered by ${amzWallet.set_by} on ${new Date(amzWallet.set_at).toLocaleString("en-IN")}, minus ${amzWallet.shipments} label(s) worth ${inr(amzWallet.spent)} booked since. Amazon gives no live balance.`
-                       : "Amazon gives no live balance. Enter it once after a recharge and the OMS counts down from it."}>
-                <Wallet className="w-3.5 h-3.5" />
-                {amzWallet.empty_at ? "Amazon wallet EMPTY" : amzWallet.tracked ? <>Amazon ≈ {inr(amzWallet.estimated)}</> : "Amazon wallet: not set"}
-                {amzWallet.can_edit && (
-                  <button type="button" onClick={editAmazonWallet} className="underline flex items-center gap-0.5 font-semibold" data-testid="ship-amz-wallet-edit">
-                    <Pencil className="w-3 h-3" /> {amzWallet.tracked ? "Update" : "Set"}
-                  </button>
-                )}
-                <a href={RECHARGE_URL.Amazon} target="_blank" rel="noreferrer" className="underline flex items-center gap-0.5 font-semibold">
-                  Recharge <ExternalLink className="w-3 h-3" />
-                </a>
-              </Badge>
-            );
-          })()}
           <Button variant="outline" size="sm" onClick={syncDtdc} data-testid="ship-dtdc-sync">
             <PackageCheck className="w-4 h-4 mr-1" /> Check DTDC Pickups
           </Button>
