@@ -7,7 +7,9 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Loader2, Scale, Trophy, AlertTriangle, XCircle } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import CarrierRiskCalculator from "@/components/CarrierRiskCalculator";
+import { Loader2, Scale, Trophy, AlertTriangle, XCircle, ShieldCheck, Phone, PackageCheck, Clock, IndianRupee } from "lucide-react";
 
 // One pincode + weight -> DTDC, Anjani, Amazon Shipping and Shiprocket side by
 // side, all on the same basis (what we pay, GST included), cheapest on top.
@@ -47,6 +49,28 @@ function AnjaniAreas({ areas }) {
   );
 }
 
+function AnjaniCenters({ centers }) {
+  if (!centers?.length) return null;
+  return (
+    <details className="mt-2 text-xs">
+      <summary className="cursor-pointer font-semibold">Anjani centres here ({centers.length}) — phone numbers</summary>
+      <div className="mt-1.5 space-y-1.5">
+        {centers.map((c, i) => (
+          <div key={i} className="rounded border border-border/70 bg-background/60 p-2">
+            <div className="font-medium">{c.name}{c.franchise ? ` · ${c.franchise}` : ""}</div>
+            {c.address && <div className="text-muted-foreground">{c.address}</div>}
+            <div className="flex flex-wrap gap-x-3 mt-0.5">
+              {(c.phones || []).map(ph => (
+                <a key={ph} href={`tel:${ph}`} className="flex items-center gap-1 text-primary"><Phone className="w-3 h-3" /> {ph}</a>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 export default function CourierCompare() {
   const [pincode, setPincode] = useState("");
   const [weight, setWeight] = useState("");
@@ -75,6 +99,14 @@ export default function CourierCompare() {
         <h1 className="text-2xl font-bold flex items-center gap-2"><Scale className="w-6 h-6" /> Compare Couriers</h1>
         <p className="text-sm text-muted-foreground">DTDC, Anjani, Amazon Shipping and Shiprocket together, cheapest first.</p>
       </div>
+
+      <Tabs defaultValue="compare" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="compare" data-testid="compare-tab-rates"><Scale className="w-4 h-4 mr-2" /> Rates &amp; Service</TabsTrigger>
+          <TabsTrigger value="risk" data-testid="compare-tab-risk"><ShieldCheck className="w-4 h-4 mr-2" /> Carrier Risk</TabsTrigger>
+        </TabsList>
+        <TabsContent value="risk" className="mt-0 max-w-xl"><CarrierRiskCalculator /></TabsContent>
+        <TabsContent value="compare" className="mt-0 space-y-4">
 
       <Card>
         <CardContent className="pt-5">
@@ -121,12 +153,25 @@ export default function CourierCompare() {
                         <span className="font-medium">{o.service}</span>
                       </div>
                       <div className="text-xs text-muted-foreground mt-1">
-                        {[o.gst_note, o.eta && `delivery ${o.eta}`, o.note].filter(Boolean).join(" · ")}
+                        {[o.gst_note, o.note].filter(Boolean).join(" · ")}
                       </div>
+                      {(o.pickup || o.eta) && (
+                        <div className="text-xs mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                          {o.pickup && <span className="flex items-center gap-1 text-emerald-700 dark:text-emerald-400"><PackageCheck className="w-3 h-3" /> Pickup: {o.pickup}</span>}
+                          {o.eta && <span className="flex items-center gap-1 text-muted-foreground"><Clock className="w-3 h-3" /> Delivery by: {o.eta}</span>}
+                        </div>
+                      )}
+                      {o.rto_charges != null && <div className="text-[11px] text-muted-foreground mt-0.5">If it comes back (RTO): {"₹"}{Number(o.rto_charges).toFixed(0)} extra</div>}
                     </div>
                     <div className="text-right">
                       <div className={`font-mono font-bold ${o.cheapest ? "text-2xl text-emerald-700 dark:text-emerald-400" : "text-xl"}`}>{"₹"}{o.total.toFixed(2)}</div>
+                      <div className="text-[11px] text-muted-foreground">our cost</div>
                       {i > 0 && <div className="text-xs text-muted-foreground">+{"₹"}{(o.total - priced[0].total).toFixed(0)} vs cheapest</div>}
+                      {o.charge_customer != null && (
+                        <div className="mt-1 inline-flex items-center gap-1 rounded-md bg-sky-100 text-sky-900 dark:bg-sky-900/40 dark:text-sky-200 px-2 py-0.5 text-xs font-semibold" data-testid="compare-charge-customer">
+                          <IndianRupee className="w-3 h-3" /> Charge customer {"₹"}{o.charge_customer}
+                        </div>
+                      )}
                     </div>
                   </div>
                   {o.warning && (
@@ -135,6 +180,7 @@ export default function CourierCompare() {
                         <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" /> {o.warning}
                       </div>
                       <AnjaniAreas areas={o.areas} />
+                      <AnjaniCenters centers={o.centers} />
                     </div>
                   )}
                 </CardContent>
@@ -159,6 +205,8 @@ export default function CourierCompare() {
           )}
         </>
       )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

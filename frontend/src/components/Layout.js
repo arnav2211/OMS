@@ -10,7 +10,7 @@ import {
 import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
-  FileText, TrendingUp, Bell, ShoppingBag, Calculator, MapPinCheck, Megaphone,
+  FileText, TrendingUp, Bell, ShoppingBag, Megaphone,
   ChevronDown, Layers, Navigation, IndianRupee, Rocket, Timer, Activity, CalendarDays,
 } from "lucide-react";
 import api from "@/lib/api";
@@ -27,10 +27,6 @@ const NAV_ITEMS = {
     { label: "Proforma Invoice", icon: FileText, path: "/proforma" },
     { label: "My Leave", icon: CalendarDays, path: "/my-leave" },
     { label: "Compare Couriers", icon: Layers, path: "/compare-rates" },
-    { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
-    { label: "DTDC", icon: Calculator, path: "/dtdc" },
-    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
-    { label: "Shiprocket", icon: Rocket, path: "/shiprocket" },
   ],
   packaging: [
     { label: "Dashboard", icon: Home, path: "/" },
@@ -42,10 +38,7 @@ const NAV_ITEMS = {
     { label: "Amazon Dispatch", icon: Truck, path: "/amazon-dispatch" },
     { label: "Dispatch", icon: Truck, path: "/dispatch" },
     { label: "Compare Couriers", icon: Layers, path: "/compare-rates" },
-    { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
-    { label: "DTDC", icon: Calculator, path: "/dtdc" },
-    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
-    { label: "Shiprocket", icon: Rocket, path: "/shiprocket" },
+    { label: "Book Shipments", icon: Rocket, path: "/book-shipments" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
   dispatch: [
@@ -55,10 +48,7 @@ const NAV_ITEMS = {
     { label: "Packing Live", icon: Activity, path: "/packing-live" },
     { label: "Amazon Dispatch", icon: ShoppingBag, path: "/amazon-dispatch" },
     { label: "Compare Couriers", icon: Layers, path: "/compare-rates" },
-    { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
-    { label: "DTDC", icon: Calculator, path: "/dtdc" },
-    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
-    { label: "Shiprocket", icon: Rocket, path: "/shiprocket" },
+    { label: "Book Shipments", icon: Rocket, path: "/book-shipments" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
   admin: [
@@ -86,10 +76,7 @@ const NAV_ITEMS = {
     { label: "Alerts", icon: Megaphone, path: "/admin-alerts" },
     { label: "Security Log", icon: Settings, path: "/security-log" },
     { label: "Compare Couriers", icon: Layers, path: "/compare-rates" },
-    { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
-    { label: "DTDC", icon: Calculator, path: "/dtdc" },
-    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
-    { label: "Shiprocket", icon: Rocket, path: "/shiprocket" },
+    { label: "Book Shipments", icon: Rocket, path: "/book-shipments" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
   accounts: [
@@ -99,10 +86,7 @@ const NAV_ITEMS = {
     { label: "My Leave", icon: CalendarDays, path: "/my-leave" },
     { label: "Packing Live", icon: Activity, path: "/packing-live" },
     { label: "Compare Couriers", icon: Layers, path: "/compare-rates" },
-    { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
-    { label: "DTDC", icon: Calculator, path: "/dtdc" },
-    { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
-    { label: "Shiprocket", icon: Rocket, path: "/shiprocket" },
+    { label: "Book Shipments", icon: Rocket, path: "/book-shipments" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
 };

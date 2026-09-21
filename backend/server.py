@@ -7892,6 +7892,8 @@ async def _compare_shiprocket(pincode: str, weight: float, cod: bool) -> list:
             out.append({"carrier": "Shiprocket", "service": x.get("courier_name") or "",
                         "serviceable": True, "total": round(float(x.get("rate") or 0), 2),
                         "gst_note": "GST included", "eta": x.get("etd") or "",
+                        "pickup": f"same day if booked before {x.get('cutoff_time')}" if x.get("cutoff_time") else "",
+                        "rto_charges": x.get("rto_charges"),
                         "note": f"rating {x.get('rating')}" if x.get("rating") else "",
                         "cod_charge": x.get("cod_charges") if cod else None})
         return out
@@ -7906,6 +7908,7 @@ async def _compare_dtdc(pincode: str, weight: float) -> list:
         return [{"carrier": "DTDC", "service": "", "serviceable": False, "note": "Not in DTDC's serviceable list"}]
     periods = await _fuel_surcharge_periods()
     fuel_pct = _fuel_percent_on(periods, datetime.now(IST).strftime("%Y-%m-%d"))
+    quote = dtdc_quote_for(pincode, weight)
     out = []
     for svc, label, series in (("GROUND EXPRESS", "Ground Express", "D-Series"), ("STD EXP-A", "Standard", "M-Series")):
         base = dtdc_expense_base(info["category"], weight, svc)
@@ -7914,6 +7917,8 @@ async def _compare_dtdc(pincode: str, weight: float) -> list:
         fuel = base * fuel_pct / 100.0
         total = (base + fuel) * (1 + DTDC_EXPENSE_GST_PERCENT / 100.0)
         out.append({"carrier": "DTDC", "service": f"{label} ({series})", "serviceable": True,
+                    # what the telecaller quotes the customer - the old DTDC calculator figure
+                    "charge_customer": (quote or {}).get("final_charge") if (quote or {}).get("series") == series else None,
                     "total": round(total, 2), "gst_note": f"freight {base:.0f} + fuel {fuel_pct:g}% + GST",
                     "eta": "", "note": f"{info.get('city', '')} - zone {info['category']}"})
     return out or [{"carrier": "DTDC", "service": "", "serviceable": False, "note": "No DTDC rate for this zone"}]
@@ -7952,6 +7957,13 @@ async def _compare_anjani(pincode: str, weight: float, state: str) -> list:
     in_mh = "maharashtra" in (state or "").lower()
     rate = ANJANI_RATE_MAHARASHTRA if in_mh else ANJANI_RATE_REST
     kg = max(1, int(math.ceil(weight)))
+    centers = []
+    for c in res.get("centers") or []:
+        ad = c.get("address") or {}
+        phones = sorted({x.strip() for x in f"{ad.get('mobile') or ''},{ad.get('phoneNumber') or ''}".split(",") if x.strip()})
+        centers.append({"name": c.get("centerName") or "", "franchise": c.get("franchiseName") or "",
+                        "address": ", ".join(x.strip() for x in (ad.get("address1"), ad.get("address2"), ad.get("city")) if x and x.strip()),
+                        "phones": phones, "hub": (c.get("hub") or {}).get("centerName") or ""})
     normal = sum(1 for a in areas if a["kind"] == "normal")
     blocked = len(areas) - len(usable)
     if not areas:
@@ -7963,8 +7975,16 @@ async def _compare_anjani(pincode: str, weight: float, state: str) -> list:
                    + (f" - {blocked} area(s) here are NOT serviceable." if blocked else "."))
     return [{"carrier": "Anjani", "service": "Surface", "serviceable": True, "total": round(rate * kg, 2),
              "gst_note": f"Rs {rate:g}/kg x {kg} kg, no GST", "eta": "",
-             "warning": warning, "areas": areas[:80],
+             "warning": warning, "areas": areas[:80], "centers": centers,
              "note": ", ".join(sorted({c.get("centerName") or "" for c in res.get("centers") or []} - {""}))}]
+
+
+def _compare_day(iso) -> str:
+    """'2026-09-24T12:30:00Z' -> 'Sep 24, 2026' in IST; '' when absent."""
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(IST).strftime("%b %d, %Y") if iso else ""
+    except ValueError:
+        return ""
 
 
 async def _compare_amazon(pincode: str, weight: float, cod: bool) -> list:
@@ -7980,7 +8000,9 @@ async def _compare_amazon(pincode: str, weight: float, cod: bool) -> list:
         cod_fee = 30.0 if cod else 0.0
         out.append({"carrier": "Amazon Shipping", "service": r.get("service") or "", "serviceable": True,
                     "total": round((base + cod_fee) * (1 + COMPARE_GST / 100.0), 2),
-                    "gst_note": f"{base:.0f}" + (" + 30 COD" if cod else "") + " + 18% GST", "eta": "",
+                    "gst_note": f"{base:.0f}" + (" + 30 COD" if cod else "") + " + 18% GST",
+                    "eta": _compare_day(((r.get("promise") or {}).get("deliveryWindow") or {}).get("end")),
+                    "pickup": _compare_day(((r.get("promise") or {}).get("pickupWindow") or {}).get("start")),
                     "note": "max 22 kg per parcel" if weight > 22 else ""})
     return out
 
@@ -8343,6 +8365,172 @@ async def shiprocket_dispatch(req: ShiprocketDispatchRequest, user=Depends(get_c
     await db.orders.update_one({"id": req.order_id}, {"$set": {
         "dispatch": dispatch, "status": "dispatched", "courier_name": "Shiprocket", "updated_at": now}})
     return {"ok": True, "lr_no": docket, "slips": slips}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BOOK SHIPMENTS: one screen for every courier we book by API (DTDC, Amazon
+# Shipping, Shiprocket). Booking, cancelling and dispatching still go through
+# each courier's own endpoints - this only gathers the orders into one list,
+# prints their labels as one PDF, and lets a weighed order be given a courier.
+# ═══════════════════════════════════════════════════════════════════════════
+SHIP_ROLES = ["admin", "dispatch", "packaging", "accounts"]
+SHIP_API_COURIERS = ["DTDC", "Amazon", "Shiprocket"]
+
+
+@api_router.get("/shipments/bookable")
+async def shipments_bookable(user=Depends(get_current_user)):
+    if user["role"] not in SHIP_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    rows, errors = [], {}
+    for courier, fn, key in (("DTDC", dtdc_bookable_orders, "dtdc_shipment"),
+                             ("Amazon", amazon_bookable_orders, "amazon_shipment"),
+                             ("Shiprocket", shiprocket_bookable, "shiprocket_shipment")):
+        try:
+            for o in await fn(user=user):
+                sh = o.get(key) or {}
+                booked = bool(sh.get("reference_number") or sh.get("shipment_id") or sh.get("awb"))
+                rows.append({**o, "courier": courier, "booked": booked,
+                             "tracking": sh.get("awb") or sh.get("tracking_id") or sh.get("reference_number") or ""})
+        except HTTPException as e:
+            errors[courier] = str(e.detail)
+        except Exception as e:
+            logging.error(f"shipments/bookable {courier}: {e}")
+            errors[courier] = "Could not load"
+
+    # Weighed courier orders nobody has given a courier yet.
+    unassigned = []
+    async for o in db.orders.find({
+        "status": {"$nin": ["cancelled", "dispatched"]},
+        "packaging.weight_kg": {"$nin": ["", None]},
+        "courier_name": {"$in": ["", None]},
+        "transporter_name": {"$in": ["", None]},
+        "shipping_method": {"$in": ["courier", "", None]},
+    }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "status": 1,
+        "shipping_address": 1, "packaging": 1, "is_cod": 1, "amount_paid": 1, "cod_amount": 1,
+        "carrier_risk_applicable": 1}).sort("created_at", -1).limit(200):
+        pkg = o.get("packaging") or {}
+        try:
+            if float(str(pkg.get("weight_kg", "")).strip() or 0) <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        sa = o.get("shipping_address") or {}
+        unassigned.append({"id": o["id"], "order_number": o.get("order_number"),
+                           "customer_name": o.get("customer_name"), "grand_total": o.get("grand_total"),
+                           "status": o.get("status"), "weight_kg": pkg.get("weight_kg"),
+                           "num_boxes": pkg.get("num_boxes") or "1",
+                           "shipping_address": {"city": sa.get("city"), "pincode": sa.get("pincode")},
+                           "is_cod": bool(o.get("is_cod")), "cod_amount": _amazon_cod_amount(o),
+                           "carrier_risk": bool(o.get("carrier_risk_applicable"))})
+    return {"orders": rows, "unassigned": unassigned, "errors": errors}
+
+
+class SetCourierRequest(BaseModel):
+    order_id: str
+    courier_name: str
+
+
+@api_router.post("/shipments/set-courier")
+async def shipments_set_courier(req: SetCourierRequest, user=Depends(get_current_user)):
+    """Give a weighed order its courier from the Book Shipments screen."""
+    if user["role"] not in SHIP_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    courier = (req.courier_name or "").strip()
+    if courier not in SHIP_API_COURIERS + ["Anjani"]:
+        raise HTTPException(status_code=400, detail="Courier must be DTDC, Amazon, Shiprocket or Anjani")
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if (order.get("status") or "") in ("cancelled", "dispatched"):
+        raise HTTPException(status_code=400, detail=f"Order is already {order.get('status')}")
+    if ((order.get("dtdc_shipment") or {}).get("reference_number")
+            or (order.get("amazon_shipment") or {}).get("shipment_id")
+            or (order.get("shiprocket_shipment") or {}).get("awb")):
+        raise HTTPException(status_code=400, detail="This order already has a booked label. Cancel the label before changing the courier.")
+    # Carrier risk is a DTDC charge the customer has been billed for.
+    if order.get("carrier_risk_applicable") and courier != "DTDC":
+        raise HTTPException(status_code=400, detail="This order has DTDC carrier risk on its invoice, so it has to go by DTDC. Edit the order to remove carrier risk first.")
+    now = datetime.now(timezone.utc).isoformat()
+    update = {"shipping_method": "courier", "courier_name": courier, "transporter_name": "", "updated_at": now}
+    if isinstance(order.get("dispatch"), dict):
+        update["dispatch.courier_name"] = courier
+        update["dispatch.transporter_name"] = ""
+    await db.orders.update_one({"id": req.order_id}, {"$set": update})
+    return {"ok": True, "courier_name": courier}
+
+
+async def _sr_label_images(shipment_ids: list) -> list:
+    """Shiprocket renders the labels as one PDF; hand back one JPG per label page."""
+    if not shipment_ids:
+        return []
+    code, lb = await _sr_call("POST", "/courier/generate/label", json={"shipment_id": shipment_ids})
+    url = (lb or {}).get("label_url")
+    if not url:
+        return []
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+        raw = (await c.get(url)).content
+    return _pdf_pages_jpg(raw, max_pages=max(8, len(shipment_ids) * 2)) or []
+
+
+@api_router.get("/shipments/labels")
+async def shipments_labels(ids: str, token: str = "", user=None):
+    """Labels of every selected order as ONE PDF, whatever the courier.
+
+    DTDC slips come first, each on its own full A4 page (DTDC's slip is an A4
+    three-copy sheet). Amazon and Shiprocket labels follow, four to an A4 page.
+    """
+    if token:
+        user = await get_user_from_token_param(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    order_ids = [x.strip() for x in (ids or "").split(",") if x.strip()][:60]
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="No orders given")
+
+    import base64
+    full_pages, quarter, sr_ids, missing = [], [], [], []
+    for oid in order_ids:
+        o = await db.orders.find_one({"id": oid}, {"_id": 0})
+        num = (o or {}).get("order_number") or oid[:8]
+        if not o:
+            missing.append(num)
+        elif (o.get("dtdc_shipment") or {}).get("reference_number"):
+            raw, media = await _dtdc_fetch_label_bytes(o["dtdc_shipment"], order=o)
+            pages = (_pdf_pages_jpg(raw) if "pdf" in (media or "") else [raw]) if raw else []
+            full_pages.extend(pages) if pages else missing.append(num)
+        elif (o.get("amazon_shipment") or {}).get("label_base64"):
+            try:
+                quarter.append(base64.b64decode(o["amazon_shipment"]["label_base64"]))
+            except Exception:
+                missing.append(num)
+        elif (o.get("shiprocket_shipment") or {}).get("shipment_id"):
+            sr_ids.append(o["shiprocket_shipment"]["shipment_id"])
+        else:
+            missing.append(num)
+    try:
+        sr_images = await _sr_label_images(sr_ids)
+    except Exception as e:
+        logging.error(f"shipments/labels shiprocket: {e}")
+        sr_images = []
+    if sr_ids and not sr_images:
+        missing.append(f"{len(sr_ids)} Shiprocket label(s)")
+    quarter.extend(sr_images)
+    if not full_pages and not quarter:
+        raise HTTPException(status_code=404, detail=f"No labels available for: {', '.join(missing)}")
+
+    from pypdf import PdfReader, PdfWriter
+    writer = PdfWriter()
+    for images, per_page in ((full_pages, 1), (quarter, 4)):
+        if images:
+            for page in PdfReader(_quarter_sheet_pdf(images, per_page=per_page)).pages:
+                writer.add_page(page)
+    out = io.BytesIO()
+    writer.write(out)
+    out.seek(0)
+    headers = {"Content-Disposition": "inline; filename=shipping-labels.pdf"}
+    if missing:
+        headers["X-Labels-Missing"] = ", ".join(missing)[:400].encode("ascii", "ignore").decode()
+    return StreamingResponse(out, media_type="application/pdf", headers=headers)
 
 
 @api_router.get("/rates/compare")

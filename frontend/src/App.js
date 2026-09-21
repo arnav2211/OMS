@@ -37,6 +37,7 @@ import PackingLive from "@/pages/admin/PackingLive";
 import MyLeave from "@/pages/MyLeave";
 import SecurityLog from "@/pages/admin/SecurityLog";
 import CourierCompare from "@/pages/CourierCompare";
+import BookShipments from "@/pages/BookShipments";
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
@@ -89,6 +90,8 @@ function AppRoutes() {
       <Route path="/accounts" element={<ProtectedRoute allowedRoles={["admin"]}><AdminAccounts /></ProtectedRoute>} />
       <Route path="/admin-alerts" element={<ProtectedRoute allowedRoles={["admin"]}><AdminAlerts /></ProtectedRoute>} />
       <Route path="/compare-rates" element={<ProtectedRoute><CourierCompare /></ProtectedRoute>} />
+      <Route path="/book-shipments" element={<ProtectedRoute allowedRoles={["admin", "dispatch", "packaging", "accounts"]}><BookShipments /></ProtectedRoute>} />
+      {/* Old single-courier pages: out of the nav, still reachable by URL as a fallback. */}
       <Route path="/dtdc" element={<ProtectedRoute><DTDCCalculator /></ProtectedRoute>} />
       <Route path="/anjani" element={<ProtectedRoute><AnjaniChecker /></ProtectedRoute>} />
       <Route path="/amazon-check" element={<ProtectedRoute><AmazonChecker /></ProtectedRoute>} />
