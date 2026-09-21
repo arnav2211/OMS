@@ -42,6 +42,7 @@ export default function AmazonOrders() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [shipTypeFilter, setShipTypeFilter] = useState("all");
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [pickupView, setPickupView] = useState("");      // "", "today", "pickup", "schedule"
 
   useEffect(() => { loadOrders(); }, []);
 
@@ -77,7 +78,21 @@ export default function AmazonOrders() {
     } catch (err) { toast.error(err.response?.data?.detail || "Delete failed"); }
   };
 
+  // Pickup counters, from Amazon's own Easy Ship state and ship-by date.
+  const live = orders.filter(o => !["dispatched", "cancelled"].includes(o.status));
+  const dueByToday = (o) => {
+    if (!o.latest_ship_date) return false;
+    const d = new Date(o.latest_ship_date), end = new Date();
+    end.setHours(23, 59, 59, 999);
+    return d.getTime() <= end.getTime();          // today, or already missed
+  };
+  const pendingPickup = live.filter(o => o.easy_ship_status === "PendingPickUp");
+  const pickupToday = pendingPickup.filter(dueByToday);
+  const toSchedule = live.filter(o => o.easy_ship_status === "PendingSchedule");
+  const PICKUP_VIEWS = { pickup: pendingPickup, today: pickupToday, schedule: toSchedule };
+
   const filtered = orders.filter(o => {
+    if (pickupView && !PICKUP_VIEWS[pickupView].some(x => x.id === o.id)) return false;
     if (statusFilter !== "all" && o.status !== statusFilter) return false;
     if (shipTypeFilter !== "all" && o.ship_type !== shipTypeFilter) return false;
     if (search) {
@@ -106,6 +121,30 @@ export default function AmazonOrders() {
           )}
         </div>
       </div>
+
+      {/* Pickup counters: tap one to see just those orders */}
+      {sp?.configured && (
+        <div className="grid grid-cols-3 gap-2 max-w-2xl" data-testid="amazon-pickup-counters">
+          {[
+            ["today", "Pickup due today", pickupToday.length, "text-red-600", "border-red-400 bg-red-50 dark:bg-red-950/30", "ship-by today or missed"],
+            ["pickup", "Pending pickup (all)", pendingPickup.length, "text-amber-600", "border-amber-400 bg-amber-50 dark:bg-amber-950/30", "scheduled, not collected yet"],
+            ["schedule", "To schedule", toSchedule.length, "text-blue-600", "border-blue-400 bg-blue-50 dark:bg-blue-950/30", "pickup not booked yet"],
+          ].map(([key, label, n, numCls, activeCls, hint]) => (
+            <button key={key} onClick={() => setPickupView(pickupView === key ? "" : key)}
+                    className={`text-left rounded-lg border p-3 transition-colors ${pickupView === key ? activeCls : "hover:bg-accent/50"}`}
+                    data-testid={`amazon-count-${key}`}>
+              <div className={`text-3xl font-bold font-mono ${n > 0 ? numCls : "text-muted-foreground"}`}>{n}</div>
+              <div className="text-sm font-medium leading-tight">{label}</div>
+              <div className="text-[11px] text-muted-foreground">{hint}</div>
+            </button>
+          ))}
+        </div>
+      )}
+      {pickupView && (
+        <p className="text-xs text-muted-foreground">
+          Showing only these orders. <button className="underline" onClick={() => setPickupView("")}>Show all</button>
+        </p>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
