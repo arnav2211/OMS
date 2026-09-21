@@ -3040,7 +3040,9 @@ def _work_public(sess: dict) -> dict:
 # The tracker fills the packing form's three "by" fields, so nobody picks
 # names by hand. Weighing has no field of its own.
 WORK_STEP_TO_FIELD = {"filling": "item_packed_by", "boxing": "box_packed_by", "checking": "checked_by"}
-WORK_MIN_COUNTED_SEC = 30      # a start-then-DONE slip of the finger is not credited
+# Only a genuine mis-tap is ignored. Logging a step that was physically done a
+# moment earlier takes well under half a minute and must still be credited.
+WORK_MIN_COUNTED_SEC = 5
 
 
 async def _work_names_for_order(order_id: str) -> dict:
