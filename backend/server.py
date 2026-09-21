@@ -107,6 +107,40 @@ def _pii_open(doc: dict) -> dict:
     return doc
 
 
+# Need-to-know: only these roles ever see a buyer's name, street or phone.
+# Packing works from the item list and the city; it never needs the person.
+PII_ROLES = ("admin", "dispatch")
+PII_BULK_VIEWS_PER_HOUR = 30
+
+
+def _pii_mask(doc: dict) -> dict:
+    if doc.get("has_buyer_pii") and not doc.get("pii_purged_at"):
+        doc["customer_name"] = "Amazon customer"
+        doc["address"] = doc.get("address_public") or ""
+        doc["phone"] = ""
+    return doc
+
+
+async def _pii_view_logged(user: dict, order_no: str):
+    """Log the view; an unusual number of views in an hour alerts the admins once."""
+    await _sec_log("pii_view", username=user.get("username"), role=user["role"], order=order_no)
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    n = await db.security_log.count_documents({"event": "pii_view", "username": user.get("username"),
+                                               "at_dt": {"$gte": since}})
+    if n == PII_BULK_VIEWS_PER_HOUR:
+        admins = [u["id"] for u in await db.users.find({"role": "admin", "active": {"$ne": False}},
+                                                       {"_id": 0, "id": 1}).to_list(50)]
+        await db.admin_alerts.insert_one({
+            "id": str(uuid.uuid4()), "title": f"Security: unusual buyer-data access by '{user.get('username')}'",
+            "message": f"'{user.get('username')}' opened {n} orders containing buyer details in the last hour. "
+                       f"Check the Security Log.",
+            "sent_by": "System", "sent_by_id": None, "order_id": "", "customer_name": "",
+            "recipient_ids": admins, "recipient_roles": ["admin"], "acknowledgements": {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "meta": {"type": "security_pii_bulk", "username": user.get("username")}})
+        await _sec_log("pii_bulk_alert", username=user.get("username"), count=n)
+
+
 def _client_ip(request) -> str:
     try:
         return (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or \
@@ -5831,9 +5865,12 @@ async def list_amazon_orders(user=Depends(get_current_user)):
     if user["role"] not in ["admin", "packaging", "dispatch"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     orders = [_pii_open(o) for o in await db.amazon_orders.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)]
-    with_pii = sum(1 for o in orders if o.get("has_buyer_pii") and not o.get("pii_purged_at"))
-    if with_pii:
-        await _sec_log("pii_list", username=user.get("username"), role=user["role"], count=with_pii)
+    if user["role"] not in PII_ROLES:
+        orders = [_pii_mask(o) for o in orders]
+    else:
+        with_pii = sum(1 for o in orders if o.get("has_buyer_pii") and not o.get("pii_purged_at"))
+        if with_pii:
+            await _sec_log("pii_list", username=user.get("username"), role=user["role"], count=with_pii)
     return await _amazon_apply_formulations(orders, user)
 
 
@@ -5845,9 +5882,10 @@ async def get_amazon_order(order_id: str, user=Depends(get_current_user)):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     _pii_open(order)
-    if order.get("has_buyer_pii") and not order.get("pii_purged_at"):
-        await _sec_log("pii_view", username=user.get("username"), role=user["role"],
-                       order=order.get("am_order_number"))
+    if user["role"] not in PII_ROLES:
+        _pii_mask(order)
+    elif order.get("has_buyer_pii") and not order.get("pii_purged_at"):
+        await _pii_view_logged(user, order.get("am_order_number"))
     return (await _amazon_apply_formulations([order], user))[0]
 
 
@@ -7802,6 +7840,155 @@ async def amazon_check_pincode(pincode: str, weight: float = 1.0):
         return {"serviceable": False, "configured": True, "message": "Unable to check Amazon serviceability right now."}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# COURIER COMPARE: one pincode + weight -> every courier side by side.
+# Each option is put on the same basis - what we actually pay, GST included -
+# so "cheapest" compares like with like. DTDC, Anjani and Amazon reuse the
+# exact logic of their own checker pages; Shiprocket is queried live.
+# ═══════════════════════════════════════════════════════════════════════════
+SHIPROCKET = {
+    "email": os.environ.get("SHIPROCKET_EMAIL", ""),
+    # The password has shell/compose-special characters, so the env file holds it base64-encoded.
+    "password": os.environ.get("SHIPROCKET_PASSWORD", "") or _b64.b64decode(os.environ.get("SHIPROCKET_PASSWORD_B64", "") or b"").decode("utf-8", "ignore"),
+    "pickup_pincode": os.environ.get("SHIPROCKET_PICKUP_PINCODE", os.environ.get("AMAZON_SHIP_ORIGIN_PINCODE", "440025")),
+}
+_shiprocket_token = {"token": "", "expires": 0.0}
+COMPARE_GST = 18.0
+
+
+async def _shiprocket_auth() -> str:
+    import time
+    if _shiprocket_token["token"] and _shiprocket_token["expires"] > time.time():
+        return _shiprocket_token["token"]
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post("https://apiv2.shiprocket.in/v1/external/auth/login",
+                         json={"email": SHIPROCKET["email"], "password": SHIPROCKET["password"]})
+    if r.status_code != 200 or not r.json().get("token"):
+        raise RuntimeError(f"Shiprocket login failed ({r.status_code})")
+    _shiprocket_token.update(token=r.json()["token"], expires=time.time() + 8 * 86400)   # valid 10 days
+    return _shiprocket_token["token"]
+
+
+async def _compare_shiprocket(pincode: str, weight: float, cod: bool) -> list:
+    if not (SHIPROCKET["email"] and SHIPROCKET["password"]):
+        return [{"carrier": "Shiprocket", "service": "", "serviceable": None, "note": "Not configured on the server"}]
+    try:
+        token = await _shiprocket_auth()
+        async with httpx.AsyncClient(timeout=25) as c:
+            r = await c.get("https://apiv2.shiprocket.in/v1/external/courier/serviceability/",
+                            params={"pickup_postcode": SHIPROCKET["pickup_pincode"], "delivery_postcode": pincode,
+                                    "weight": weight, "cod": 1 if cod else 0},
+                            headers={"Authorization": f"Bearer {token}"})
+        data = (r.json() or {}).get("data") or {}
+        rows = data.get("available_courier_companies") or []
+        if not rows:
+            return [{"carrier": "Shiprocket", "service": "", "serviceable": False,
+                     "note": "No Shiprocket courier serves this pincode"}]
+        out = []
+        for x in sorted(rows, key=lambda x: float(x.get("rate") or 0))[:6]:
+            out.append({"carrier": "Shiprocket", "service": x.get("courier_name") or "",
+                        "serviceable": True, "total": round(float(x.get("rate") or 0), 2),
+                        "gst_note": "GST included", "eta": x.get("etd") or "",
+                        "note": f"rating {x.get('rating')}" if x.get("rating") else "",
+                        "cod_charge": x.get("cod_charges") if cod else None})
+        return out
+    except Exception as e:
+        logging.error(f"compare/shiprocket: {e}")
+        return [{"carrier": "Shiprocket", "service": "", "serviceable": None, "note": "Could not reach Shiprocket right now"}]
+
+
+async def _compare_dtdc(pincode: str, weight: float) -> list:
+    info = _dtdc_pincodes.get(pincode)
+    if not info:
+        return [{"carrier": "DTDC", "service": "", "serviceable": False, "note": "Not in DTDC's serviceable list"}]
+    periods = await _fuel_surcharge_periods()
+    fuel_pct = _fuel_percent_on(periods, datetime.now(IST).strftime("%Y-%m-%d"))
+    out = []
+    for svc, label, series in (("GROUND EXPRESS", "Ground Express", "D-Series"), ("STD EXP-A", "Standard", "M-Series")):
+        base = dtdc_expense_base(info["category"], weight, svc)
+        if not base:
+            continue
+        fuel = base * fuel_pct / 100.0
+        total = (base + fuel) * (1 + DTDC_EXPENSE_GST_PERCENT / 100.0)
+        out.append({"carrier": "DTDC", "service": f"{label} ({series})", "serviceable": True,
+                    "total": round(total, 2), "gst_note": f"freight {base:.0f} + fuel {fuel_pct:g}% + GST",
+                    "eta": "", "note": f"{info.get('city', '')} - zone {info['category']}"})
+    return out or [{"carrier": "DTDC", "service": "", "serviceable": False, "note": "No DTDC rate for this zone"}]
+
+
+async def _compare_anjani(pincode: str, weight: float, state: str) -> list:
+    res = await anjani_check_pincode(pincode)
+    if not res.get("serviceable"):
+        return [{"carrier": "Anjani", "service": "", "serviceable": False, "note": res.get("message") or "Not serviceable"}]
+    in_mh = "maharashtra" in (state or "").lower()
+    rate = ANJANI_RATE_MAHARASHTRA if in_mh else ANJANI_RATE_REST
+    kg = max(1, int(math.ceil(weight)))
+    areas = []
+    for center in res.get("centers") or []:
+        for a in center.get("areas") or []:
+            if a.get("areaName"):
+                areas.append(a["areaName"])
+    return [{"carrier": "Anjani", "service": "Surface", "serviceable": True, "total": round(rate * kg, 2),
+             "gst_note": f"Rs {rate:g}/kg x {kg} kg, no GST", "eta": "",
+             # Anjani serves a pincode area by area: the pincode matching is not enough.
+             "warning": "Anjani delivers only to the areas listed. Confirm the customer's area is in this list before choosing it.",
+             "areas": sorted(set(areas))[:80],
+             "note": ", ".join(sorted({c.get("centerName") or "" for c in res.get("centers") or []} - {""}))}]
+
+
+async def _compare_amazon(pincode: str, weight: float, cod: bool) -> list:
+    res = await amazon_check_pincode(pincode, weight)
+    if res.get("configured") is False:
+        return [{"carrier": "Amazon Shipping", "service": "", "serviceable": None, "note": "Not configured"}]
+    if not res.get("serviceable"):
+        msg = res.get("detail") or res.get("message") or "Not serviceable"
+        return [{"carrier": "Amazon Shipping", "service": "", "serviceable": False, "note": str(msg)[:140]}]
+    out = []
+    for r in res.get("rates") or []:
+        base = float(r.get("amount") or 0)
+        cod_fee = 30.0 if cod else 0.0
+        out.append({"carrier": "Amazon Shipping", "service": r.get("service") or "", "serviceable": True,
+                    "total": round((base + cod_fee) * (1 + COMPARE_GST / 100.0), 2),
+                    "gst_note": f"{base:.0f}" + (" + 30 COD" if cod else "") + " + 18% GST", "eta": "",
+                    "note": "max 22 kg per parcel" if weight > 22 else ""})
+    return out
+
+
+@api_router.get("/rates/compare")
+async def rates_compare(pincode: str, weight: float = 1.0, cod: bool = False, user=Depends(get_current_user)):
+    """Every courier for one pincode and weight, cheapest first, on a GST-inclusive basis."""
+    pincode = (pincode or "").strip()
+    if not pincode.isdigit() or len(pincode) != 6:
+        raise HTTPException(status_code=400, detail="Enter a 6-digit pincode")
+    weight = max(0.05, float(weight or 1))
+    city, state = await _resolve_pincode_geo(pincode)
+    groups = await asyncio.gather(
+        _compare_dtdc(pincode, weight), _compare_anjani(pincode, weight, state),
+        _compare_amazon(pincode, weight, cod), _compare_shiprocket(pincode, weight, cod),
+        return_exceptions=True)
+    options = []
+    for name, g in zip(("DTDC", "Anjani", "Amazon Shipping", "Shiprocket"), groups):
+        if isinstance(g, Exception):
+            logging.error(f"compare/{name}: {g}")
+            options.append({"carrier": name, "service": "", "serviceable": None, "note": "Could not check right now"})
+        else:
+            options += g
+    if cod:
+        for o in options:
+            if o["carrier"] in ("DTDC", "Anjani") and o.get("serviceable"):
+                o["serviceable"], o["note"] = False, "COD is not booked through this courier"
+                o.pop("total", None)
+    priced = sorted([o for o in options if o.get("serviceable") and o.get("total")], key=lambda o: o["total"])
+    for i, o in enumerate(priced):
+        o["rank"] = i + 1
+    if priced:
+        priced[0]["cheapest"] = True
+    rest = [o for o in options if not (o.get("serviceable") and o.get("total"))]
+    return {"pincode": pincode, "city": city, "state": state, "weight_kg": round(weight, 3), "cod": cod,
+            "options": priced + rest, "cheapest": priced[0] if priced else None,
+            "basis": "What we pay, GST included. Anjani has no GST."}
+
+
 def _to_local_phone(raw) -> str:
     """Last 10 digits — Amazon India wants a plain local mobile number."""
     digits = re.sub(r"\D", "", str(raw or ""))
@@ -8813,6 +9000,13 @@ async def security_log(event: str = "", limit: int = 200, admin=Depends(require_
     q = {"event": event} if event else {}
     rows = await db.security_log.find(q, {"_id": 0, "at_dt": 0}).sort("at_dt", -1).to_list(min(max(limit, 1), 1000))
     return {"rows": rows, "encryption_configured": bool(_PII_KEY)}
+
+
+@api_router.post("/security/log/reviewed")
+async def security_log_reviewed(admin=Depends(require_admin)):
+    """Records that the Security Owner reviewed the log (evidence of the bi-weekly review)."""
+    await _sec_log("log_reviewed", by=admin.get("username") or admin.get("name"))
+    return {"ok": True}
 
 
 @api_router.get("/amazon/sp/status")

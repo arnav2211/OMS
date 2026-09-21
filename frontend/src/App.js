@@ -34,6 +34,8 @@ import FieldHome from "@/pages/field/FieldHome";
 import MyWork from "@/pages/packaging/MyWork";
 import PackingLive from "@/pages/admin/PackingLive";
 import MyLeave from "@/pages/MyLeave";
+import SecurityLog from "@/pages/admin/SecurityLog";
+import CourierCompare from "@/pages/CourierCompare";
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
@@ -85,6 +87,7 @@ function AppRoutes() {
       <Route path="/amazon-dispatch" element={<ProtectedRoute allowedRoles={["admin", "packaging", "dispatch"]}><AmazonDispatch /></ProtectedRoute>} />
       <Route path="/accounts" element={<ProtectedRoute allowedRoles={["admin"]}><AdminAccounts /></ProtectedRoute>} />
       <Route path="/admin-alerts" element={<ProtectedRoute allowedRoles={["admin"]}><AdminAlerts /></ProtectedRoute>} />
+      <Route path="/compare-rates" element={<ProtectedRoute><CourierCompare /></ProtectedRoute>} />
       <Route path="/dtdc" element={<ProtectedRoute><DTDCCalculator /></ProtectedRoute>} />
       <Route path="/anjani" element={<ProtectedRoute><AnjaniChecker /></ProtectedRoute>} />
       <Route path="/amazon-check" element={<ProtectedRoute><AmazonChecker /></ProtectedRoute>} />
@@ -92,6 +95,7 @@ function AppRoutes() {
       <Route path="/courier-expenses" element={<ProtectedRoute allowedRoles={["admin","dispatch","packaging","accounts"]}><CourierExpenses /></ProtectedRoute>} />
       <Route path="/my-work" element={<ProtectedRoute allowedRoles={["packaging", "admin", "dispatch"]}><MyWork /></ProtectedRoute>} />
       <Route path="/packing-live" element={<ProtectedRoute allowedRoles={["admin", "dispatch", "accounts"]}><PackingLive /></ProtectedRoute>} />
+      <Route path="/security-log" element={<ProtectedRoute allowedRoles={["admin"]}><SecurityLog /></ProtectedRoute>} />
       <Route path="/my-leave" element={<ProtectedRoute allowedRoles={["accounts", "telecaller", "dispatch"]}><MyLeave /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
