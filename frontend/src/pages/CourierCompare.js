@@ -18,6 +18,35 @@ const CARRIER_STYLE = {
   "Shiprocket": "bg-violet-100 text-violet-800",
 };
 
+// Anjani serves a pincode area by area, and each area has its own delivery type.
+const AREA_GROUPS = [
+  ["normal", "Normal delivery", "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"],
+  ["restricted", "Restricted / special delivery — confirm first", "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200"],
+  ["unknown", "Unknown type — confirm with Anjani", "bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-100"],
+  ["documents", "Documents only — no parcels", "bg-red-100 text-red-800 line-through dark:bg-red-950/50 dark:text-red-300"],
+  ["none", "NOT serviceable", "bg-red-100 text-red-800 line-through dark:bg-red-950/50 dark:text-red-300"],
+];
+
+function AnjaniAreas({ areas }) {
+  if (!areas?.length) return null;
+  return (
+    <div className="mt-2 space-y-2">
+      {AREA_GROUPS.map(([kind, title, cls]) => {
+        const rows = areas.filter(a => a.kind === kind);
+        if (!rows.length) return null;
+        return (
+          <div key={kind} data-testid={`anjani-areas-${kind}`}>
+            <p className="text-xs font-semibold mb-1">{title} ({rows.length})</p>
+            <div className="flex flex-wrap gap-1">
+              {rows.map(a => <Badge key={a.name} className={`font-normal text-xs ${cls}`} title={a.center}>{a.name}</Badge>)}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function CourierCompare() {
   const [pincode, setPincode] = useState("");
   const [weight, setWeight] = useState("");
@@ -105,11 +134,7 @@ export default function CourierCompare() {
                       <div className="flex items-start gap-2 text-amber-800 dark:text-amber-300 font-medium">
                         <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" /> {o.warning}
                       </div>
-                      {o.areas?.length > 0 ? (
-                        <div className="flex flex-wrap gap-1 mt-2">
-                          {o.areas.map(a => <Badge key={a} variant="secondary" className="font-normal text-xs">{a}</Badge>)}
-                        </div>
-                      ) : <p className="text-xs mt-1 text-muted-foreground">Anjani did not list areas for this pincode. Call the centre to confirm.</p>}
+                      <AnjaniAreas areas={o.areas} />
                     </div>
                   )}
                 </CardContent>
@@ -122,10 +147,11 @@ export default function CourierCompare() {
               <CardContent className="py-3 space-y-1">
                 <p className="text-xs uppercase text-muted-foreground font-medium">Not available</p>
                 {others.map((o, i) => (
-                  <div key={i} className="flex items-center gap-2 text-sm">
+                  <div key={i} className="flex items-center gap-2 text-sm flex-wrap">
                     <XCircle className={`w-4 h-4 shrink-0 ${o.serviceable === false ? "text-red-500" : "text-muted-foreground"}`} />
                     <Badge variant="outline">{o.carrier}</Badge>
                     <span className="text-muted-foreground">{o.note || "Not serviceable"}</span>
+                    {o.areas?.length > 0 && <div className="basis-full pl-6"><AnjaniAreas areas={o.areas} /></div>}
                   </div>
                 ))}
               </CardContent>

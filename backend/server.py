@@ -2504,8 +2504,9 @@ async def update_slip_received(order_id: str, body: dict, user=Depends(get_curre
 # Bulk Shipping Address Print
 @api_router.post("/orders/print-addresses")
 async def print_order_addresses(body: dict, user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "packaging"]:
-        raise HTTPException(status_code=403, detail="Admin or packaging only")
+    # Same roles the All Orders page shows the button to.
+    if user["role"] not in ["admin", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized to print addresses")
 
     order_ids = body.get("order_ids", [])
     quantities = body.get("quantities", {})  # {order_id: count}
@@ -7918,23 +7919,51 @@ async def _compare_dtdc(pincode: str, weight: float) -> list:
     return out or [{"carrier": "DTDC", "service": "", "serviceable": False, "note": "No DTDC rate for this zone"}]
 
 
+# Anjani marks every area of a pincode with a delivery type. Only some of them
+# can take our parcels, so the pincode merely existing proves nothing.
+ANJANI_DELIVERY_TYPES = {
+    "1": ("normal", "Normal delivery"),
+    "2": ("restricted", "Restricted / special delivery"),
+    "3": ("documents", "Documents only - no parcels"),
+    "9": ("none", "Not serviceable"),
+}
+
+
 async def _compare_anjani(pincode: str, weight: float, state: str) -> list:
     res = await anjani_check_pincode(pincode)
     if not res.get("serviceable"):
         return [{"carrier": "Anjani", "service": "", "serviceable": False, "note": res.get("message") or "Not serviceable"}]
+    seen, areas = set(), []
+    for center in res.get("centers") or []:
+        for a in center.get("areas") or []:
+            name = " ".join(str(a.get("areaName") or "").split())
+            if not name or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            kind, label = ANJANI_DELIVERY_TYPES.get(str(a.get("deliveryType") or "").strip(),
+                                                    ("unknown", f"Type {a.get('deliveryType')} - confirm with Anjani"))
+            areas.append({"name": name, "kind": kind, "label": label, "center": center.get("centerName") or ""})
+    order = {"normal": 0, "restricted": 1, "unknown": 2, "documents": 3, "none": 4}
+    areas.sort(key=lambda a: (order[a["kind"]], a["name"].lower()))
+    usable = [a for a in areas if a["kind"] in ("normal", "restricted", "unknown")]
+    if areas and not usable:
+        return [{"carrier": "Anjani", "service": "", "serviceable": False, "areas": areas[:80],
+                 "note": "Pincode is listed, but no area in it takes parcels (documents only / not serviceable)"}]
     in_mh = "maharashtra" in (state or "").lower()
     rate = ANJANI_RATE_MAHARASHTRA if in_mh else ANJANI_RATE_REST
     kg = max(1, int(math.ceil(weight)))
-    areas = []
-    for center in res.get("centers") or []:
-        for a in center.get("areas") or []:
-            if a.get("areaName"):
-                areas.append(a["areaName"])
+    normal = sum(1 for a in areas if a["kind"] == "normal")
+    blocked = len(areas) - len(usable)
+    if not areas:
+        warning = "Anjani did not list areas for this pincode. Call the centre to confirm before choosing it."
+    elif normal == 0:
+        warning = "No area here has normal delivery - only restricted delivery. Confirm with Anjani before choosing it."
+    else:
+        warning = ("Anjani delivers area by area. Choose it only if the customer's area is marked Normal delivery below"
+                   + (f" - {blocked} area(s) here are NOT serviceable." if blocked else "."))
     return [{"carrier": "Anjani", "service": "Surface", "serviceable": True, "total": round(rate * kg, 2),
              "gst_note": f"Rs {rate:g}/kg x {kg} kg, no GST", "eta": "",
-             # Anjani serves a pincode area by area: the pincode matching is not enough.
-             "warning": "Anjani delivers only to the areas listed. Confirm the customer's area is in this list before choosing it.",
-             "areas": sorted(set(areas))[:80],
+             "warning": warning, "areas": areas[:80],
              "note": ", ".join(sorted({c.get("centerName") or "" for c in res.get("centers") or []} - {""}))}]
 
 

@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Search, MapPin, Building2, Map, Phone, Mail, Loader2, CheckCircle2, XCircle } from "lucide-react";
 
-const DELIVERY_TYPE_MAP = { "1": "Normal Delivery", "2": "Restricted / Special Delivery", "3": "Documents Only" };
+const DELIVERY_TYPE_MAP = { "1": "Normal Delivery", "2": "Restricted / Special Delivery", "3": "Documents Only", "9": "NOT Serviceable" };
 
 export default function AnjaniChecker() {
   const [pincode, setPincode] = useState("");
@@ -145,7 +145,8 @@ export default function AnjaniChecker() {
                     <p className="text-xs text-muted-foreground uppercase font-medium mb-2 flex items-center gap-1"><Map className="w-3 h-3" /> Serviceable Areas ({center.areas.length})</p>
                     <div className="flex flex-wrap gap-1.5">
                       {center.areas.map((area, ai) => (
-                        <Badge key={ai} variant="secondary" className="text-xs font-normal gap-1" data-testid={`anjani-area-${ci}-${ai}`}>
+                        <Badge key={ai} variant="secondary" data-testid={`anjani-area-${ci}-${ai}`}
+                               className={`text-xs font-normal gap-1 ${["3", "9"].includes(String(area.deliveryType)) ? "bg-red-100 text-red-800 line-through dark:bg-red-950/50 dark:text-red-300" : ""}`}>
                           {area.areaName}
                           <span className="text-[10px] text-muted-foreground">
                             ({DELIVERY_TYPE_MAP[area.deliveryType] || `Type ${area.deliveryType}`})
