@@ -1,7 +1,7 @@
 // Named couriers with their own behaviour/LR rules. Anything else the user
 // types (via the "Others" option) is stored directly in courier_name and
 // treated as a free-form courier that does not require an LR number.
-export const KNOWN_COURIERS = ["DTDC", "Anjani", "India Post", "Amazon"];
+export const KNOWN_COURIERS = ["DTDC", "Anjani", "India Post", "Amazon", "Shiprocket"];
 
 // What the courier dropdown shows. "Others" reveals a free-text box.
 export const COURIER_DROPDOWN = [...KNOWN_COURIERS, "Others"];
@@ -32,6 +32,7 @@ const TRACKING_URLS = {
   DTDC: (lr) => `https://txk.dtdc.com/ctbs-tracking/customerInterface.tr?submitName=showCITrackingDetails&cType=Consignment&cnNo=${lr}`,
   Anjani: (lr) => `https://shreeanjani.co.in/tracking?awb=${lr}`,
   Amazon: (lr) => `https://track.amazon.in/tracking/${lr}`,
+  Shiprocket: (lr) => `https://shiprocket.co/tracking/${lr}`,
   "India Post": (lr) => `https://www.indiapost.gov.in`,
 };
 

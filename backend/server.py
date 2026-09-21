@@ -299,7 +299,7 @@ async def next_document_number(company: dict, kind: str) -> str:
     return f"{prefix}-{counter['seq']:04d}"
 
 
-COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Others"]
+COURIER_OPTIONS = ["DTDC", "Anjani", "Amazon", "Shiprocket", "India Post", "Others"]
 
 # Bank details for PI PDFs
 BANK_GST = {
@@ -7954,6 +7954,366 @@ async def _compare_amazon(pincode: str, weight: float, cod: bool) -> list:
                     "gst_note": f"{base:.0f}" + (" + 30 COD" if cod else "") + " + 18% GST", "eta": "",
                     "note": "max 22 kg per parcel" if weight > 22 else ""})
     return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SHIPROCKET: pincode check, per-order quotes, booking, label, cancel, dispatch.
+# Mirrors the DTDC / Amazon flows. One Shiprocket account fronts many couriers,
+# so booking always means "pick a courier from the live quote, then buy it".
+# ═══════════════════════════════════════════════════════════════════════════
+SR_BASE = "https://apiv2.shiprocket.in/v1/external"
+SR_PICKUP_LOCATION = os.environ.get("SHIPROCKET_PICKUP_LOCATION", "Primary")
+SR_ROLES = ["admin", "dispatch", "packaging", "accounts"]
+SR_COURIER_RE = {"$regex": r"^\s*shiprocket", "$options": "i"}
+
+
+def _sr_configured() -> bool:
+    return bool(SHIPROCKET["email"] and SHIPROCKET["password"])
+
+
+async def _sr_call(method: str, path: str, **kw) -> tuple:
+    """(status_code, json) against the Shiprocket API with the cached token."""
+    token = await _shiprocket_auth()
+    async with httpx.AsyncClient(timeout=45) as c:
+        r = await c.request(method, SR_BASE + path, headers={"Authorization": f"Bearer {token}"}, **kw)
+    try:
+        return r.status_code, r.json()
+    except Exception:
+        return r.status_code, {"raw": r.text[:400]}
+
+
+async def _sr_couriers(pincode: str, weight: float, cod: bool, declared: float = 0) -> list:
+    params = {"pickup_postcode": SHIPROCKET["pickup_pincode"], "delivery_postcode": pincode,
+              "weight": weight, "cod": 1 if cod else 0}
+    if declared:
+        params["declared_value"] = int(declared)
+    code, data = await _sr_call("GET", "/courier/serviceability/", params=params)
+    rows = ((data or {}).get("data") or {}).get("available_courier_companies") or []
+    out = [{"courier_id": x.get("courier_company_id"), "name": x.get("courier_name") or "",
+            "rate": round(float(x.get("rate") or 0), 2), "freight": x.get("freight_charge"),
+            "cod_charges": x.get("cod_charges"), "etd": x.get("etd") or "",
+            "days": x.get("estimated_delivery_days"), "rating": x.get("rating"),
+            "surface": bool(x.get("is_surface")), "min_weight": x.get("min_weight"),
+            "rto_charges": x.get("rto_charges"), "cutoff_time": x.get("cutoff_time") or "",
+            "pickup_performance": x.get("pickup_performance"),
+            "delivery_performance": x.get("delivery_performance")} for x in rows]
+    out.sort(key=lambda x: x["rate"])
+    return out
+
+
+def _sr_require(user):
+    if user["role"] not in SR_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not _sr_configured():
+        raise HTTPException(status_code=400, detail="Shiprocket is not configured on the server")
+
+
+@api_router.get("/shiprocket/check/{pincode}")
+async def shiprocket_check(pincode: str, weight: float = 1.0, cod: bool = False, user=Depends(get_current_user)):
+    """Which Shiprocket couriers serve a pincode, with live rates (GST included)."""
+    pincode = pincode.strip()
+    if not pincode.isdigit() or len(pincode) != 6:
+        return {"serviceable": False, "configured": True, "message": "Invalid pincode format."}
+    if not _sr_configured():
+        return {"serviceable": None, "configured": False, "message": "Shiprocket is not configured on the server."}
+    try:
+        city, state = await _resolve_pincode_geo(pincode)
+        couriers = await _sr_couriers(pincode, max(0.05, float(weight or 1)), cod)
+        if not couriers:
+            return {"serviceable": False, "configured": True, "city": city, "state": state,
+                    "message": "No Shiprocket courier serves this pincode" + (" for COD." if cod else ".")}
+        return {"serviceable": True, "configured": True, "city": city, "state": state,
+                "couriers": couriers, "count": len(couriers)}
+    except Exception as e:
+        logging.error(f"shiprocket check: {e}")
+        return {"serviceable": False, "configured": True, "message": "Unable to reach Shiprocket right now."}
+
+
+@api_router.get("/shiprocket/wallet")
+async def shiprocket_wallet(user=Depends(get_current_user)):
+    _sr_require(user)
+    code, data = await _sr_call("GET", "/account/details/wallet-balance")
+    return {"balance": float(((data or {}).get("data") or {}).get("balance_amount") or 0)}
+
+
+@api_router.get("/shiprocket/bookable")
+async def shiprocket_bookable(user=Depends(get_current_user)):
+    """Orders assigned to Shiprocket that packing has weighed and that are not dispatched."""
+    _sr_require(user)
+    orders = await db.orders.find({
+        "courier_name": SR_COURIER_RE, "status": {"$nin": ["cancelled", "dispatched"]},
+        "packaging.weight_kg": {"$nin": ["", None]},
+    }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "shipping_address": 1,
+        "packaging": 1, "shiprocket_shipment": 1, "status": 1, "is_cod": 1, "amount_paid": 1, "cod_amount": 1,
+        }).sort("created_at", -1).to_list(300)
+    out = []
+    for o in orders:
+        pkg = o.get("packaging") or {}
+        try:
+            if float(str(pkg.get("weight_kg", "")).strip() or 0) <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        sh = o.get("shiprocket_shipment") or None
+        out.append({"id": o["id"], "order_number": o.get("order_number"), "customer_name": o.get("customer_name"),
+                    "grand_total": o.get("grand_total"), "status": o.get("status"),
+                    "weight_kg": pkg.get("weight_kg"), "num_boxes": pkg.get("num_boxes") or "1",
+                    "shipping_address": o.get("shipping_address") or {},
+                    "is_cod": bool(o.get("is_cod")), "cod_amount": _amazon_cod_amount(o),
+                    "shiprocket_shipment": ({k: v for k, v in sh.items() if k != "raw"} if sh else None)})
+    return out
+
+
+class ShiprocketBookRequest(BaseModel):
+    order_id: str
+    courier_id: Optional[int] = None         # which quoted courier to buy; cheapest if omitted
+    payment_mode: Optional[str] = None       # "prepaid" | "cod"; prepaid unless stated
+    declared_value: Optional[float] = None   # required when the order total is 0
+    insure: Optional[bool] = False           # Shiprocket "Secure Shipment" cover
+
+
+def _sr_cod(order: dict, mode: Optional[str]) -> float:
+    mode = (mode or "").strip().lower()
+    if mode == "cod":
+        return _amazon_cod_amount({**order, "is_cod": True})
+    return 0.0          # prepaid unless COD is stated - never inferred
+
+
+@api_router.post("/shiprocket/quote")
+async def shiprocket_quote(req: ShiprocketBookRequest, user=Depends(get_current_user)):
+    """Live courier list for one order - books nothing."""
+    _sr_require(user)
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    sa = order.get("shipping_address") or {}
+    weight = float(str((order.get("packaging") or {}).get("weight_kg") or 0).strip() or 0)
+    if weight <= 0:
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+    cod = _sr_cod(order, req.payment_mode)
+    if (req.payment_mode or "").lower() == "cod" and cod <= 0:
+        raise HTTPException(status_code=400, detail="Nothing left to collect - this order is fully paid.")
+    couriers = await _sr_couriers(str(sa.get("pincode") or ""), weight, cod > 0, _declared_value(order))
+    if not couriers:
+        return {"ok": False, "message": "No Shiprocket courier serves this address" + (" for COD" if cod > 0 else "")}
+    return {"ok": True, "couriers": couriers, "is_cod": cod > 0, "cod_amount": cod, "weight_kg": weight}
+
+
+@api_router.post("/shiprocket/book")
+async def shiprocket_book(req: ShiprocketBookRequest, user=Depends(get_current_user)):
+    """BUYS a real Shiprocket shipment: creates the order, assigns the AWB, schedules pickup."""
+    _sr_require(user)
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if (order.get("shiprocket_shipment") or {}).get("awb"):
+        raise HTTPException(status_code=400, detail="This order is already booked with Shiprocket")
+    if req.declared_value and float(req.declared_value) > 0:
+        order["declared_value_override"] = float(req.declared_value)
+    elif float(order.get("grand_total") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Order total is \u20b90 - enter a declared value for the shipment before booking")
+    pkg = order.get("packaging") or {}
+    weight = float(str(pkg.get("weight_kg") or 0).strip() or 0)
+    if weight <= 0:
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+    phone = await _order_recipient_phone(order)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Customer has no valid phone number. Add one before booking.")
+    sa = order.get("shipping_address") or {}
+    line1, line2 = _address_lines(sa, cap=160)
+    if len((line1 or "").strip()) < 3:
+        raise HTTPException(status_code=400, detail="Shipping address is too short for the courier")
+    cod = _sr_cod(order, req.payment_mode)
+    if (req.payment_mode or "").lower() == "cod" and cod <= 0:
+        raise HTTPException(status_code=400, detail="Nothing left to collect - this order is fully paid.")
+    declared = _declared_value(order)
+    couriers = await _sr_couriers(str(sa.get("pincode") or ""), weight, cod > 0, declared)
+    if not couriers:
+        raise HTTPException(status_code=400, detail="No Shiprocket courier serves this address")
+    chosen = next((c for c in couriers if req.courier_id and c["courier_id"] == req.courier_id), None) or couriers[0]
+
+    # Shiprocket de-duplicates on order_id, so a cancelled or half-made earlier
+    # attempt must never be reused: every retry gets a fresh reference.
+    rebooks = sum(1 for c in (order.get("cancelled_shipments") or []) if (c.get("courier") or "") == "Shiprocket")
+    rebooks += int(order.get("shiprocket_failed_attempts") or 0)
+    ref = (order.get("order_number") or order["id"][:20]) + (f"-R{rebooks}" if rebooks else "")
+    name = (sa.get("address_name") or order.get("customer_name") or "Customer").strip()
+    box = _amazon_box(order)
+    value = cod if cod > 0 else declared          # a COD parcel collects exactly what is due
+    items = []
+    for it in order.get("items") or []:
+        amt = float(it.get("total") or it.get("amount") or 0)
+        items.append({"name": (it.get("product_name") or "Item")[:100],
+                      "sku": re.sub(r"[^A-Za-z0-9]+", "-", (it.get("product_name") or "item"))[:40] or "item",
+                      "units": 1, "selling_price": round(amt, 2)})
+    if not items or sum(i["selling_price"] for i in items) <= 0:
+        items = [{"name": "Aroma products", "sku": "AROMA", "units": 1, "selling_price": round(value, 2)}]
+    payload = {
+        "order_id": ref, "order_date": datetime.now(IST).strftime("%Y-%m-%d %H:%M"),
+        "pickup_location": SR_PICKUP_LOCATION,
+        "billing_customer_name": name[:50], "billing_last_name": "",
+        "billing_address": line1, "billing_address_2": line2 or "",
+        "billing_city": sa.get("city") or "", "billing_pincode": str(sa.get("pincode") or ""),
+        "billing_state": sa.get("state") or "", "billing_country": "India",
+        "billing_email": await _amazon_recipient_email(order), "billing_phone": phone,
+        "shipping_is_billing": True, "order_items": items,
+        "payment_method": "COD" if cod > 0 else "Prepaid", "sub_total": round(value, 2),
+        "length": box["length"], "breadth": box["width"], "height": box["height"], "weight": weight,
+        "is_insurance_opt": bool(req.insure),
+    }
+    code, created = await _sr_call("POST", "/orders/create/adhoc", json=payload)
+    shipment_id, sr_order_id = (created or {}).get("shipment_id"), (created or {}).get("order_id")
+    if code not in (200, 201) or not shipment_id:
+        logging.error(f"Shiprocket create failed: {code} {str(created)[:400]}")
+        raise HTTPException(status_code=400, detail=f"Shiprocket refused the order: {str(created)[:250]}")
+
+    code, awb = await _sr_call("POST", "/courier/assign/awb",
+                               json={"shipment_id": shipment_id, "courier_id": chosen["courier_id"]})
+    d = ((awb or {}).get("response") or {}).get("data") or {}
+    awb_code = d.get("awb_code") or (awb or {}).get("awb_code")
+    if not awb_code:
+        # do not leave a half-made order sitting in the Shiprocket panel
+        await _sr_call("POST", "/orders/cancel", json={"ids": [sr_order_id]})
+        await db.orders.update_one({"id": req.order_id}, {"$inc": {"shiprocket_failed_attempts": 1}})
+        reason = d.get("awb_assign_error") or (awb or {}).get("message") or str(awb)[:200]
+        raise HTTPException(status_code=400, detail=f"Shiprocket could not assign {chosen['name']}: {reason}")
+
+    code, pk = await _sr_call("POST", "/courier/generate/pickup", json={"shipment_id": [shipment_id]})
+    pickup = (pk or {}).get("response") or {}
+    pickup_date = pickup.get("pickup_scheduled_date") or ""
+    if isinstance(pickup_date, dict):
+        pickup_date = pickup_date.get("date") or ""
+    code, lb = await _sr_call("POST", "/courier/generate/label", json={"shipment_id": [shipment_id]})
+    shipment = {
+        "sr_order_id": sr_order_id, "shipment_id": shipment_id, "reference": ref,
+        "awb": awb_code, "tracking_id": awb_code,
+        "courier_id": chosen["courier_id"], "courier_name": d.get("courier_name") or chosen["name"],
+        "rate": chosen["rate"], "etd": chosen.get("etd") or "", "days": chosen.get("days"),
+        "pickup_date": str(pickup_date)[:19], "pickup_note": str(pickup.get("data") or "")[:160],
+        "is_cod": cod > 0, "cod_amount": cod, "declared_value": round(value, 2), "insured": bool(req.insure),
+        "weight_kg": weight, "label_url": (lb or {}).get("label_url") or "",
+        "booked_by": user["name"], "booked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.orders.update_one({"id": req.order_id}, {"$set": {
+        "shiprocket_shipment": shipment, "courier_name": "Shiprocket",
+        "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"ok": True, "shipment": shipment}
+
+
+@api_router.post("/shiprocket/bulk-book")
+async def shiprocket_bulk_book(req: BulkBookRequest, user=Depends(get_current_user)):
+    """Books several orders, each on its cheapest courier. Prepaid unless stated."""
+    _sr_require(user)
+    mode = (req.payment_mode or "prepaid").strip().lower()
+    if mode not in ("prepaid", "cod"):
+        raise HTTPException(status_code=400, detail="payment_mode must be prepaid or cod")
+
+    async def one(oid):
+        return await shiprocket_book(ShiprocketBookRequest(
+            order_id=oid, payment_mode=mode, declared_value=(req.declared_values or {}).get(oid)), user=user)
+
+    return await _bulk_book(req.order_ids, one, user, "Shiprocket")
+
+
+async def _sr_cancel_one(order_id: str, user) -> dict:
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    shp = order.get("shiprocket_shipment") or {}
+    if not shp.get("sr_order_id"):
+        raise HTTPException(status_code=400, detail="No Shiprocket booking on this order")
+    if (order.get("status") or "") == "dispatched":
+        raise HTTPException(status_code=400, detail="Order is already dispatched - undo the dispatch before cancelling the label")
+    code, data = await _sr_call("POST", "/orders/cancel", json={"ids": [shp["sr_order_id"]]})
+    if code not in (200, 201, 204):
+        raise HTTPException(status_code=400, detail=f"Shiprocket cancel failed: {str(data)[:250]}")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.orders.update_one({"id": order_id}, {
+        "$push": {"cancelled_shipments": {"courier": "Shiprocket", **shp, "cancelled_by": user["name"], "cancelled_at": now}},
+        "$unset": {"shiprocket_shipment": ""}, "$set": {"updated_at": now}})
+    return {"ok": True, "cancelled": shp.get("awb") or shp.get("sr_order_id")}
+
+
+@api_router.post("/shiprocket/cancel")
+async def shiprocket_cancel(req: CancelLabelRequest, user=Depends(get_current_user)):
+    _sr_require(user)
+    return await _sr_cancel_one(req.order_id, user)
+
+
+@api_router.post("/shiprocket/bulk-cancel")
+async def shiprocket_bulk_cancel(req: BulkBookRequest, user=Depends(get_current_user)):
+    _sr_require(user)
+
+    async def one(oid):
+        return await _sr_cancel_one(oid, user)
+
+    return await _bulk_book(req.order_ids, one, user, "Shiprocket cancel")
+
+
+@api_router.get("/shiprocket/labels")
+async def shiprocket_labels(ids: str, token: str = "", user=None):
+    """One PDF with the labels of the selected orders (Shiprocket renders it)."""
+    if token:
+        user = await get_user_from_token_param(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    wanted = [i for i in (ids or "").split(",") if i][:50]
+    shipment_ids = []
+    async for o in db.orders.find({"id": {"$in": wanted}}, {"_id": 0, "shiprocket_shipment": 1}):
+        sid = (o.get("shiprocket_shipment") or {}).get("shipment_id")
+        if sid:
+            shipment_ids.append(sid)
+    if not shipment_ids:
+        raise HTTPException(status_code=404, detail="None of these orders has a Shiprocket label")
+    code, lb = await _sr_call("POST", "/courier/generate/label", json={"shipment_id": shipment_ids})
+    url = (lb or {}).get("label_url")
+    if not url:
+        raise HTTPException(status_code=400, detail=f"Shiprocket did not return a label: {str(lb)[:200]}")
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+        r = await c.get(url)
+    return StreamingResponse(io.BytesIO(r.content), media_type="application/pdf",
+                             headers={"Content-Disposition": "inline; filename=shiprocket-labels.pdf"})
+
+
+class ShiprocketDispatchRequest(BaseModel):
+    order_id: str
+    docket_no: Optional[str] = ""
+
+
+@api_router.post("/shiprocket/dispatch")
+async def shiprocket_dispatch(req: ShiprocketDispatchRequest, user=Depends(get_current_user)):
+    """Mark a booked Shiprocket order dispatched; the label's first page becomes the slip image."""
+    _sr_require(user)
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    shp = order.get("shiprocket_shipment") or {}
+    docket = (req.docket_no or "").strip() or shp.get("awb") or ""
+    if not docket:
+        raise HTTPException(status_code=400, detail="Tracking / AWB number is required")
+    dispatch = order.get("dispatch") or {}
+    slips = list(dispatch.get("dispatch_slip_images") or [])
+    if not slips and shp.get("label_url"):
+        try:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+                pdf = (await c.get(shp["label_url"])).content
+            jpg = _pdf_first_page_jpg(pdf)
+            jpg = jpg[0] if isinstance(jpg, (list, tuple)) else jpg
+            if jpg:
+                fname = f"{uuid.uuid4()}.jpg"
+                async with aiofiles.open(UPLOAD_DIR / fname, "wb") as f:
+                    await f.write(jpg)
+                slips.append(f"/api/uploads/{fname}")
+        except Exception as e:
+            logging.warning(f"shiprocket slip image failed: {e}")
+    now = datetime.now(timezone.utc).isoformat()
+    dispatch.update({"courier_name": "Shiprocket", "courier_partner": shp.get("courier_name") or "",
+                     "transporter_name": "", "lr_no": docket, "dispatch_slip_images": slips,
+                     "dispatch_type": "courier", "porter_link": "",
+                     "dispatched_by": user["name"], "dispatched_at": now})
+    await db.orders.update_one({"id": req.order_id}, {"$set": {
+        "dispatch": dispatch, "status": "dispatched", "courier_name": "Shiprocket", "updated_at": now}})
+    return {"ok": True, "lr_no": docket, "slips": slips}
 
 
 @api_router.get("/rates/compare")

@@ -11,7 +11,7 @@ import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
   FileText, TrendingUp, Bell, ShoppingBag, Calculator, MapPinCheck, Megaphone,
-  ChevronDown, Layers, Navigation, IndianRupee, Mail, Timer, Activity, CalendarDays,
+  ChevronDown, Layers, Navigation, IndianRupee, Rocket, Timer, Activity, CalendarDays,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -30,6 +30,7 @@ const NAV_ITEMS = {
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
+    { label: "Shiprocket", icon: Rocket, path: "/shiprocket" },
   ],
   packaging: [
     { label: "Dashboard", icon: Home, path: "/" },
@@ -44,6 +45,7 @@ const NAV_ITEMS = {
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
+    { label: "Shiprocket", icon: Rocket, path: "/shiprocket" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
   dispatch: [
@@ -56,6 +58,7 @@ const NAV_ITEMS = {
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
+    { label: "Shiprocket", icon: Rocket, path: "/shiprocket" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
   admin: [
@@ -86,7 +89,7 @@ const NAV_ITEMS = {
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
-    { label: "India Post", icon: Mail, path: "/indiapost" },
+    { label: "Shiprocket", icon: Rocket, path: "/shiprocket" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
   accounts: [
@@ -99,6 +102,7 @@ const NAV_ITEMS = {
     { label: "Anjani", icon: MapPinCheck, path: "/anjani" },
     { label: "DTDC", icon: Calculator, path: "/dtdc" },
     { label: "Amazon Ship", icon: ShoppingBag, path: "/amazon-check" },
+    { label: "Shiprocket", icon: Rocket, path: "/shiprocket" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
   ],
 };
