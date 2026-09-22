@@ -46,7 +46,6 @@ export default function BookShipments() {
   const [filter, setFilter] = useState("All");
   const [selected, setSelected] = useState(new Set());
   const [busy, setBusy] = useState({});
-  const [bulkMode, setBulkMode] = useState("prepaid");
   const [bulkBusy, setBulkBusy] = useState("");
   const [bulkResult, setBulkResult] = useState(null);
   // { order, courier, preview | rates | couriers, ... } — the step before money is spent
@@ -59,6 +58,8 @@ export default function BookShipments() {
   const [docketNo, setDocketNo] = useState("");
   const [dispatching, setDispatching] = useState(false);
   const [cheapest, setCheapest] = useState({});       // order id -> compare result
+  // Bulk review: order id -> { courier, mode, loading, error, preview | options, choice, declared, insure }
+  const [review, setReview] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -171,7 +172,7 @@ export default function BookShipments() {
   };
 
   // ── bulk: the selection may span couriers; each group goes to its own endpoint ──
-  const runBulk = async (rows, action, declaredValues = {}) => {
+  const runBulk = async (rows, action, declaredValues = {}, choices = {}) => {
     const merged = { booked: [], failed: [], booked_count: 0, failed_count: 0, action };
     for (const courier of ["DTDC", "Amazon", "Shiprocket"]) {
       const group = rows.filter(o => o.courier === courier);
@@ -179,7 +180,7 @@ export default function BookShipments() {
       const body = { order_ids: group.map(o => o.id) };
       if (action === "book") {
         body.declared_values = declaredValues;
-        if (courier !== "DTDC") body.payment_mode = bulkMode;
+        body.choices = choices;
       }
       try {
         const res = await api.post(`/${COURIERS[courier].api}/bulk-${action}`, body);
@@ -195,21 +196,75 @@ export default function BookShipments() {
     return merged;
   };
 
+  // ── bulk: every selected order is quoted and shown for review before anything is bought ──
+  const quoteRow = async (o, mode) => {
+    const row = { courier: o.courier, mode, loading: true, error: "", preview: null, options: [], choice: null,
+                  declared: +(o.grand_total || 0) > 0 ? undefined : "", insure: false };
+    try {
+      if (o.courier === "DTDC") {
+        const res = await api.post("/dtdc/preview", { order_id: o.id });
+        row.preview = res.data;
+      } else {
+        const res = await api.post(`/${COURIERS[o.courier].api}/quote`, { order_id: o.id, payment_mode: mode });
+        if (!res.data.ok) row.error = res.data.message || "No rates";
+        else {
+          row.options = o.courier === "Amazon" ? res.data.rates : res.data.couriers;
+          row.choice = row.options[0] || null;
+          row.codAmount = res.data.cod_amount;
+        }
+      }
+    } catch (err) {
+      row.error = err.response?.data?.detail || "Could not quote";
+    }
+    row.loading = false;
+    return row;
+  };
+
   const bulkBook = async () => {
     if (!toBook.length) return;
-    const declaredValues = {};
-    for (const o of toBook) {
-      const dv = askDeclared(o);
-      if (dv === null) return;            // cancelled - abort the whole batch
-      if (dv !== undefined) declaredValues[o.id] = dv;
+    const init = {};
+    for (const o of toBook) init[o.id] = { courier: o.courier, mode: o.is_cod ? "cod" : "prepaid", loading: true, options: [], insure: false };
+    setReview(init);
+    await Promise.all(toBook.map(async (o) => {
+      const row = await quoteRow(o, init[o.id].mode);
+      setReview(r => (r ? { ...r, [o.id]: { ...row, declared: r[o.id]?.declared ?? row.declared } } : r));
+    }));
+  };
+
+  const requoteRow = async (o, mode) => {
+    setReview(r => ({ ...r, [o.id]: { ...r[o.id], mode, loading: true, error: "" } }));
+    const row = await quoteRow(o, mode);
+    setReview(r => (r ? { ...r, [o.id]: { ...row, declared: r[o.id]?.declared, insure: r[o.id]?.insure } } : r));
+  };
+
+  const rowFare = (row) => {
+    if (!row || row.loading || row.error) return null;
+    if (row.courier === "DTDC") return row.preview ? Number(row.preview.est_charge) : null;
+    if (row.courier === "Amazon") return row.choice ? Number(row.choice.amount) * 1.18 : null;   // Amazon quotes before GST
+    return row.choice ? Number(row.choice.rate) : null;
+  };
+
+  const reviewRows = review ? toBook.filter(o => review[o.id]) : [];
+  const reviewReady = reviewRows.length > 0 && reviewRows.every(o => {
+    const r = review[o.id];
+    return !r.loading && !r.error && (r.courier === "DTDC" ? !!r.preview : !!r.choice)
+      && (r.declared === undefined || parseFloat(r.declared) > 0);
+  });
+  const reviewTotal = reviewRows.reduce((t, o) => t + (rowFare(review[o.id]) || 0), 0);
+
+  const confirmBulk = async () => {
+    if (!reviewReady) return;
+    const declaredValues = {}, choices = {};
+    for (const o of reviewRows) {
+      const r = review[o.id];
+      if (r.declared !== undefined) declaredValues[o.id] = parseFloat(r.declared);
+      choices[o.id] = { payment_mode: r.mode, insure: !!r.insure,
+                        service_id: r.courier === "Amazon" ? (r.choice.service_id || r.choice.rate_id) : undefined,
+                        courier_id: r.courier === "Shiprocket" ? r.choice.courier_id : undefined };
     }
-    const parts = ["DTDC", "Amazon", "Shiprocket"].map(c => [c, toBook.filter(o => o.courier === c).length]).filter(([, n]) => n);
-    const hasPaid = toBook.some(o => o.courier !== "DTDC");
-    if (!window.confirm(`Book ${toBook.length} order(s)? ${parts.map(([c, n]) => `${c}: ${n}`).join(", ")}.`
-        + (hasPaid ? `\n\nAmazon and Shiprocket orders book as ${bulkMode === "cod" ? "COD" : "PREPAID"}; Shiprocket uses its cheapest courier.` : "")
-        + `\n\nThis buys real shipments.`)) return;
     setBulkBusy("book");
-    const res = await runBulk(toBook, "book", declaredValues);
+    const res = await runBulk(reviewRows, "book", declaredValues, choices);
+    setReview(null);
     setBulkResult(res);
     if (res.booked_count) toast.success(`Booked ${res.booked_count} shipment(s)`);
     if (res.failed_count) toast.error(`${res.failed_count} failed — see the summary`);
@@ -341,20 +396,6 @@ export default function BookShipments() {
               {toBook.length > 0 && ` · ${toBook.length} to book`}
               {bookedSel.length > 0 && ` · ${bookedSel.length} booked`}
             </span>
-            {toBook.some(o => o.courier !== "DTDC") && (
-              <div className="flex gap-1">
-                {[["prepaid", "Prepaid"], ["cod", "COD"]].map(([m, label]) => (
-                  <button key={m} type="button" onClick={() => setBulkMode(m)} data-testid={`ship-bulk-mode-${m}`}
-                          className={`rounded-md border px-3 py-1.5 text-xs transition ${
-                            bulkMode === m
-                              ? (m === "cod" ? "border-amber-500 bg-amber-100 dark:bg-amber-900/40 font-semibold"
-                                             : "border-sky-500 bg-sky-100 dark:bg-sky-900/40 font-semibold")
-                              : "border-border hover:bg-muted"}`}>
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
             <Button size="sm" onClick={bulkBook} disabled={!!bulkBusy || toBook.length === 0} data-testid="ship-bulk-book">
               {bulkBusy === "book" ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Booking {toBook.length}…</>
                                    : <><Truck className="w-4 h-4 mr-1" /> Book Selected ({toBook.length})</>}
@@ -368,9 +409,6 @@ export default function BookShipments() {
               {bulkBusy === "cancel" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : null} Cancel Labels ({bookedSel.length})
             </Button>
             <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())} disabled={!!bulkBusy}>Clear</Button>
-            {bulkMode === "cod" && toBook.some(o => o.courier !== "DTDC") && (
-              <span className="text-xs text-amber-600 w-full">Amazon and Shiprocket orders in this batch will be booked COD, each collecting its own outstanding balance.</span>
-            )}
           </CardContent>
         </Card>
       )}
@@ -551,6 +589,113 @@ export default function BookShipments() {
           </CardContent>
         </Card>
       )}
+
+      {/* Bulk review — every order's fare, weight, payment mode and carrier, before anything is bought */}
+      <Dialog open={!!review} onOpenChange={(v) => { if (!v && bulkBusy !== "book") setReview(null); }}>
+        <DialogContent className="max-w-5xl max-h-[92vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Review before booking — {reviewRows.length} order{reviewRows.length === 1 ? "" : "s"}</DialogTitle>
+            <DialogDescription>Check the fare, weight and payment mode of every order. Pick the carrier for Shiprocket orders. Nothing is booked until you press the button below.</DialogDescription>
+          </DialogHeader>
+          <div className="overflow-x-auto">
+            <Table className="min-w-[900px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Order</TableHead><TableHead>Courier</TableHead><TableHead>Weight</TableHead><TableHead>To</TableHead>
+                  <TableHead>Paid how</TableHead><TableHead>Service / Carrier</TableHead><TableHead className="text-right">Fare (incl. GST)</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {reviewRows.map(o => {
+                  const r = review[o.id];
+                  const fare = rowFare(r);
+                  const sa = o.shipping_address || {};
+                  const optKey = (c) => String(r.courier === "Amazon" ? (c.rate_id || c.service_id) : c.courier_id);
+                  return (
+                    <TableRow key={o.id} data-testid={`ship-review-${o.id}`}>
+                      <TableCell className="align-top">
+                        <div className="font-mono text-sm">{o.order_number}</div>
+                        <div className="text-xs text-muted-foreground">{o.customer_name}</div>
+                        {r.declared !== undefined && (
+                          <div className="mt-1">
+                            <Input value={r.declared} placeholder="Declared value ₹" inputMode="decimal" className="h-7 w-32 text-xs"
+                              onChange={e => setReview(x => ({ ...x, [o.id]: { ...x[o.id], declared: e.target.value.replace(/[^\d.]/g, "") } }))} />
+                            <div className="text-[10px] text-amber-600">Order total is ₹0 — enter the declared value</div>
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="align-top">
+                        <Badge className={`${COURIERS[o.courier].badge} text-xs`}>{o.courier}</Badge>
+                        {r.courier === "DTDC" && r.preview && <div className="text-[10px] text-muted-foreground mt-0.5">{r.preview.account} · {r.preview.service_type}{r.preview.risk_surcharge ? " · risk" : ""}</div>}
+                      </TableCell>
+                      <TableCell className="align-top font-mono text-sm whitespace-nowrap">{o.weight_kg} kg / {o.num_boxes}</TableCell>
+                      <TableCell className="align-top text-sm">{sa.city || "—"}{sa.pincode ? ` · ${sa.pincode}` : ""}</TableCell>
+                      <TableCell className="align-top">
+                        {r.courier === "DTDC" ? (
+                          <span className="text-xs text-muted-foreground">Prepaid (account)</span>
+                        ) : (
+                          <div className="flex gap-1">
+                            {[["prepaid", "Prepaid"], ["cod", "COD"]].map(([m, label]) => (
+                              <button key={m} type="button" disabled={r.loading} onClick={() => m !== r.mode && requoteRow(o, m)}
+                                      className={`rounded-md border px-2 py-1 text-xs transition ${r.mode === m
+                                        ? (m === "cod" ? "border-amber-500 bg-amber-100 dark:bg-amber-900/40 font-semibold" : "border-sky-500 bg-sky-100 dark:bg-sky-900/40 font-semibold")
+                                        : "border-border hover:bg-muted"}`}>{label}</button>
+                            ))}
+                          </div>
+                        )}
+                        {r.mode === "cod" && r.codAmount > 0 && <div className="text-[10px] text-amber-700 mt-0.5">collect {inr(r.codAmount)}</div>}
+                      </TableCell>
+                      <TableCell className="align-top">
+                        {r.loading ? <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                         : r.error ? <span className="text-xs text-destructive">{r.error}</span>
+                         : r.courier === "DTDC" ? <span className="text-xs">{r.preview?.series} · {r.preview?.city}</span>
+                         : (
+                          <>
+                            <select value={r.choice ? optKey(r.choice) : ""}
+                              className="h-8 max-w-[260px] rounded-md border border-border bg-background px-2 text-xs"
+                              data-testid={`ship-review-pick-${o.id}`}
+                              onChange={e => setReview(x => {
+                                const pick = x[o.id].options.find(c => optKey(c) === e.target.value);
+                                return { ...x, [o.id]: { ...x[o.id], choice: pick || x[o.id].choice } };
+                              })}>
+                              {r.options.map((c, i) => (
+                                <option key={i} value={optKey(c)}>
+                                  {r.courier === "Amazon" ? `${c.service} — ${fmtAmazonRate(c.amount, c.currency)}` : `${c.name} — ${inr(c.rate)}${i === 0 ? " (cheapest)" : ""}`}
+                                </option>
+                              ))}
+                            </select>
+                            {r.courier === "Shiprocket" && r.choice && (
+                              <div className="text-[10px] text-muted-foreground mt-0.5">
+                                {r.choice.etd ? `delivery by ${r.choice.etd}` : ""}{r.choice.cutoff_time ? ` · pickup today if before ${r.choice.cutoff_time}` : ""}
+                                <label className="ml-2 inline-flex items-center gap-1 cursor-pointer">
+                                  <Checkbox checked={!!r.insure} onCheckedChange={v => setReview(x => ({ ...x, [o.id]: { ...x[o.id], insure: !!v } }))} className="h-3 w-3" /> insure
+                                </label>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </TableCell>
+                      <TableCell className="align-top text-right font-mono font-semibold whitespace-nowrap">{fare != null ? inr(fare) : "—"}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+          <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-800 dark:text-amber-300">
+              This buys {reviewRows.length} real shipment{reviewRows.length === 1 ? "" : "s"} for about <b>{inr(reviewTotal)}</b> in total and schedules pickups. Amazon fares are shown with 18% GST added.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReview(null)} disabled={bulkBusy === "book"}>Cancel</Button>
+            <Button onClick={confirmBulk} disabled={!reviewReady || bulkBusy === "book"} data-testid="ship-review-confirm">
+              {bulkBusy === "book" ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Booking…</> : `Book ${reviewRows.length} — ${inr(reviewTotal)}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Confirmation — nothing is purchased until this is confirmed */}
       <Dialog open={!!confirm} onOpenChange={(v) => { if (!v && !booking) closeConfirm(); }}>

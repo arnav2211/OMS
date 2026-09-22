@@ -6515,6 +6515,9 @@ class BulkBookRequest(BaseModel):
     payment_mode: Optional[str] = None      # Amazon only; prepaid unless stated
     # order_id -> declared value for zero-total orders in the batch.
     declared_values: Optional[dict] = None
+    # order_id -> {"payment_mode", "service_id" (Amazon), "courier_id" (Shiprocket), "insure"}
+    # reviewed per order on the Book Shipments screen; overrides the batch mode.
+    choices: Optional[dict] = None
 
 
 async def _bulk_book(order_ids, book_one, user, label):
@@ -8260,8 +8263,12 @@ async def shiprocket_bulk_book(req: BulkBookRequest, user=Depends(get_current_us
         raise HTTPException(status_code=400, detail="payment_mode must be prepaid or cod")
 
     async def one(oid):
+        ch = (req.choices or {}).get(oid) or {}
         return await shiprocket_book(ShiprocketBookRequest(
-            order_id=oid, payment_mode=mode, declared_value=(req.declared_values or {}).get(oid)), user=user)
+            order_id=oid, payment_mode=(ch.get("payment_mode") or mode),
+            courier_id=int(ch["courier_id"]) if ch.get("courier_id") else None,
+            insure=bool(ch.get("insure")),
+            declared_value=(req.declared_values or {}).get(oid)), user=user)
 
     return await _bulk_book(req.order_ids, one, user, "Shiprocket")
 
@@ -9065,8 +9072,10 @@ async def amazon_bulk_book(req: BulkBookRequest, user=Depends(get_current_user))
         raise HTTPException(status_code=400, detail="payment_mode must be prepaid or cod")
 
     async def one(oid):
+        ch = (req.choices or {}).get(oid) or {}
         return await amazon_book_order(
-            AmazonBookRequest(order_id=oid, payment_mode=mode,
+            AmazonBookRequest(order_id=oid, payment_mode=(ch.get("payment_mode") or mode),
+                              service_id=ch.get("service_id") or None,
                               declared_value=(req.declared_values or {}).get(oid)), user=user)
 
     return await _bulk_book(req.order_ids, one, user, "Amazon")
