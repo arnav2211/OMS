@@ -18,6 +18,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { INDIAN_STATES } from "@/lib/indianStates";
 import CourierSelect from "@/components/CourierSelect";
+import ShiprocketCarrierPick from "@/components/ShiprocketCarrierPick";
 import {
   resolveCarrierRiskCharge, formatCarrierRisk, stripCarrierRisk, resolveCarrierRiskFlag,
   CARRIER_RISK_GST_PERCENT, CARRIER_RISK_COURIER,
@@ -195,6 +196,7 @@ export default function CreateOrder() {
       setDiscountValue(pi.discount_value || 0); setDiscountIsPercent(!!pi.discount_is_percent);
       setShippingMethod(pi.shipping_method || "");
       setCourierName(pi.courier_name || "");
+      setShiprocketCourier(pi.shiprocket_courier || null);
       setTransporterName(pi.transporter_name || "");
       setShippingCharge(pi.shipping_charge || 0);
       // Carrier risk is a derived row, so it is kept out of the editable list.
@@ -238,6 +240,7 @@ export default function CreateOrder() {
       setDiscountValue(d.discount_value || 0); setDiscountIsPercent(!!d.discount_is_percent);
       setShippingMethod(d.shipping_method || "");
       setCourierName(d.courier_name || "");
+      setShiprocketCourier(d.shiprocket_courier || null);
       setTransporterName(d.transporter_name || "");
       setShippingCharge(d.shipping_charge || 0);
       setAdditionalCharges(stripCarrierRisk(d.additional_charges));
@@ -330,8 +333,10 @@ export default function CreateOrder() {
   // Carrier risk only exists on DTDC, and is never applied automatically - it
   // is a real charge to the customer, so it must be a deliberate tick. Moving
   // away from DTDC clears it, since it cannot apply to any other courier.
+  const [shiprocketCourier, setShiprocketCourier] = useState(null);
   const handleCourierChange = (value) => {
     setCourierName(value);
+    if (value !== "Shiprocket") setShiprocketCourier(null);
     if (value !== CARRIER_RISK_COURIER) setCarrierRiskApplicable(false);
   };
 
@@ -480,6 +485,7 @@ export default function CreateOrder() {
         gst_applicable: gstApplicable,
         shipping_method: shippingMethod,
         courier_name: courierName,
+        shiprocket_courier: courierName === "Shiprocket" ? shiprocketCourier : null,
         transporter_name: transporterName,
         shipping_charge: shippingCharge,
         shipping_gst: shippingGst,
@@ -811,6 +817,10 @@ export default function CreateOrder() {
                 <Label>Courier *</Label>
                 <CourierSelect value={courierName} onChange={handleCourierChange} triggerTestId="courier-name-select" />
               </div>
+            )}
+            {shippingMethod === "courier" && courierName === "Shiprocket" && (
+              <ShiprocketCarrierPick pincode={(sameAsBilling ? billingAddress : shippingAddress)?.pincode} cod={isCod}
+                                     value={shiprocketCourier} onChange={setShiprocketCourier} />
             )}
             {shippingMethod === "transport" && (
               <div>

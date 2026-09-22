@@ -17,6 +17,7 @@ import { Plus, Trash2, MapPin, ArrowLeft, Upload, X, Edit, Lock, ShieldAlert } f
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { INDIAN_STATES } from "@/lib/indianStates";
 import CourierSelect from "@/components/CourierSelect";
+import ShiprocketCarrierPick from "@/components/ShiprocketCarrierPick";
 import {
   resolveCarrierRiskCharge, formatCarrierRisk, stripCarrierRisk, resolveCarrierRiskFlag,
   CARRIER_RISK_GST_PERCENT, CARRIER_RISK_COURIER,
@@ -459,6 +460,7 @@ export default function EditOrder() {
       setDiscountValue(o.discount_value || 0); setDiscountIsPercent(!!o.discount_is_percent);
       setShippingMethod(o.shipping_method || "");
       setCourierName(o.courier_name || "");
+      setShiprocketCourier(o.shiprocket_courier || null);
       setTransporterName(o.transporter_name || "");
       setShippingCharge(o.shipping_charge || 0);
       // Carrier risk is a derived row, so it is kept out of the editable list.
@@ -558,8 +560,10 @@ export default function EditOrder() {
   // Carrier risk is a DTDC charge, so selecting DTDC turns it on by default.
   // Set here rather than in an effect so it never fights hydration or a manual
   // override — it only moves when the courier itself changes.
+  const [shiprocketCourier, setShiprocketCourier] = useState(null);
   const handleCourierChange = (value) => {
     setCourierName(value);
+    if (value !== "Shiprocket") setShiprocketCourier(null);
     // Never applied automatically; cleared when the courier cannot carry it.
     if (value !== CARRIER_RISK_COURIER) setCarrierRiskApplicable(false);
   };
@@ -664,6 +668,7 @@ export default function EditOrder() {
         discount_is_percent: discountIsPercent,
         shipping_method: shippingMethod,
         courier_name: courierName,
+        shiprocket_courier: courierName === "Shiprocket" ? shiprocketCourier : null,
         transporter_name: transporterName,
         shipping_charge: shippingCharge,
         shipping_gst: shippingGst,
@@ -1051,6 +1056,10 @@ export default function EditOrder() {
                   <div><Label>Courier</Label>
                     <CourierSelect value={courierName} onChange={handleCourierChange} />
                   </div>
+                )}
+                {shippingMethod === "courier" && courierName === "Shiprocket" && (
+                  <ShiprocketCarrierPick pincode={(sameAsBilling ? billingAddress : shippingAddress)?.pincode} cod={isCod}
+                                         value={shiprocketCourier} onChange={setShiprocketCourier} />
                 )}
                 {shippingMethod === "transport" && (
                   <div><Label>Transporter</Label><Input value={transporterName} onChange={e => setTransporterName(e.target.value)} /></div>

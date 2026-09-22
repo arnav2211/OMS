@@ -129,7 +129,9 @@ export default function BookShipments() {
           return;
         }
         const options = o.courier === "Amazon" ? res.data.rates : res.data.couriers;
-        setChoice(options[0] || null);
+        const pref = res.data.preferred_courier_id && options.find(c => c.courier_id === res.data.preferred_courier_id);
+        setChoice(pref || options[0] || null);
+        if (res.data.preferred_courier_id && !pref) toast.warning(`${res.data.preferred_name} chosen at order time is not available now - pick another carrier`, { duration: 7000 });
         setConfirm({ order: o, courier: o.courier, options, codAmount: res.data.cod_amount,
                      box_cm: res.data.box_cm, boxMeasured: res.data.box_measured });
       }
@@ -209,7 +211,10 @@ export default function BookShipments() {
         if (!res.data.ok) row.error = res.data.message || "No rates";
         else {
           row.options = o.courier === "Amazon" ? res.data.rates : res.data.couriers;
-          row.choice = row.options[0] || null;
+          const pref = res.data.preferred_courier_id && row.options.find(c => c.courier_id === res.data.preferred_courier_id);
+          row.choice = pref || row.options[0] || null;
+          row.preferred = res.data.preferred_name || "";
+          row.preferredMissing = !!res.data.preferred_courier_id && !pref;
           row.codAmount = res.data.cod_amount;
         }
       }
@@ -537,6 +542,7 @@ export default function BookShipments() {
                             </div>
                           )}
                           {o.courier === "Shiprocket" && sh.courier_name && <div className="text-[10px] text-muted-foreground mt-0.5">{sh.courier_name}</div>}
+                          {o.courier === "Shiprocket" && !o.booked && o.shiprocket_courier?.name && <div className="text-[10px] text-violet-700 dark:text-violet-300 mt-0.5">wants {o.shiprocket_courier.name}</div>}
                         </TableCell>
                         <TableCell className="font-mono text-sm">{o.order_number}</TableCell>
                         <TableCell className="text-sm">
@@ -660,10 +666,11 @@ export default function BookShipments() {
                               })}>
                               {r.options.map((c, i) => (
                                 <option key={i} value={optKey(c)}>
-                                  {r.courier === "Amazon" ? `${c.service} — ${fmtAmazonRate(c.amount, c.currency)}` : `${c.name} — ${inr(c.rate)}${i === 0 ? " (cheapest)" : ""}`}
+                                  {r.courier === "Amazon" ? `${c.service} — ${fmtAmazonRate(c.amount, c.currency)}` : `${c.name} — ${inr(c.rate)}${i === 0 ? " (cheapest)" : ""}${c.name === r.preferred ? " (chosen on order)" : ""}`}
                                 </option>
                               ))}
                             </select>
+                            {r.preferredMissing && <div className="text-[10px] text-amber-600">{r.preferred} (chosen on order) is not offered now</div>}
                             {r.courier === "Shiprocket" && r.choice && (
                               <div className="text-[10px] text-muted-foreground mt-0.5">
                                 {r.choice.etd ? `delivery by ${r.choice.etd}` : ""}{r.choice.cutoff_time ? ` · pickup today if before ${r.choice.cutoff_time}` : ""}

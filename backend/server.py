@@ -623,6 +623,9 @@ class OrderCreate(BaseModel):
     billing_address_id: str = ""
     shipping_address_id: str = ""
     extra_shipping_details: str = ""
+    # Carrier the telecaller picked from Shiprocket's live quote while making the
+    # order: {courier_id, name, rate, weight_kg, cod, quoted_at}. Booking preselects it.
+    shiprocket_courier: Optional[dict] = None
 
 class FormulationUpdate(BaseModel):
     items: List[Dict[str, Any]]
@@ -1327,6 +1330,7 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "shipping_method": shipping_method,
         "courier_name": courier_name,
         "transporter_name": transporter_name,
+        "shiprocket_courier": req.shiprocket_courier if courier_name == "Shiprocket" else None,
         "shipping_charge": req.shipping_charge,
         "shipping_gst": shipping_gst,
         "additional_charges": additional_charges,
@@ -8055,6 +8059,10 @@ async def _sr_couriers(pincode: str, weight: float, cod: bool, declared: float =
     return out
 
 
+def courier_name_is_sr(order: dict) -> bool:
+    return (order.get("courier_name") or "").strip().lower().startswith("shiprocket")
+
+
 def _sr_require(user):
     if user["role"] not in SR_ROLES:
         raise HTTPException(status_code=403, detail="Not authorized")
@@ -8099,7 +8107,7 @@ async def shiprocket_bookable(user=Depends(get_current_user)):
         "packaging.weight_kg": {"$nin": ["", None]},
     }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "shipping_address": 1,
         "packaging": 1, "shiprocket_shipment": 1, "status": 1, "is_cod": 1, "amount_paid": 1, "cod_amount": 1,
-        }).sort("created_at", -1).to_list(300)
+        "shiprocket_courier": 1}).sort("created_at", -1).to_list(300)
     out = []
     for o in orders:
         pkg = o.get("packaging") or {}
@@ -8114,6 +8122,7 @@ async def shiprocket_bookable(user=Depends(get_current_user)):
                     "weight_kg": pkg.get("weight_kg"), "num_boxes": pkg.get("num_boxes") or "1",
                     "shipping_address": o.get("shipping_address") or {},
                     "is_cod": bool(o.get("is_cod")), "cod_amount": _amazon_cod_amount(o),
+                    "shiprocket_courier": o.get("shiprocket_courier") or None,
                     "shiprocket_shipment": ({k: v for k, v in sh.items() if k != "raw"} if sh else None)})
     return out
 
@@ -8150,7 +8159,10 @@ async def shiprocket_quote(req: ShiprocketBookRequest, user=Depends(get_current_
     couriers = await _sr_couriers(str(sa.get("pincode") or ""), weight, cod > 0, _declared_value(order))
     if not couriers:
         return {"ok": False, "message": "No Shiprocket courier serves this address" + (" for COD" if cod > 0 else "")}
-    return {"ok": True, "couriers": couriers, "is_cod": cod > 0, "cod_amount": cod, "weight_kg": weight}
+    pref = (order.get("shiprocket_courier") or {})
+    return {"ok": True, "couriers": couriers, "is_cod": cod > 0, "cod_amount": cod, "weight_kg": weight,
+            "preferred_courier_id": pref.get("courier_id"), "preferred_name": pref.get("name"),
+            "preferred_rate": pref.get("rate"), "preferred_weight_kg": pref.get("weight_kg")}
 
 
 @api_router.post("/shiprocket/book")
@@ -8184,7 +8196,8 @@ async def shiprocket_book(req: ShiprocketBookRequest, user=Depends(get_current_u
     couriers = await _sr_couriers(str(sa.get("pincode") or ""), weight, cod > 0, declared)
     if not couriers:
         raise HTTPException(status_code=400, detail="No Shiprocket courier serves this address")
-    chosen = next((c for c in couriers if req.courier_id and c["courier_id"] == req.courier_id), None) or couriers[0]
+    want = req.courier_id or ((order.get("shiprocket_courier") or {}).get("courier_id") if courier_name_is_sr(order) else None)
+    chosen = next((c for c in couriers if want and c["courier_id"] == want), None) or couriers[0]
 
     # Shiprocket de-duplicates on order_id, so a cancelled or half-made earlier
     # attempt must never be reused: every retry gets a fresh reference.

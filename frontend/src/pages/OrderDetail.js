@@ -663,6 +663,18 @@ export default function OrderDetail() {
                 <span className="text-sm" data-testid="order-courier-name">{order.dispatch?.courier_name || order.courier_name}</span>
               </div>
             )}
+            {activeShippingMethod === "courier" && order.shiprocket_courier?.name && !order.shiprocket_shipment?.awb && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Shiprocket carrier (chosen)</span>
+                <span className="text-sm" data-testid="order-shiprocket-carrier">{order.shiprocket_courier.name} · ₹{Number(order.shiprocket_courier.rate).toFixed(0)} at {order.shiprocket_courier.weight_kg} kg</span>
+              </div>
+            )}
+            {order.shiprocket_shipment?.awb && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Shiprocket carrier (booked)</span>
+                <span className="text-sm">{order.shiprocket_shipment.courier_name} · AWB {order.shiprocket_shipment.awb}</span>
+              </div>
+            )}
             {activeShippingMethod === "transport" && (order.dispatch?.transporter_name || order.transporter_name) && (
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Transporter Name</span>

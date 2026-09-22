@@ -109,7 +109,9 @@ export default function ShiprocketBookPanel() {
     try {
       const res = await api.post("/shiprocket/quote", { order_id: order.id, payment_mode: useMode });
       if (!res.data.ok) return toast.error(res.data.message || "No couriers available");
-      setCourier(res.data.couriers[0] || null);
+      const pref = res.data.preferred_courier_id && res.data.couriers.find(c => c.courier_id === res.data.preferred_courier_id);
+      setCourier(pref || res.data.couriers[0] || null);
+      if (res.data.preferred_courier_id && !pref) toast.warning(`${res.data.preferred_name} chosen at order time is not available now - pick another carrier`, { duration: 7000 });
       setConfirm({ order, couriers: res.data.couriers, codAmount: res.data.cod_amount });
     } catch (err) {
       toast.error(err.response?.data?.detail || "Could not fetch rates");
