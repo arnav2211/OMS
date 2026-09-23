@@ -60,6 +60,24 @@ export default function BookShipments() {
   const [cheapest, setCheapest] = useState({});       // order id -> compare result
   // Bulk review: order id -> { courier, mode, loading, error, preview | options, choice, declared, insure }
   const [review, setReview] = useState(null);
+  const [weightEdit, setWeightEdit] = useState({});   // order id -> typed weight
+
+  // Weight typed straight on this screen (for orders packing has not weighed yet).
+  const saveWeight = async (o) => {
+    const w = parseFloat(weightEdit[o.id]);
+    if (!(w > 0)) return toast.error("Enter the weight in kg");
+    setBusy(p => ({ ...p, [`w${o.id}`]: true }));
+    try {
+      await api.post("/shipments/set-weight", { order_id: o.id, weight_kg: w });
+      toast.success(`${o.order_number}: weight ${w} kg saved`);
+      setWeightEdit(p => { const n = { ...p }; delete n[o.id]; return n; });
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Could not save the weight");
+    } finally {
+      setBusy(p => ({ ...p, [`w${o.id}`]: false }));
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -553,7 +571,19 @@ export default function BookShipments() {
                           {sa.city || "—"}{sa.pincode ? ` · ${sa.pincode}` : ""}
                           {blocked && <Badge variant="outline" className="ml-1.5 text-[10px] border-red-300 text-red-600">not serviceable</Badge>}
                         </TableCell>
-                        <TableCell className="text-sm font-mono whitespace-nowrap">{o.weight_kg} kg / {o.num_boxes}</TableCell>
+                        <TableCell className="text-sm font-mono whitespace-nowrap">
+                          {o.weight_kg} kg / {o.num_boxes}
+                          {o.weight_source === "estimate" && !o.booked && (
+                            <div className="mt-1 font-sans">
+                              <Badge className="bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200 text-[10px] px-1 py-0">estimate — not weighed</Badge>
+                              <div className="flex items-center gap-1 mt-1">
+                                <Input value={weightEdit[o.id] ?? ""} onChange={e => setWeightEdit(p => ({ ...p, [o.id]: e.target.value }))}
+                                       placeholder="real kg" inputMode="decimal" className="h-7 w-20 text-xs" data-testid={`ship-weight-${o.id}`} />
+                                <Button size="sm" variant="outline" className="h-7 text-xs px-2" disabled={!!busy[`w${o.id}`]} onClick={() => saveWeight(o)}>Save</Button>
+                              </div>
+                            </div>
+                          )}
+                        </TableCell>
                         <TableCell>
                           {o.booked ? (
                             <div className="flex flex-col gap-0.5">
@@ -634,7 +664,10 @@ export default function BookShipments() {
                         <Badge className={`${COURIERS[o.courier].badge} text-xs`}>{o.courier}</Badge>
                         {r.courier === "DTDC" && r.preview && <div className="text-[10px] text-muted-foreground mt-0.5">{r.preview.account} · {r.preview.service_type}{r.preview.risk_surcharge ? " · risk" : ""}</div>}
                       </TableCell>
-                      <TableCell className="align-top font-mono text-sm whitespace-nowrap">{o.weight_kg} kg / {o.num_boxes}</TableCell>
+                      <TableCell className="align-top font-mono text-sm whitespace-nowrap">
+                        {o.weight_kg} kg / {o.num_boxes}
+                        {o.weight_source === "estimate" && <div className="text-[10px] text-amber-600 font-sans">estimate, not weighed</div>}
+                      </TableCell>
                       <TableCell className="align-top text-sm">{sa.city || "—"}{sa.pincode ? ` · ${sa.pincode}` : ""}</TableCell>
                       <TableCell className="align-top">
                         {r.courier === "DTDC" ? (
@@ -731,6 +764,11 @@ export default function BookShipments() {
             </div>
           )}
 
+          {confirm?.order?.weight_source === "estimate" && (
+            <p className="text-xs rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-2 text-amber-800 dark:text-amber-300">
+              This order has not been weighed by packing. The fare below uses the telecaller's estimate of {confirm.order.weight_kg} kg; the courier re-weighs and charges the difference.
+            </p>
+          )}
           {confirm && confirm.courier !== "DTDC" && (
             <>
               <div className="rounded-md border-2 px-3 py-2.5 space-y-2"

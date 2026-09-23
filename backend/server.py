@@ -8059,6 +8059,23 @@ async def _sr_couriers(pincode: str, weight: float, cod: bool, declared: float =
     return out
 
 
+def _sr_weight(order: dict) -> tuple:
+    """(weight_kg, source). Packing's weight wins; the telecaller's estimate from
+    the carrier picker is the fallback so the order can be quoted and booked
+    before packing has weighed it (flagged as 'estimate' everywhere)."""
+    try:
+        w = float(str((order.get("packaging") or {}).get("weight_kg") or "").strip() or 0)
+    except ValueError:
+        w = 0.0
+    if w > 0:
+        return w, "packing"
+    try:
+        e = float((order.get("shiprocket_courier") or {}).get("weight_kg") or 0)
+    except (TypeError, ValueError):
+        e = 0.0
+    return (e, "estimate") if e > 0 else (0.0, "")
+
+
 def courier_name_is_sr(order: dict) -> bool:
     return (order.get("courier_name") or "").strip().lower().startswith("shiprocket")
 
@@ -8104,22 +8121,20 @@ async def shiprocket_bookable(user=Depends(get_current_user)):
     _sr_require(user)
     orders = await db.orders.find({
         "courier_name": SR_COURIER_RE, "status": {"$nin": ["cancelled", "dispatched"]},
-        "packaging.weight_kg": {"$nin": ["", None]},
+        "$or": [{"packaging.weight_kg": {"$nin": ["", None]}}, {"shiprocket_courier.weight_kg": {"$gt": 0}}],
     }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "shipping_address": 1,
         "packaging": 1, "shiprocket_shipment": 1, "status": 1, "is_cod": 1, "amount_paid": 1, "cod_amount": 1,
         "shiprocket_courier": 1}).sort("created_at", -1).to_list(300)
     out = []
     for o in orders:
         pkg = o.get("packaging") or {}
-        try:
-            if float(str(pkg.get("weight_kg", "")).strip() or 0) <= 0:
-                continue
-        except (TypeError, ValueError):
+        weight, source = _sr_weight(o)
+        if weight <= 0:
             continue
         sh = o.get("shiprocket_shipment") or None
         out.append({"id": o["id"], "order_number": o.get("order_number"), "customer_name": o.get("customer_name"),
                     "grand_total": o.get("grand_total"), "status": o.get("status"),
-                    "weight_kg": pkg.get("weight_kg"), "num_boxes": pkg.get("num_boxes") or "1",
+                    "weight_kg": weight, "weight_source": source, "num_boxes": pkg.get("num_boxes") or "1",
                     "shipping_address": o.get("shipping_address") or {},
                     "is_cod": bool(o.get("is_cod")), "cod_amount": _amazon_cod_amount(o),
                     "shiprocket_courier": o.get("shiprocket_courier") or None,
@@ -8150,7 +8165,7 @@ async def shiprocket_quote(req: ShiprocketBookRequest, user=Depends(get_current_
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     sa = order.get("shipping_address") or {}
-    weight = float(str((order.get("packaging") or {}).get("weight_kg") or 0).strip() or 0)
+    weight, weight_source = _sr_weight(order)
     if weight <= 0:
         raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
     cod = _sr_cod(order, req.payment_mode)
@@ -8161,6 +8176,7 @@ async def shiprocket_quote(req: ShiprocketBookRequest, user=Depends(get_current_
         return {"ok": False, "message": "No Shiprocket courier serves this address" + (" for COD" if cod > 0 else "")}
     pref = (order.get("shiprocket_courier") or {})
     return {"ok": True, "couriers": couriers, "is_cod": cod > 0, "cod_amount": cod, "weight_kg": weight,
+            "weight_source": weight_source,
             "preferred_courier_id": pref.get("courier_id"), "preferred_name": pref.get("name"),
             "preferred_rate": pref.get("rate"), "preferred_weight_kg": pref.get("weight_kg")}
 
@@ -8179,7 +8195,7 @@ async def shiprocket_book(req: ShiprocketBookRequest, user=Depends(get_current_u
     elif float(order.get("grand_total") or 0) <= 0:
         raise HTTPException(status_code=400, detail="Order total is \u20b90 - enter a declared value for the shipment before booking")
     pkg = order.get("packaging") or {}
-    weight = float(str(pkg.get("weight_kg") or 0).strip() or 0)
+    weight, weight_source = _sr_weight(order)
     if weight <= 0:
         raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
     phone = await _order_recipient_phone(order)
@@ -8258,7 +8274,7 @@ async def shiprocket_book(req: ShiprocketBookRequest, user=Depends(get_current_u
         "rate": chosen["rate"], "etd": chosen.get("etd") or "", "days": chosen.get("days"),
         "pickup_date": str(pickup_date)[:19], "pickup_note": str(pickup.get("data") or "")[:160],
         "is_cod": cod > 0, "cod_amount": cod, "declared_value": round(value, 2), "insured": bool(req.insure),
-        "weight_kg": weight, "label_url": (lb or {}).get("label_url") or "",
+        "weight_kg": weight, "weight_source": weight_source, "label_url": (lb or {}).get("label_url") or "",
         "booked_by": user["name"], "booked_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.orders.update_one({"id": req.order_id}, {"$set": {
@@ -8443,6 +8459,37 @@ async def shipments_bookable(user=Depends(get_current_user)):
                            "is_cod": bool(o.get("is_cod")), "cod_amount": _amazon_cod_amount(o),
                            "carrier_risk": bool(o.get("carrier_risk_applicable"))})
     return {"orders": rows, "unassigned": unassigned, "errors": errors}
+
+
+class SetWeightRequest(BaseModel):
+    order_id: str
+    weight_kg: float
+    num_boxes: Optional[int] = None
+
+
+@api_router.post("/shipments/set-weight")
+async def shipments_set_weight(req: SetWeightRequest, user=Depends(get_current_user)):
+    """Record the parcel weight from the Book Shipments screen. Same effect as
+    packing typing it: the order becomes bookable and moves off 'new'."""
+    if user["role"] not in SHIP_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not (0 < req.weight_kg <= 500):
+        raise HTTPException(status_code=400, detail="Enter a weight between 0.01 and 500 kg")
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if (order.get("status") or "") in ("cancelled", "dispatched"):
+        raise HTTPException(status_code=400, detail=f"Order is already {order.get('status')}")
+    now = datetime.now(timezone.utc).isoformat()
+    pkg = order.get("packaging") or {}
+    update = {"packaging.weight_kg": str(round(req.weight_kg, 3)), "packaging.ready_to_book": True,
+              "packaging.ready_to_book_at": pkg.get("ready_to_book_at") or now, "updated_at": now}
+    if req.num_boxes and req.num_boxes > 0:
+        update["packaging.num_boxes"] = str(req.num_boxes)
+    if (order.get("status") or "new") == "new":
+        update["status"] = "packaging"
+    await db.orders.update_one({"id": req.order_id}, {"$set": update})
+    return {"ok": True, "weight_kg": round(req.weight_kg, 3)}
 
 
 class SetCourierRequest(BaseModel):
