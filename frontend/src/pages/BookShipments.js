@@ -319,9 +319,10 @@ export default function BookShipments() {
 
   const syncDtdc = async () => {
     try {
-      const res = await api.post("/dtdc/sync-tracking");
-      toast.success(res.data.count ? `${res.data.count} DTDC order(s) dispatched` : "No DTDC pickups reported yet");
-      if (res.data.count) load();
+      const [d, s] = await Promise.all([api.post("/dtdc/sync-tracking"), api.post("/shiprocket/sync-tracking").catch(() => ({ data: { count: 0 } }))]);
+      const n = (d.data.count || 0) + (s.data.count || 0);
+      toast.success(n ? `${n} order(s) picked up and marked dispatched` : "No new pickups reported yet");
+      if (n) load();
     } catch (err) {
       toast.error(err.response?.data?.detail || "Sync failed");
     }
@@ -372,7 +373,7 @@ export default function BookShipments() {
             </Badge>
           )}
           <Button variant="outline" size="sm" onClick={syncDtdc} data-testid="ship-dtdc-sync">
-            <PackageCheck className="w-4 h-4 mr-1" /> Check DTDC Pickups
+            <PackageCheck className="w-4 h-4 mr-1" /> Check Pickups
           </Button>
           <Button variant="outline" size="sm" onClick={load} disabled={loading}>
             <RefreshCw className={`w-4 h-4 mr-1 ${loading ? "animate-spin" : ""}`} /> Refresh

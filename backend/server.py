@@ -8373,10 +8373,16 @@ async def shiprocket_dispatch(req: ShiprocketDispatchRequest, user=Depends(get_c
     order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    shp = order.get("shiprocket_shipment") or {}
-    docket = (req.docket_no or "").strip() or shp.get("awb") or ""
+    docket = (req.docket_no or "").strip() or (order.get("shiprocket_shipment") or {}).get("awb") or ""
     if not docket:
         raise HTTPException(status_code=400, detail="Tracking / AWB number is required")
+    return await _shiprocket_mark_dispatched(order, datetime.now(timezone.utc).isoformat(), user["name"], docket)
+
+
+async def _shiprocket_mark_dispatched(order: dict, when: str, by: str, docket: str = "") -> dict:
+    """Shared dispatch write for the manual button and the pickup poller."""
+    shp = order.get("shiprocket_shipment") or {}
+    docket = docket or shp.get("awb") or ""
     dispatch = order.get("dispatch") or {}
     slips = list(dispatch.get("dispatch_slip_images") or [])
     if not slips and shp.get("label_url"):
@@ -8392,14 +8398,74 @@ async def shiprocket_dispatch(req: ShiprocketDispatchRequest, user=Depends(get_c
                 slips.append(f"/api/uploads/{fname}")
         except Exception as e:
             logging.warning(f"shiprocket slip image failed: {e}")
-    now = datetime.now(timezone.utc).isoformat()
     dispatch.update({"courier_name": "Shiprocket", "courier_partner": shp.get("courier_name") or "",
                      "transporter_name": "", "lr_no": docket, "dispatch_slip_images": slips,
                      "dispatch_type": "courier", "porter_link": "",
-                     "dispatched_by": user["name"], "dispatched_at": now})
-    await db.orders.update_one({"id": req.order_id}, {"$set": {
-        "dispatch": dispatch, "status": "dispatched", "courier_name": "Shiprocket", "updated_at": now}})
+                     "dispatched_by": by, "dispatched_at": when})
+    await db.orders.update_one({"id": order["id"]}, {"$set": {
+        "dispatch": dispatch, "status": "dispatched", "courier_name": "Shiprocket",
+        "shiprocket_shipment.picked_up_at": when, "updated_at": datetime.now(timezone.utc).isoformat()}})
     return {"ok": True, "lr_no": docket, "slips": slips}
+
+
+# Shiprocket shipment_status codes that mean the parcel has left us.
+SR_GONE_STATUSES = {6, 7, 17, 18, 38, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 59}
+SR_GONE_WORDS = ("picked up", "in transit", "shipped", "out for delivery", "delivered", "reached")
+SR_SYNC_INTERVAL = int(os.environ.get("SHIPROCKET_SYNC_INTERVAL", "180"))
+
+
+async def _shiprocket_sync_all() -> int:
+    """Booked Shiprocket orders that the courier has collected become dispatched."""
+    n = 0
+    async for o in db.orders.find({"shiprocket_shipment.awb": {"$nin": ["", None]},
+                                   "status": {"$nin": ["dispatched", "cancelled"]}}, {"_id": 0}).limit(100):
+        awb = o["shiprocket_shipment"]["awb"]
+        try:
+            code, d = await _sr_call("GET", f"/courier/track/awb/{awb}")
+        except Exception as e:
+            logging.warning(f"shiprocket track {awb}: {e}")
+            continue
+        td = (d or {}).get("tracking_data") or {}
+        status = td.get("shipment_status")
+        current = " ".join(str(t.get("current_status") or "") for t in (td.get("shipment_track") or [])).lower()
+        gone = (isinstance(status, int) and status in SR_GONE_STATUSES) or any(w in current for w in SR_GONE_WORDS)
+        if not gone:
+            continue
+        when = datetime.now(timezone.utc).isoformat()
+        for a in td.get("shipment_track_activities") or []:
+            if "picked up" in str(a.get("sr-status-label") or a.get("status") or "").lower() and a.get("date"):
+                try:
+                    when = datetime.strptime(a["date"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST).astimezone(timezone.utc).isoformat()
+                except ValueError:
+                    pass
+                break
+        await _shiprocket_mark_dispatched(o, when, "Shiprocket (auto)", awb)
+        n += 1
+        logging.info(f"Shiprocket pickup: {o.get('order_number')} dispatched ({current or status})")
+    return n
+
+
+async def _shiprocket_sync_loop():
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await _shiprocket_sync_all()
+        except Exception as e:
+            logging.error(f"Shiprocket sync loop error: {e}")
+        await asyncio.sleep(SR_SYNC_INTERVAL)
+
+
+@app.on_event("startup")
+async def _start_shiprocket_sync():
+    if _sr_configured():
+        asyncio.create_task(_shiprocket_sync_loop())
+        logging.info(f"Shiprocket pickup sync every {SR_SYNC_INTERVAL}s")
+
+
+@api_router.post("/shiprocket/sync-tracking")
+async def shiprocket_sync_now(user=Depends(get_current_user)):
+    _sr_require(user)
+    return {"count": await _shiprocket_sync_all()}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
