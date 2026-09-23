@@ -9667,6 +9667,150 @@ async def _start_spapi_sync():
         logging.info(f"Amazon seller order sync every {SPAPI_SYNC_INTERVAL_SECONDS}s")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# DISPATCH → WHATSAPP. Every courier / transport order that becomes "dispatched"
+# is announced to the customer through the CRM, which owns the WhatsApp number,
+# the 24-hour window logic and the message log. A sweep runs every minute so it
+# does not matter which of the many dispatch paths flipped the status.
+# ═══════════════════════════════════════════════════════════════════════════
+CRM_BASE_URL = os.environ.get("CRM_BASE_URL", "https://crm.mangalamagro.in").rstrip("/")
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://oms.mangalamagro.in").rstrip("/")
+# Only dispatches from go-live onward are announced; nothing older is sent.
+DISPATCH_NOTIFY_SINCE = os.environ.get("DISPATCH_NOTIFY_SINCE", "2026-09-23T11:30:00+00:00")
+DISPATCH_NOTIFY_INTERVAL = int(os.environ.get("DISPATCH_NOTIFY_INTERVAL", "60"))
+DISPATCH_NOTIFY_MAX_ATTEMPTS = 5
+_NOTIFY_IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def _dispatch_tracking_url(courier: str, lr: str) -> str:
+    c, lr = (courier or "").strip().lower(), (lr or "").strip()
+    if not lr:
+        return ""
+    if c.startswith("dtdc"):
+        return f"https://txk.dtdc.com/ctbs-tracking/customerInterface.tr?submitName=showCITrackingDetails&cType=Consignment&cnNo={lr}"
+    if c.startswith("amazon"):
+        return f"https://track.amazon.in/tracking/{lr}"
+    if c.startswith("shiprocket"):
+        return f"https://shiprocket.co/tracking/{lr}"
+    if c.startswith("anjani"):
+        return f"https://shreeanjani.co.in/tracking?awb={lr}"
+    return ""
+
+
+def _dispatch_courier_label(order: dict) -> str:
+    d = order.get("dispatch") or {}
+    name = (d.get("courier_name") or order.get("courier_name") or "").strip()
+    low = name.lower()
+    if low.startswith("amazon"):
+        return "Amazon Shipping"
+    if low.startswith("shiprocket"):
+        partner = d.get("courier_partner") or (order.get("shiprocket_shipment") or {}).get("courier_name") or ""
+        return f"{partner} (via Shiprocket)" if partner else "Shiprocket"
+    if low.startswith("anjani"):
+        return "Shree Anjani Courier"
+    return name or "our courier"
+
+
+async def _dispatch_notify_payload(order: dict) -> dict:
+    d = order.get("dispatch") or {}
+    kind = (d.get("dispatch_type") or order.get("shipping_method") or "").strip().lower()
+    slip = ""
+    for img in d.get("dispatch_slip_images") or []:
+        if str(img).lower().endswith(_NOTIFY_IMAGE_EXT):
+            slip = img if str(img).startswith("http") else PUBLIC_BASE_URL + str(img)
+            break
+    return {
+        "company": order.get("company") or DEFAULT_COMPANY,
+        "oms_order_id": order["id"], "order_no": order.get("order_number") or order["id"][:8],
+        "customer_name": order.get("customer_name") or "",
+        "phones": await _order_phones(order),
+        "dispatch_type": "transport" if kind == "transport" else "courier",
+        "courier": _dispatch_courier_label(order) if kind != "transport" else "",
+        "transporter": (d.get("transporter_name") or order.get("transporter_name") or "").strip(),
+        "tracking_no": (d.get("lr_no") or "").strip(),
+        "tracking_url": _dispatch_tracking_url(d.get("courier_name") or order.get("courier_name") or "", d.get("lr_no") or "") if kind != "transport" else "",
+        "slip_image_url": slip,
+        "telecaller_id": order.get("telecaller_id"),
+    }
+
+
+async def _dispatch_notify_send(order: dict, force: bool = False, by: str = "auto") -> dict:
+    """Ask the CRM to message the customer; record the outcome on the order."""
+    prev = order.get("dispatch_notify") or {}
+    rec = {"attempts": int(prev.get("attempts") or 0) + 1, "at": datetime.now(timezone.utc).isoformat(), "by": by}
+    payload = await _dispatch_notify_payload(order)
+    if not payload["phones"]:
+        rec.update(status="skipped", error="customer has no phone number")
+    else:
+        try:
+            token = jwt.encode({"svc": "oms", "exp": datetime.now(timezone.utc) + timedelta(minutes=5)}, JWT_SECRET, algorithm=JWT_ALGORITHM)
+            async with httpx.AsyncClient(timeout=40) as c:
+                r = await c.post(f"{CRM_BASE_URL}/api/oms/dispatch-notify", json={**payload, "force": force},
+                                 headers={"Authorization": f"Bearer {token}"})
+            data = r.json() if r.content else {}
+            if r.status_code >= 400:
+                rec.update(status="failed", error=f"CRM {r.status_code}: {str(data.get('detail') or data)[:200]}")
+            else:
+                rec.update(status=data.get("status") or "failed", channel=data.get("channel") or "",
+                           template=data.get("template") or "", wamid=data.get("wamid") or "",
+                           phone=data.get("phone") or "", lead_id=data.get("lead_id") or "",
+                           within_24h=bool(data.get("within_24h")), error=data.get("error") or "")
+        except Exception as e:
+            rec.update(status="failed", error=str(e)[:200])
+    await db.orders.update_one({"id": order["id"]}, {"$set": {"dispatch_notify": rec}})
+    if rec["status"] == "failed":
+        logging.warning(f"dispatch notify {payload['order_no']}: {rec.get('error')}")
+    return rec
+
+
+async def _dispatch_notify_sweep():
+    q = {
+        "status": "dispatched",
+        "dispatch.dispatch_type": {"$in": ["courier", "transport"]},
+        "dispatch.dispatched_at": {"$gte": DISPATCH_NOTIFY_SINCE},
+        "dispatch_notify.status": {"$nin": ["sent", "sent_mock", "delivered", "read", "already_sent", "skipped"]},
+        "$or": [{"dispatch_notify.attempts": {"$exists": False}}, {"dispatch_notify.attempts": {"$lt": DISPATCH_NOTIFY_MAX_ATTEMPTS}}],
+    }
+    async for o in db.orders.find(q, {"_id": 0}).sort("dispatch.dispatched_at", 1).limit(20):
+        await _dispatch_notify_send(o)
+
+
+async def _dispatch_notify_loop():
+    await asyncio.sleep(45)
+    while True:
+        try:
+            await _dispatch_notify_sweep()
+        except Exception as e:
+            logging.error(f"dispatch notify sweep: {e}")
+        await asyncio.sleep(DISPATCH_NOTIFY_INTERVAL)
+
+
+@app.on_event("startup")
+async def _start_dispatch_notify():
+    asyncio.create_task(_dispatch_notify_loop())
+    logging.info(f"Dispatch WhatsApp sweep every {DISPATCH_NOTIFY_INTERVAL}s for dispatches since {DISPATCH_NOTIFY_SINCE}")
+
+
+class NotifyDispatchRequest(BaseModel):
+    force: bool = False
+
+
+@api_router.post("/orders/{order_id}/notify-dispatch")
+async def notify_dispatch_now(order_id: str, req: NotifyDispatchRequest = NotifyDispatchRequest(), user=Depends(get_current_user)):
+    """Send (or resend) the dispatch WhatsApp for one order right now."""
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if user["role"] not in ("admin", "dispatch", "accounts") and not (user["role"] == "telecaller" and order.get("telecaller_id") == user["id"]):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if order.get("status") != "dispatched":
+        raise HTTPException(status_code=400, detail="Order is not dispatched yet")
+    kind = ((order.get("dispatch") or {}).get("dispatch_type") or order.get("shipping_method") or "").lower()
+    if kind not in ("courier", "transport"):
+        raise HTTPException(status_code=400, detail="Dispatch messages go only for courier and transport orders")
+    return await _dispatch_notify_send(order, force=req.force, by=user["name"])
+
+
 async def _amazon_sync_loop():
     # Give the app a moment to finish starting before the first poll.
     await asyncio.sleep(30)

@@ -306,6 +306,22 @@ export default function OrderDetail() {
   if (!order) return <p className="text-center py-8 text-muted-foreground">Order not found.</p>;
 
   const activeShippingMethod = order.dispatch?.dispatch_type || order.shipping_method || "";
+  const notify = order.dispatch_notify || null;
+  const notifyOk = notify && ["sent", "sent_mock", "delivered", "read", "already_sent"].includes(notify.status);
+  const canNotify = isDispatched && ["courier", "transport"].includes(activeShippingMethod)
+    && (["admin", "dispatch", "accounts"].includes(user?.role) || (user?.role === "telecaller" && order.telecaller_id === user?.id));
+  const sendDispatchWhatsApp = async () => {
+    if (notifyOk && !window.confirm("The customer already got the dispatch message. Send it again?")) return;
+    try {
+      const res = await api.post(`/orders/${order.id}/notify-dispatch`, { force: !!notifyOk });
+      const r = res.data || {};
+      if (["sent", "sent_mock", "already_sent"].includes(r.status)) toast.success(`WhatsApp ${r.status === "already_sent" ? "was already sent" : "sent"} to ${r.phone || "customer"}${r.channel === "template" ? " (template)" : ""}`);
+      else toast.error(r.error || `WhatsApp ${r.status}`, { duration: 9000 });
+      loadOrder();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Could not send", { duration: 8000 });
+    }
+  };
 
   // Collect all packing image URLs
   const allPackingImageUrls = [];
@@ -679,6 +695,25 @@ export default function OrderDetail() {
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Transporter Name</span>
                 <span className="text-sm" data-testid="order-transporter-name">{order.dispatch?.transporter_name || order.transporter_name}</span>
+              </div>
+            )}
+            {isDispatched && ["courier", "transport"].includes(activeShippingMethod) && (
+              <div className="flex justify-between items-start gap-2">
+                <span className="text-sm text-muted-foreground">Customer WhatsApp</span>
+                <span className="text-sm text-right" data-testid="order-dispatch-notify">
+                  {!notify ? <span className="text-muted-foreground">not sent yet</span>
+                   : notifyOk ? <span className="text-emerald-700 dark:text-emerald-400">
+                       {notify.status === "already_sent" ? "sent earlier" : "sent"}{notify.phone ? ` to ${notify.phone}` : ""}
+                       {notify.channel === "template" ? " · template" : notify.channel === "image" ? " · with slip" : ""}
+                       {notify.at ? ` · ${new Date(notify.at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}
+                     </span>
+                   : <span className="text-red-600">{notify.status}{notify.error ? `: ${notify.error}` : ""}</span>}
+                  {canNotify && (
+                    <button type="button" onClick={sendDispatchWhatsApp} className="ml-2 underline text-primary text-xs" data-testid="order-dispatch-notify-send">
+                      {notifyOk ? "Resend" : "Send now"}
+                    </button>
+                  )}
+                </span>
               </div>
             )}
             {order.dispatch?.lr_no && (
