@@ -10861,7 +10861,9 @@ async def get_alert_history(user=Depends(get_current_user)):
 # ============================================================
 # Field-Executive Location Tracking
 # ============================================================
-IST = pytz.timezone("Asia/Kolkata")
+# pytz zone ONLY for .localize() below. Never rebind IST: a pytz zone used as
+# tzinfo= gives the 1880s LMT offset (+05:53), 23 minutes off.
+IST_PYTZ = pytz.timezone("Asia/Kolkata")
 
 
 def _parse_iso(value: str) -> datetime:
@@ -10888,10 +10890,10 @@ def _ist_day_bounds(date_str: Optional[str]) -> tuple:
     """Return (start_utc_iso, end_utc_iso) for an IST calendar day. Defaults to today (IST)."""
     if date_str:
         y, m, d = (int(x) for x in date_str.split("-"))
-        day = IST.localize(datetime(y, m, d, 0, 0, 0))
+        day = IST_PYTZ.localize(datetime(y, m, d, 0, 0, 0))
     else:
         now_ist = datetime.now(timezone.utc).astimezone(IST)
-        day = IST.localize(datetime(now_ist.year, now_ist.month, now_ist.day, 0, 0, 0))
+        day = IST_PYTZ.localize(datetime(now_ist.year, now_ist.month, now_ist.day, 0, 0, 0))
     start = day.astimezone(timezone.utc).isoformat()
     end = (day + timedelta(days=1)).astimezone(timezone.utc).isoformat()
     return start, end
