@@ -6381,19 +6381,23 @@ async def dtdc_bookable_orders(user=Depends(get_current_user)):
     orders = await db.orders.find({
         "courier_name": {"$regex": r"^\s*dtdc", "$options": "i"},
         "status": {"$nin": ["cancelled", "dispatched"]},
-        "packaging.weight_kg": {"$nin": ["", None]},
+        "$or": [{"packaging.weight_kg": {"$nin": ["", None]}},
+                {"dtdc_shipment.reference_number": {"$nin": ["", None]}}],
     }, {"_id": 0}).sort("created_at", -1).to_list(300)
     out = []
     for o in orders:
         pkg = o.get("packaging") or {}
         sa = o.get("shipping_address") or {}
+        booked = bool((o.get("dtdc_shipment") or {}).get("reference_number"))
         try:
             weight = float(str(pkg.get("weight_kg", "")).strip() or 0)
         except ValueError:
-            continue
+            weight = 0.0
         if weight <= 0:
+            weight = float((o.get("dtdc_shipment") or {}).get("weight_kg") or 0) if booked else 0.0
+        if weight <= 0 and not booked:
             continue
-        quote = dtdc_quote_for(sa.get("pincode"), weight)
+        quote = dtdc_quote_for(sa.get("pincode"), weight) if weight > 0 else None
         acct_key, service, risk = _dtdc_route(o, quote["series"]) if quote else ("", "", False)
         out.append({
             "id": o["id"], "order_number": o.get("order_number"),
@@ -8114,17 +8118,19 @@ async def shiprocket_bookable(user=Depends(get_current_user)):
     _sr_require(user)
     orders = await db.orders.find({
         "courier_name": SR_COURIER_RE, "status": {"$nin": ["cancelled", "dispatched"]},
-        "packaging.weight_kg": {"$nin": ["", None]},
+        "$or": [{"packaging.weight_kg": {"$nin": ["", None]}}, {"shiprocket_shipment.awb": {"$nin": ["", None]}}],
     }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "shipping_address": 1,
         "packaging": 1, "shiprocket_shipment": 1, "status": 1, "is_cod": 1, "amount_paid": 1, "cod_amount": 1,
         "shiprocket_courier": 1}).sort("created_at", -1).to_list(300)
     out = []
     for o in orders:
         pkg = o.get("packaging") or {}
+        sh = o.get("shiprocket_shipment") or None
         weight, source = _sr_weight(o)
+        if weight <= 0 and sh and sh.get("awb"):
+            weight, source = float(sh.get("weight_kg") or 0), "booked"     # what the label was bought at
         if weight <= 0:
             continue
-        sh = o.get("shiprocket_shipment") or None
         out.append({"id": o["id"], "order_number": o.get("order_number"), "customer_name": o.get("customer_name"),
                     "grand_total": o.get("grand_total"), "status": o.get("status"),
                     "weight_kg": weight, "weight_source": source, "num_boxes": pkg.get("num_boxes") or "1",
@@ -8835,7 +8841,7 @@ async def amazon_bookable_orders(user=Depends(get_current_user)):
         "courier_name": AMAZON_COURIER_RE,
         # Dispatched orders have already shipped, so there is nothing left to book.
         "status": {"$nin": ["cancelled", "dispatched"]},
-        "packaging.weight_kg": {"$nin": ["", None]},
+        "$or": [{"packaging.weight_kg": {"$nin": ["", None]}}, {"amazon_shipment.shipment_id": {"$nin": ["", None]}}],
     }, {
         "_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1,
         "shipping_address": 1, "packaging": 1, "amazon_shipment": 1, "status": 1,
@@ -8844,12 +8850,14 @@ async def amazon_bookable_orders(user=Depends(get_current_user)):
     out = []
     for o in orders:
         pkg = o.get("packaging") or {}
-        # Guard against whitespace-only / zero weights that the query can't catch.
-        try:
-            if float(str(pkg.get("weight_kg", "")).strip() or 0) <= 0:
+        # Guard against whitespace-only / zero weights that the query can't catch,
+        # but never hide an order whose label is already bought.
+        if not (o.get("amazon_shipment") or {}).get("shipment_id"):
+            try:
+                if float(str(pkg.get("weight_kg", "")).strip() or 0) <= 0:
+                    continue
+            except (TypeError, ValueError):
                 continue
-        except (TypeError, ValueError):
-            continue
         out.append({
             "id": o["id"], "order_number": o.get("order_number"),
             "customer_name": o.get("customer_name"), "grand_total": o.get("grand_total"),
