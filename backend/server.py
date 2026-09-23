@@ -9711,14 +9711,45 @@ def _dispatch_courier_label(order: dict) -> str:
     return name or "our courier"
 
 
+def _wa_safe_image(upload_path: str) -> str:
+    """WhatsApp rejects 1-bit / greyscale / palette images (Meta error 131053), and
+    courier labels are usually exactly that. Hand it an RGB JPEG copy instead,
+    made once next to the original. Returns the public URL, or "" if unusable."""
+    name = str(upload_path or "").rsplit("/", 1)[-1]
+    src = UPLOAD_DIR / name
+    if not name or not src.exists():
+        return ""
+    out_name = name.rsplit(".", 1)[0] + ".wa.jpg"
+    out = UPLOAD_DIR / out_name
+    if not out.exists():
+        try:
+            from PIL import Image
+            im = Image.open(src)
+            im.load()
+            if im.mode in ("RGBA", "LA", "P") and "A" in im.getbands():
+                bg = Image.new("RGB", im.size, (255, 255, 255))
+                bg.paste(im.convert("RGBA"), mask=im.convert("RGBA").split()[3])
+                im = bg
+            else:
+                im = im.convert("RGB")
+            if max(im.size) > 1800:
+                im.thumbnail((1800, 1800))
+            im.save(out, "JPEG", quality=88)
+        except Exception as e:
+            logging.warning(f"wa image convert {name}: {e}")
+            return ""
+    return f"{PUBLIC_BASE_URL}/api/uploads/{out_name}"
+
+
 async def _dispatch_notify_payload(order: dict) -> dict:
     d = order.get("dispatch") or {}
     kind = (d.get("dispatch_type") or order.get("shipping_method") or "").strip().lower()
     slip = ""
     for img in d.get("dispatch_slip_images") or []:
-        if str(img).lower().endswith(_NOTIFY_IMAGE_EXT):
-            slip = img if str(img).startswith("http") else PUBLIC_BASE_URL + str(img)
-            break
+        if str(img).lower().endswith(_NOTIFY_IMAGE_EXT) and not str(img).startswith("http"):
+            slip = _wa_safe_image(str(img))
+            if slip:
+                break
     return {
         "company": order.get("company") or DEFAULT_COMPANY,
         "oms_order_id": order["id"], "order_no": order.get("order_number") or order["id"][:8],
