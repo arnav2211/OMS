@@ -299,7 +299,7 @@ async def next_document_number(company: dict, kind: str) -> str:
     return f"{prefix}-{counter['seq']:04d}"
 
 
-COURIER_OPTIONS = ["DTDC", "Anjani", "Amazon", "Shiprocket", "India Post", "Others"]
+COURIER_OPTIONS = ["DTDC", "Anjani", "Amazon", "Shiprocket", "Delhivery", "India Post", "Others"]
 
 # Bank details for PI PDFs
 BANK_GST = {
@@ -8469,13 +8469,489 @@ async def shiprocket_sync_now(user=Depends(get_current_user)):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# DELHIVERY EXPRESS (parcel): serviceability, rates, booking, label, cancel,
+# pickup poller. Token-authenticated (Delhivery One API token in the env).
+# Delhivery B2B / LTL ("transport") is a different API and is NOT covered here.
+# ═══════════════════════════════════════════════════════════════════════════
+DLV_BASE = "https://track.delhivery.com"
+DELHIVERY = {
+    "token": os.environ.get("DELHIVERY_TOKEN", "").strip(),
+    "pickup_name": os.environ.get("DELHIVERY_PICKUP_NAME", "MANGALAM AGRO").strip(),
+    "origin_pin": os.environ.get("DELHIVERY_ORIGIN_PINCODE", os.environ.get("AMAZON_SHIP_ORIGIN_PINCODE", "440025")),
+}
+DLV_ROLES = ["admin", "dispatch", "packaging", "accounts"]
+DLV_COURIER_RE = {"$regex": r"^\s*delhivery", "$options": "i"}
+DLV_MODES = {1: ("S", "Delhivery Surface"), 2: ("E", "Delhivery Express (Air)")}
+DLV_SYNC_INTERVAL = int(os.environ.get("DELHIVERY_SYNC_INTERVAL", "180"))
+DLV_NOT_GONE = ("manifested", "not picked", "cancel", "open", "pending pickup")
+DLV_GONE_WORDS = ("picked", "in transit", "dispatched", "delivered", "out for delivery", "reached")
+
+
+def _dlv_configured() -> bool:
+    return bool(DELHIVERY["token"])
+
+
+def _dlv_headers() -> dict:
+    return {"Authorization": f"Token {DELHIVERY['token']}", "Accept": "application/json"}
+
+
+def _dlv_require(user):
+    if user["role"] not in DLV_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not _dlv_configured():
+        raise HTTPException(status_code=400, detail="Delhivery is not configured on the server")
+
+
+async def _dlv_pin(pincode: str) -> Optional[dict]:
+    """Delhivery's own word on a pincode: {cod, pre_paid, district, state_code} or None."""
+    async with httpx.AsyncClient(timeout=25) as c:
+        r = await c.get(f"{DLV_BASE}/c/api/pin-codes/json/", params={"filter_codes": pincode}, headers=_dlv_headers())
+    rows = (r.json() or {}).get("delivery_codes") or [] if r.status_code == 200 else []
+    return (rows[0] or {}).get("postal_code") if rows else None
+
+
+async def _dlv_rate(pincode: str, weight_kg: float, cod_amount: float = 0, mode: str = "S") -> Optional[dict]:
+    """GST-inclusive charge for one parcel, as Delhivery would bill it."""
+    params = {"md": mode, "ss": "Delivered", "d_pin": pincode, "o_pin": DELHIVERY["origin_pin"],
+              "cgm": max(1, int(round(float(weight_kg) * 1000))), "pt": "COD" if cod_amount > 0 else "Pre-paid"}
+    if cod_amount > 0:
+        params["cod"] = int(round(cod_amount))
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.get(f"{DLV_BASE}/api/kinko/v1/invoice/charges/.json", params=params, headers=_dlv_headers())
+    if r.status_code != 200:
+        return None
+    rows = r.json() if isinstance(r.json(), list) else []
+    if not rows:
+        return None
+    x = rows[0]
+    total = float(x.get("total_amount") or 0)
+    if total <= 0:
+        return None
+    return {"total": round(total, 2), "gross": float(x.get("gross_amount") or 0), "cod_fee": float(x.get("charge_COD") or 0),
+            "freight": float(x.get("charge_DL") or 0), "zone": x.get("zone") or "", "charged_weight_g": x.get("charged_weight")}
+
+
+async def _dlv_options(pincode: str, weight_kg: float, cod_amount: float) -> list:
+    out = []
+    for cid, (mode, name) in DLV_MODES.items():
+        try:
+            q = await _dlv_rate(pincode, weight_kg, cod_amount, mode)
+        except Exception as e:
+            logging.warning(f"delhivery rate {mode}: {e}")
+            q = None
+        if q:
+            out.append({"courier_id": cid, "name": name, "rate": q["total"], "surface": mode == "S", "zone": q["zone"],
+                        "cod_charges": q["cod_fee"], "freight": q["freight"], "etd": "", "days": None,
+                        "charged_weight_g": q["charged_weight_g"]})
+    out.sort(key=lambda x: x["rate"])
+    return out
+
+
+@api_router.get("/delhivery/check/{pincode}")
+async def delhivery_check(pincode: str, weight: float = 1.0, cod: bool = False, user=Depends(get_current_user)):
+    pincode = pincode.strip()
+    if not pincode.isdigit() or len(pincode) != 6:
+        return {"serviceable": False, "configured": True, "message": "Invalid pincode format."}
+    if not _dlv_configured():
+        return {"serviceable": None, "configured": False, "message": "Delhivery is not configured on the server."}
+    try:
+        pin = await _dlv_pin(pincode)
+        if not pin:
+            return {"serviceable": False, "configured": True, "message": "Delhivery does not serve this pincode."}
+        if cod and str(pin.get("cod", "")).upper() != "Y":
+            return {"serviceable": False, "configured": True, "message": "Delhivery serves this pincode but not for COD."}
+        opts = await _dlv_options(pincode, max(0.05, float(weight or 1)), 100.0 if cod else 0.0)
+        return {"serviceable": True, "configured": True, "city": pin.get("district") or "", "state": pin.get("state_code") or "",
+                "cod": str(pin.get("cod", "")).upper() == "Y", "couriers": opts, "count": len(opts)}
+    except Exception as e:
+        logging.error(f"delhivery check: {e}")
+        return {"serviceable": False, "configured": True, "message": "Unable to reach Delhivery right now."}
+
+
+@api_router.get("/delhivery/bookable")
+async def delhivery_bookable(user=Depends(get_current_user)):
+    _dlv_require(user)
+    orders = await db.orders.find({
+        "courier_name": DLV_COURIER_RE, "status": {"$nin": ["cancelled", "dispatched"]},
+        "$or": [{"packaging.weight_kg": {"$nin": ["", None]}}, {"delhivery_shipment.awb": {"$nin": ["", None]}}],
+    }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "shipping_address": 1,
+        "packaging": 1, "delhivery_shipment": 1, "status": 1, "is_cod": 1, "amount_paid": 1, "cod_amount": 1,
+        }).sort("created_at", -1).to_list(300)
+    out = []
+    for o in orders:
+        pkg = o.get("packaging") or {}
+        sh = o.get("delhivery_shipment") or None
+        try:
+            weight = float(str(pkg.get("weight_kg", "")).strip() or 0)
+        except (TypeError, ValueError):
+            weight = 0.0
+        if weight <= 0 and sh and sh.get("awb"):
+            weight = float(sh.get("weight_kg") or 0)
+        if weight <= 0:
+            continue
+        out.append({"id": o["id"], "order_number": o.get("order_number"), "customer_name": o.get("customer_name"),
+                    "grand_total": o.get("grand_total"), "status": o.get("status"),
+                    "weight_kg": weight, "num_boxes": pkg.get("num_boxes") or "1",
+                    "shipping_address": o.get("shipping_address") or {},
+                    "is_cod": bool(o.get("is_cod")), "cod_amount": _amazon_cod_amount(o),
+                    "delhivery_shipment": ({k: v for k, v in sh.items() if k != "raw"} if sh else None)})
+    return out
+
+
+class DelhiveryBookRequest(BaseModel):
+    order_id: str
+    courier_id: Optional[int] = None         # 1 = Surface (default), 2 = Express (air)
+    payment_mode: Optional[str] = None       # "prepaid" | "cod"; prepaid unless stated
+    declared_value: Optional[float] = None
+
+
+def _dlv_cod(order: dict, mode: Optional[str]) -> float:
+    mode = (mode or "").strip().lower()
+    if mode == "cod":
+        return _amazon_cod_amount({**order, "is_cod": True})
+    return 0.0
+
+
+@api_router.post("/delhivery/quote")
+async def delhivery_quote(req: DelhiveryBookRequest, user=Depends(get_current_user)):
+    _dlv_require(user)
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    sa = order.get("shipping_address") or {}
+    weight = float(str((order.get("packaging") or {}).get("weight_kg") or 0).strip() or 0)
+    if weight <= 0:
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+    cod = _dlv_cod(order, req.payment_mode)
+    if (req.payment_mode or "").lower() == "cod" and cod <= 0:
+        raise HTTPException(status_code=400, detail="Nothing left to collect - this order is fully paid.")
+    pin = await _dlv_pin(str(sa.get("pincode") or ""))
+    if not pin:
+        return {"ok": False, "message": "Delhivery does not serve this address"}
+    if cod > 0 and str(pin.get("cod", "")).upper() != "Y":
+        return {"ok": False, "message": "Delhivery does not do COD at this pincode"}
+    opts = await _dlv_options(str(sa.get("pincode") or ""), weight, cod)
+    if not opts:
+        return {"ok": False, "message": "Delhivery returned no rate for this parcel"}
+    return {"ok": True, "couriers": opts, "is_cod": cod > 0, "cod_amount": cod, "weight_kg": weight}
+
+
+@api_router.post("/delhivery/book")
+async def delhivery_book(req: DelhiveryBookRequest, user=Depends(get_current_user)):
+    """BUYS a real Delhivery Express shipment (manifest + AWB) and asks for a pickup."""
+    _dlv_require(user)
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if (order.get("delhivery_shipment") or {}).get("awb"):
+        raise HTTPException(status_code=400, detail="This order is already booked with Delhivery")
+    if req.declared_value and float(req.declared_value) > 0:
+        order["declared_value_override"] = float(req.declared_value)
+    elif float(order.get("grand_total") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Order total is \u20b90 - enter a declared value for the shipment before booking")
+    pkg = order.get("packaging") or {}
+    weight = float(str(pkg.get("weight_kg") or 0).strip() or 0)
+    if weight <= 0:
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+    phone = await _order_recipient_phone(order)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Customer has no valid phone number. Add one before booking.")
+    sa = order.get("shipping_address") or {}
+    line1, line2 = _address_lines(sa, cap=150)
+    if len((line1 or "").strip()) < 3:
+        raise HTTPException(status_code=400, detail="Shipping address is too short for the courier")
+    cod = _dlv_cod(order, req.payment_mode)
+    if (req.payment_mode or "").lower() == "cod" and cod <= 0:
+        raise HTTPException(status_code=400, detail="Nothing left to collect - this order is fully paid.")
+    declared = _declared_value(order)
+    mode, mode_name = DLV_MODES.get(int(req.courier_id or 1), DLV_MODES[1])
+    quote = await _dlv_rate(str(sa.get("pincode") or ""), weight, cod, mode)
+
+    rebooks = sum(1 for c in (order.get("cancelled_shipments") or []) if (c.get("courier") or "") == "Delhivery")
+    rebooks += int(order.get("delhivery_failed_attempts") or 0)
+    ref = (order.get("order_number") or order["id"][:20]) + (f"-R{rebooks}" if rebooks else "")
+    box = _amazon_box(order)
+    items = [(it.get("product_name") or "").strip() for it in (order.get("items") or []) if it.get("product_name")]
+    desc = (", ".join(items) or "Aroma products")[:120]
+    shipment = {
+        "name": (sa.get("address_name") or order.get("customer_name") or "Customer").strip()[:60],
+        "add": (line1 + (", " + line2 if line2 else ""))[:250], "pin": str(sa.get("pincode") or ""),
+        "city": sa.get("city") or "", "state": sa.get("state") or "", "country": "India", "phone": phone,
+        "order": ref, "payment_mode": "COD" if cod > 0 else "Prepaid",
+        "return_pin": DELHIVERY["origin_pin"], "return_city": "Nagpur", "return_phone": COMPANY["mobile"],
+        "return_add": COMPANY["address"], "return_state": "Maharashtra", "return_country": "India",
+        "products_desc": desc, "hsn_code": "", "cod_amount": str(int(round(cod))) if cod > 0 else "",
+        "order_date": None, "total_amount": str(int(round(declared))),
+        "seller_add": COMPANY["address"], "seller_name": COMPANY["brand"], "seller_inv": order.get("order_number") or ref,
+        "seller_gst_tin": COMPANY["gstin"], "quantity": str(len(items) or 1), "waybill": "",
+        "shipment_width": str(box["width"]), "shipment_height": str(box["height"]), "shipment_length": str(box["length"]),
+        "weight": str(int(round(weight * 1000))), "shipping_mode": "Express" if mode == "E" else "Surface", "address_type": "",
+    }
+    payload = {"shipments": [shipment], "pickup_location": {"name": DELHIVERY["pickup_name"]}}
+    async with httpx.AsyncClient(timeout=60) as c:
+        r = await c.post(f"{DLV_BASE}/api/cmu/create.json", data={"format": "json", "data": json.dumps(payload)},
+                         headers={"Authorization": f"Token {DELHIVERY['token']}"})
+    try:
+        data = r.json()
+    except Exception:
+        data = {"rmk": r.text[:300]}
+    pk = ((data or {}).get("packages") or [{}])[0]
+    awb = pk.get("waybill") if str(pk.get("status", "")).lower() == "success" else ""
+    if r.status_code != 200 or not awb:
+        reason = "; ".join(str(x) for x in (pk.get("remarks") or [])) or data.get("rmk") or str(data)[:250]
+        await db.orders.update_one({"id": req.order_id}, {"$inc": {"delhivery_failed_attempts": 1}})
+        logging.error(f"Delhivery create failed for {ref}: {r.status_code} {str(data)[:400]}")
+        raise HTTPException(status_code=400, detail=f"Delhivery refused the booking: {reason}")
+
+    # One pickup request per day is enough; Delhivery ignores/refuses duplicates.
+    pickup_note = ""
+    try:
+        now_ist = datetime.now(IST)
+        day = now_ist.date() if now_ist.hour < 13 else (now_ist + timedelta(days=1)).date()
+        async with httpx.AsyncClient(timeout=30) as c:
+            pr = await c.post(f"{DLV_BASE}/fm/request/new/", json={
+                "pickup_time": "14:00:00", "pickup_date": day.isoformat(),
+                "pickup_location": DELHIVERY["pickup_name"], "expected_package_count": 1},
+                headers={**_dlv_headers(), "Content-Type": "application/json"})
+        pickup_note = f"{pr.status_code}: {pr.text[:160]}"
+    except Exception as e:
+        pickup_note = f"pickup request failed: {e}"
+    shipment_doc = {
+        "awb": awb, "tracking_id": awb, "reference": ref, "mode": mode, "courier_name": mode_name,
+        "rate": (quote or {}).get("total"), "zone": (quote or {}).get("zone"),
+        "is_cod": cod > 0, "cod_amount": cod, "declared_value": round(declared, 2), "weight_kg": weight,
+        "pickup_date": day.isoformat() if pickup_note and not pickup_note.startswith("pickup request failed") else "",
+        "pickup_note": pickup_note[:200], "booked_by": user["name"], "booked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.orders.update_one({"id": req.order_id}, {"$set": {
+        "delhivery_shipment": shipment_doc, "courier_name": "Delhivery", "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"ok": True, "shipment": shipment_doc}
+
+
+@api_router.post("/delhivery/bulk-book")
+async def delhivery_bulk_book(req: BulkBookRequest, user=Depends(get_current_user)):
+    _dlv_require(user)
+    mode = (req.payment_mode or "prepaid").strip().lower()
+
+    async def one(oid):
+        ch = (req.choices or {}).get(oid) or {}
+        return await delhivery_book(DelhiveryBookRequest(
+            order_id=oid, payment_mode=(ch.get("payment_mode") or mode),
+            courier_id=int(ch["courier_id"]) if ch.get("courier_id") else None,
+            declared_value=(req.declared_values or {}).get(oid)), user=user)
+
+    return await _bulk_book(req.order_ids, one, user, "Delhivery")
+
+
+async def _dlv_cancel_one(order_id: str, user) -> dict:
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    shp = order.get("delhivery_shipment") or {}
+    if not shp.get("awb"):
+        raise HTTPException(status_code=400, detail="No Delhivery booking on this order")
+    if (order.get("status") or "") == "dispatched":
+        raise HTTPException(status_code=400, detail="Order is already dispatched - undo the dispatch before cancelling the label")
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(f"{DLV_BASE}/api/p/edit", json={"waybill": shp["awb"], "cancellation": "true"},
+                         headers={**_dlv_headers(), "Content-Type": "application/json"})
+    try:
+        data = r.json()
+    except Exception:
+        data = {"raw": r.text[:200]}
+    if r.status_code != 200 or not (data.get("status") is True or str(data.get("status", "")).lower() == "true"):
+        raise HTTPException(status_code=400, detail=f"Delhivery cancel failed: {str(data)[:250]}")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.orders.update_one({"id": order_id}, {
+        "$push": {"cancelled_shipments": {"courier": "Delhivery", **shp, "cancelled_by": user["name"], "cancelled_at": now}},
+        "$unset": {"delhivery_shipment": ""}, "$set": {"updated_at": now}})
+    return {"ok": True, "cancelled": shp.get("awb")}
+
+
+@api_router.post("/delhivery/cancel")
+async def delhivery_cancel(req: CancelLabelRequest, user=Depends(get_current_user)):
+    _dlv_require(user)
+    return await _dlv_cancel_one(req.order_id, user)
+
+
+@api_router.post("/delhivery/bulk-cancel")
+async def delhivery_bulk_cancel(req: BulkBookRequest, user=Depends(get_current_user)):
+    _dlv_require(user)
+
+    async def one(oid):
+        return await _dlv_cancel_one(oid, user)
+
+    return await _bulk_book(req.order_ids, one, user, "Delhivery cancel")
+
+
+async def _dlv_label_pdf(awb: str) -> bytes:
+    """Delhivery renders the label as a PDF behind a short-lived link."""
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+        r = await c.get(f"{DLV_BASE}/api/p/packing_slip", params={"wbns": awb, "pdf": "true"}, headers=_dlv_headers())
+        data = r.json() if r.status_code == 200 else {}
+        pk = ((data or {}).get("packages") or [{}])[0]
+        url = pk.get("pdf_download_link") or pk.get("pdf_link") or ""
+        if not url:
+            raise RuntimeError(f"no label for {awb}: {str(data)[:160]}")
+        return (await c.get(url)).content
+
+
+@api_router.get("/delhivery/labels")
+async def delhivery_labels(ids: str, token: str = "", user=None):
+    if token:
+        user = await get_user_from_token_param(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    images, missing = [], []
+    for oid in [i for i in (ids or "").split(",") if i][:50]:
+        o = await db.orders.find_one({"id": oid}, {"_id": 0, "order_number": 1, "delhivery_shipment": 1})
+        awb = ((o or {}).get("delhivery_shipment") or {}).get("awb")
+        if not awb:
+            missing.append((o or {}).get("order_number") or oid[:8])
+            continue
+        try:
+            images.extend(_pdf_pages_jpg(await _dlv_label_pdf(awb)) or [])
+        except Exception as e:
+            logging.warning(f"delhivery label {awb}: {e}")
+            missing.append((o or {}).get("order_number") or oid[:8])
+    if not images:
+        raise HTTPException(status_code=404, detail=f"No labels available for: {', '.join(missing)}")
+    return StreamingResponse(_quarter_sheet_pdf(images, per_page=4), media_type="application/pdf",
+                             headers={"Content-Disposition": "inline; filename=delhivery-labels.pdf"})
+
+
+async def _delhivery_mark_dispatched(order: dict, when: str, by: str, docket: str = "") -> dict:
+    shp = order.get("delhivery_shipment") or {}
+    docket = docket or shp.get("awb") or ""
+    dispatch = order.get("dispatch") or {}
+    slips = list(dispatch.get("dispatch_slip_images") or [])
+    if not slips and shp.get("awb"):
+        try:
+            jpg = _pdf_first_page_jpg(await _dlv_label_pdf(shp["awb"]))
+            if jpg:
+                fname = f"{uuid.uuid4()}.jpg"
+                async with aiofiles.open(UPLOAD_DIR / fname, "wb") as f:
+                    await f.write(jpg)
+                slips.append(f"/api/uploads/{fname}")
+        except Exception as e:
+            logging.warning(f"delhivery slip image failed: {e}")
+    dispatch.update({"courier_name": "Delhivery", "courier_partner": shp.get("courier_name") or "",
+                     "transporter_name": "", "lr_no": docket, "dispatch_slip_images": slips,
+                     "dispatch_type": "courier", "porter_link": "", "dispatched_by": by, "dispatched_at": when})
+    await db.orders.update_one({"id": order["id"]}, {"$set": {
+        "dispatch": dispatch, "status": "dispatched", "courier_name": "Delhivery",
+        "delhivery_shipment.picked_up_at": when, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"ok": True, "lr_no": docket, "slips": slips}
+
+
+class DelhiveryDispatchRequest(BaseModel):
+    order_id: str
+    docket_no: Optional[str] = ""
+
+
+@api_router.post("/delhivery/dispatch")
+async def delhivery_dispatch(req: DelhiveryDispatchRequest, user=Depends(get_current_user)):
+    _dlv_require(user)
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    docket = (req.docket_no or "").strip() or (order.get("delhivery_shipment") or {}).get("awb") or ""
+    if not docket:
+        raise HTTPException(status_code=400, detail="Tracking / AWB number is required")
+    return await _delhivery_mark_dispatched(order, datetime.now(timezone.utc).isoformat(), user["name"], docket)
+
+
+async def _delhivery_sync_all() -> int:
+    """Booked Delhivery orders that the courier has collected become dispatched."""
+    orders = await db.orders.find({"delhivery_shipment.awb": {"$nin": ["", None]},
+                                   "status": {"$nin": ["dispatched", "cancelled"]}}, {"_id": 0}).limit(50).to_list(50)
+    if not orders:
+        return 0
+    by_awb = {o["delhivery_shipment"]["awb"]: o for o in orders}
+    async with httpx.AsyncClient(timeout=40) as c:
+        r = await c.get(f"{DLV_BASE}/api/v1/packages/json/", params={"waybill": ",".join(by_awb)}, headers=_dlv_headers())
+    if r.status_code != 200:
+        logging.warning(f"delhivery track: {r.status_code} {r.text[:120]}")
+        return 0
+    n = 0
+    for row in (r.json() or {}).get("ShipmentData") or []:
+        sh = row.get("Shipment") or {}
+        o = by_awb.get(str(sh.get("AWB") or ""))
+        if not o:
+            continue
+        status = str((sh.get("Status") or {}).get("Status") or "").lower()
+        scans = [str((x.get("ScanDetail") or {}).get("Scan") or "").lower() for x in (sh.get("Scans") or [])]
+        gone = (status and not any(w in status for w in DLV_NOT_GONE) and any(w in status for w in DLV_GONE_WORDS)) \
+            or any(any(w in sc for w in DLV_GONE_WORDS) for sc in scans)
+        if not gone:
+            continue
+        when = datetime.now(timezone.utc).isoformat()
+        for x in sh.get("Scans") or []:
+            d = x.get("ScanDetail") or {}
+            if "picked" in str(d.get("Scan") or "").lower() and d.get("ScanDateTime"):
+                try:
+                    when = datetime.fromisoformat(str(d["ScanDateTime"])[:19]).replace(tzinfo=IST).astimezone(timezone.utc).isoformat()
+                except ValueError:
+                    pass
+                break
+        await _delhivery_mark_dispatched(o, when, "Delhivery (auto)", sh.get("AWB"))
+        n += 1
+        logging.info(f"Delhivery pickup: {o.get('order_number')} dispatched ({status})")
+    return n
+
+
+async def _delhivery_sync_loop():
+    await asyncio.sleep(75)
+    while True:
+        try:
+            await _delhivery_sync_all()
+        except Exception as e:
+            logging.error(f"Delhivery sync loop error: {e}")
+        await asyncio.sleep(DLV_SYNC_INTERVAL)
+
+
+@app.on_event("startup")
+async def _start_delhivery_sync():
+    if _dlv_configured():
+        asyncio.create_task(_delhivery_sync_loop())
+        logging.info(f"Delhivery pickup sync every {DLV_SYNC_INTERVAL}s")
+
+
+@api_router.post("/delhivery/sync-tracking")
+async def delhivery_sync_now(user=Depends(get_current_user)):
+    _dlv_require(user)
+    return {"count": await _delhivery_sync_all()}
+
+
+async def _compare_delhivery(pincode: str, weight: float, cod: bool) -> list:
+    if not _dlv_configured():
+        return [{"carrier": "Delhivery", "service": "", "serviceable": None, "note": "Not configured on the server"}]
+    try:
+        pin = await _dlv_pin(pincode)
+        if not pin:
+            return [{"carrier": "Delhivery", "service": "", "serviceable": False, "note": "Delhivery does not serve this pincode"}]
+        if cod and str(pin.get("cod", "")).upper() != "Y":
+            return [{"carrier": "Delhivery", "service": "", "serviceable": False, "note": "No COD at this pincode"}]
+        out = []
+        for o in await _dlv_options(pincode, weight, 100.0 if cod else 0.0):
+            out.append({"carrier": "Delhivery", "service": o["name"].replace("Delhivery ", ""), "serviceable": True,
+                        "total": o["rate"], "gst_note": "GST included", "eta": "",
+                        "note": f"zone {o['zone']}" + (f", billed {o['charged_weight_g']} g" if o.get("charged_weight_g") else ""),
+                        "cod_charge": o["cod_charges"] if cod else None})
+        return out or [{"carrier": "Delhivery", "service": "", "serviceable": False, "note": "No rate returned"}]
+    except Exception as e:
+        logging.error(f"compare/delhivery: {e}")
+        return [{"carrier": "Delhivery", "service": "", "serviceable": None, "note": "Could not reach Delhivery right now"}]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # BOOK SHIPMENTS: one screen for every courier we book by API (DTDC, Amazon
 # Shipping, Shiprocket). Booking, cancelling and dispatching still go through
 # each courier's own endpoints - this only gathers the orders into one list,
 # prints their labels as one PDF, and lets a weighed order be given a courier.
 # ═══════════════════════════════════════════════════════════════════════════
 SHIP_ROLES = ["admin", "dispatch", "packaging", "accounts"]
-SHIP_API_COURIERS = ["DTDC", "Amazon", "Shiprocket"]
+SHIP_API_COURIERS = ["DTDC", "Amazon", "Shiprocket", "Delhivery"]
 
 
 @api_router.get("/shipments/bookable")
@@ -8485,7 +8961,8 @@ async def shipments_bookable(user=Depends(get_current_user)):
     rows, errors = [], {}
     for courier, fn, key in (("DTDC", dtdc_bookable_orders, "dtdc_shipment"),
                              ("Amazon", amazon_bookable_orders, "amazon_shipment"),
-                             ("Shiprocket", shiprocket_bookable, "shiprocket_shipment")):
+                             ("Shiprocket", shiprocket_bookable, "shiprocket_shipment"),
+                             ("Delhivery", delhivery_bookable, "delhivery_shipment")):
         try:
             for o in await fn(user=user):
                 sh = o.get(key) or {}
@@ -8538,7 +9015,7 @@ async def shipments_set_courier(req: SetCourierRequest, user=Depends(get_current
         raise HTTPException(status_code=403, detail="Not authorized")
     courier = (req.courier_name or "").strip()
     if courier not in SHIP_API_COURIERS + ["Anjani"]:
-        raise HTTPException(status_code=400, detail="Courier must be DTDC, Amazon, Shiprocket or Anjani")
+        raise HTTPException(status_code=400, detail="Courier must be DTDC, Amazon, Shiprocket, Delhivery or Anjani")
     order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -8546,7 +9023,8 @@ async def shipments_set_courier(req: SetCourierRequest, user=Depends(get_current
         raise HTTPException(status_code=400, detail=f"Order is already {order.get('status')}")
     if ((order.get("dtdc_shipment") or {}).get("reference_number")
             or (order.get("amazon_shipment") or {}).get("shipment_id")
-            or (order.get("shiprocket_shipment") or {}).get("awb")):
+            or (order.get("shiprocket_shipment") or {}).get("awb")
+            or (order.get("delhivery_shipment") or {}).get("awb")):
         raise HTTPException(status_code=400, detail="This order already has a booked label. Cancel the label before changing the courier.")
     # Carrier risk is a DTDC charge the customer has been billed for.
     if order.get("carrier_risk_applicable") and courier != "DTDC":
@@ -8606,6 +9084,12 @@ async def shipments_labels(ids: str, token: str = "", user=None):
                 missing.append(num)
         elif (o.get("shiprocket_shipment") or {}).get("shipment_id"):
             sr_ids.append(o["shiprocket_shipment"]["shipment_id"])
+        elif (o.get("delhivery_shipment") or {}).get("awb"):
+            try:
+                quarter.extend(_pdf_pages_jpg(await _dlv_label_pdf(o["delhivery_shipment"]["awb"])) or [])
+            except Exception as e:
+                logging.warning(f"delhivery label: {e}")
+                missing.append(num)
         else:
             missing.append(num)
     try:
@@ -8645,9 +9129,10 @@ async def rates_compare(pincode: str, weight: float = 1.0, cod: bool = False, us
     groups = await asyncio.gather(
         _compare_dtdc(pincode, weight), _compare_anjani(pincode, weight, state),
         _compare_amazon(pincode, weight, cod), _compare_shiprocket(pincode, weight, cod),
+        _compare_delhivery(pincode, weight, cod),
         return_exceptions=True)
     options = []
-    for name, g in zip(("DTDC", "Anjani", "Amazon Shipping", "Shiprocket"), groups):
+    for name, g in zip(("DTDC", "Anjani", "Amazon Shipping", "Shiprocket", "Delhivery"), groups):
         if isinstance(g, Exception):
             logging.error(f"compare/{name}: {g}")
             options.append({"carrier": name, "service": "", "serviceable": None, "note": "Could not check right now"})
@@ -9760,6 +10245,8 @@ def _dispatch_tracking_url(courier: str, lr: str) -> str:
         return f"https://shiprocket.co/tracking/{lr}"
     if c.startswith("anjani"):
         return f"https://shreeanjani.co.in/tracking?awb={lr}"
+    if c.startswith("delhivery"):
+        return f"https://www.delhivery.com/track-v2/package/{lr}"
     return ""
 
 
@@ -9774,6 +10261,8 @@ def _dispatch_courier_label(order: dict) -> str:
         return f"{partner} (via Shiprocket)" if partner else "Shiprocket"
     if low.startswith("anjani"):
         return "Shree Anjani Courier"
+    if low.startswith("delhivery"):
+        return d.get("courier_partner") or "Delhivery"
     return name or "our courier"
 
 

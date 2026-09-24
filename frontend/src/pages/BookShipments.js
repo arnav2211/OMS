@@ -21,9 +21,10 @@ const COURIERS = {
   DTDC: { api: "dtdc", badge: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200", noun: "consignment" },
   Amazon: { api: "amazon", badge: "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200", noun: "shipment" },
   Shiprocket: { api: "shiprocket", badge: "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200", noun: "shipment" },
+  Delhivery: { api: "delhivery", badge: "bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-200", noun: "shipment" },
   Anjani: { badge: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200" },
 };
-const FILTERS = ["All", "DTDC", "Amazon", "Shiprocket", "Unassigned"];
+const FILTERS = ["All", "DTDC", "Amazon", "Shiprocket", "Delhivery", "Unassigned"];
 // Neither courier has a recharge API - money is added on their own sites.
 const RECHARGE_URL = { Shiprocket: "https://app.shiprocket.in/" };
 const LOW_WALLET = 500;
@@ -160,7 +161,7 @@ export default function BookShipments() {
                                                payment_mode: payMode, declared_value: dv });
         toast.success(`Booked! Tracking: ${res.data.shipment?.tracking_id || "—"}`, { duration: 8000 });
       } else {
-        res = await api.post("/shiprocket/book", { order_id: o.id, courier_id: choice.courier_id,
+        res = await api.post(`/${COURIERS[confirm.courier].api}/book`, { order_id: o.id, courier_id: choice.courier_id,
                                                    payment_mode: payMode, declared_value: dv, insure });
         toast.success(`Booked on ${res.data.shipment?.courier_name}. AWB: ${res.data.shipment?.awb || "—"}`, { duration: 8000 });
       }
@@ -176,7 +177,7 @@ export default function BookShipments() {
   // ── bulk: the selection may span couriers; each group goes to its own endpoint ──
   const runBulk = async (rows, action, declaredValues = {}, choices = {}) => {
     const merged = { booked: [], failed: [], booked_count: 0, failed_count: 0, action };
-    for (const courier of ["DTDC", "Amazon", "Shiprocket"]) {
+    for (const courier of ["DTDC", "Amazon", "Shiprocket", "Delhivery"]) {
       const group = rows.filter(o => o.courier === courier);
       if (!group.length) continue;
       const body = { order_ids: group.map(o => o.id) };
@@ -319,8 +320,9 @@ export default function BookShipments() {
 
   const syncDtdc = async () => {
     try {
-      const [d, s] = await Promise.all([api.post("/dtdc/sync-tracking"), api.post("/shiprocket/sync-tracking").catch(() => ({ data: { count: 0 } }))]);
-      const n = (d.data.count || 0) + (s.data.count || 0);
+      const [d, s, v] = await Promise.all([api.post("/dtdc/sync-tracking"), api.post("/shiprocket/sync-tracking").catch(() => ({ data: { count: 0 } })),
+                                           api.post("/delhivery/sync-tracking").catch(() => ({ data: { count: 0 } }))]);
+      const n = (d.data.count || 0) + (s.data.count || 0) + (v.data.count || 0);
       toast.success(n ? `${n} order(s) picked up and marked dispatched` : "No new pickups reported yet");
       if (n) load();
     } catch (err) {
@@ -542,7 +544,7 @@ export default function BookShipments() {
                               {o.risk_surcharge && <span className="text-red-600"> · <ShieldCheck className="w-2.5 h-2.5 inline" /> risk</span>}
                             </div>
                           )}
-                          {o.courier === "Shiprocket" && sh.courier_name && <div className="text-[10px] text-muted-foreground mt-0.5">{sh.courier_name}</div>}
+                          {["Shiprocket", "Delhivery"].includes(o.courier) && sh.courier_name && <div className="text-[10px] text-muted-foreground mt-0.5">{sh.courier_name}</div>}
                           {o.courier === "Shiprocket" && !o.booked && o.shiprocket_courier?.name && <div className="text-[10px] text-violet-700 dark:text-violet-300 mt-0.5">wants {o.shiprocket_courier.name}</div>}
                         </TableCell>
                         <TableCell className="font-mono text-sm">{o.order_number}</TableCell>
@@ -796,7 +798,7 @@ export default function BookShipments() {
                       ) : (
                         <>
                           <div className="text-[11px] text-muted-foreground mt-1">
-                            {[r.surface ? "Surface" : "Air", r.rating && `rating ${r.rating}`, r.rto_charges != null && `return (RTO) ${inr(r.rto_charges)}`].filter(Boolean).join(" · ")}
+                            {[r.surface ? "Surface" : "Air", r.rating && `rating ${r.rating}`, r.zone && `zone ${r.zone}`, r.rto_charges != null && `return (RTO) ${inr(r.rto_charges)}`].filter(Boolean).join(" · ")}
                           </div>
                           {r.cutoff_time && <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-1 flex items-center gap-1"><PackageCheck className="w-3 h-3" /> Same-day pickup if booked before {r.cutoff_time}</p>}
                           {r.etd && <p className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" /> Expected delivery: {r.etd}{r.days ? ` (${r.days} days)` : ""}</p>}

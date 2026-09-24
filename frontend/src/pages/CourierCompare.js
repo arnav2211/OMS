@@ -18,6 +18,7 @@ const CARRIER_STYLE = {
   "Anjani": "bg-orange-100 text-orange-800",
   "Amazon Shipping": "bg-amber-100 text-amber-900",
   "Shiprocket": "bg-violet-100 text-violet-800",
+  "Delhivery": "bg-teal-100 text-teal-800",
 };
 
 // Anjani serves a pincode area by area, and each area has its own delivery type.
@@ -97,7 +98,7 @@ export default function CourierCompare() {
     <div className="max-w-3xl space-y-4" data-testid="courier-compare">
       <div>
         <h1 className="text-2xl font-bold flex items-center gap-2"><Scale className="w-6 h-6" /> Compare Couriers</h1>
-        <p className="text-sm text-muted-foreground">DTDC, Anjani, Amazon Shipping and Shiprocket together, cheapest first.</p>
+        <p className="text-sm text-muted-foreground">DTDC, Anjani, Amazon Shipping, Shiprocket and Delhivery together, cheapest first.</p>
       </div>
 
       <Tabs defaultValue="compare" className="space-y-4">
