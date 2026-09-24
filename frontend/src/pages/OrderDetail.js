@@ -938,6 +938,23 @@ export default function OrderDetail() {
         </Card>
       )}
 
+      {/* Photo recycle bin: anything a packaging save removed can be put back */}
+      {order.packaging?.image_trash?.length > 0 && ["admin", "packaging"].includes(user?.role) && (
+        <div className="flex items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm" data-testid="order-image-trash">
+          <span className="text-amber-800 dark:text-amber-300">
+            {order.packaging.image_trash.length} packing photo{order.packaging.image_trash.length === 1 ? " was" : "s were"} removed
+            {order.packaging.image_trash[order.packaging.image_trash.length - 1]?.by ? ` (last by ${order.packaging.image_trash[order.packaging.image_trash.length - 1].by})` : ""}.
+          </span>
+          <Button size="sm" variant="outline" data-testid="order-image-restore" onClick={async () => {
+            try {
+              const r = await api.post(`/orders/${order.id}/packaging/restore-images`, {});
+              toast.success(`${r.data.restored} photo(s) restored`);
+              loadOrder();
+            } catch (err) { toast.error(err.response?.data?.detail || "Could not restore"); }
+          }}>Restore photos</Button>
+        </div>
+      )}
+
       {/* Packing Images */}
       {(order.packaging?.item_images && Object.keys(order.packaging.item_images).length > 0) || order.packaging?.order_images?.length > 0 || order.packaging?.packed_box_images?.length > 0 ? (
         <Card>

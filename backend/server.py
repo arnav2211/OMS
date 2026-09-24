@@ -2148,6 +2148,8 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
         new = list(new or [])
         return new + [x for x in (old or []) if x not in new]
 
+    _before = {"item": dict(packaging.get("item_images") or {}), "order": list(packaging.get("order_images") or []),
+               "box": list(packaging.get("packed_box_images") or [])}
     if "item_images" in updates:
         inc = dict(updates["item_images"] or {})
         if stale:
@@ -2160,6 +2162,19 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
         packaging["order_images"] = _merge_list(packaging.get("order_images"), updates["order_images"]) if stale else updates["order_images"]
     if "packed_box_images" in updates:
         packaging["packed_box_images"] = _merge_list(packaging.get("packed_box_images"), updates["packed_box_images"]) if stale else updates["packed_box_images"]
+    # Photo recycle bin: every reference this save drops is kept on the order.
+    _now = datetime.now(timezone.utc).isoformat()
+    _trash = list(packaging.get("image_trash") or [])
+    for k, urls in _before["item"].items():
+        for u in urls:
+            if u not in ((packaging.get("item_images") or {}).get(k) or []):
+                _trash.append({"url": u, "group": "item", "key": k, "removed_at": _now, "by": user["name"]})
+    for grp, field in (("order", "order_images"), ("box", "packed_box_images")):
+        for u in _before[grp]:
+            if u not in (packaging.get(field) or []):
+                _trash.append({"url": u, "group": grp, "key": "", "removed_at": _now, "by": user["name"]})
+    if _trash:
+        packaging["image_trash"] = _trash[-60:]
     # Who packed is recorded by the My Work tracker (PIN), never picked by hand.
     # Only an admin may set names directly, as an override for exceptions.
     if user["role"] == "admin":
@@ -2253,6 +2268,48 @@ async def undo_packed(order_id: str, user=Depends(get_current_user)):
     packaging["packed_at"] = ""
     await db.orders.update_one({"id": order_id}, {"$set": {"status": "packaging", "packaging": packaging, "updated_at": datetime.now(timezone.utc).isoformat()}})
     return await db.orders.find_one({"id": order_id}, {"_id": 0})
+
+
+class RestoreImagesRequest(BaseModel):
+    urls: Optional[List[str]] = None       # none = restore everything in the bin
+
+
+@api_router.post("/orders/{order_id}/packaging/restore-images")
+async def restore_packaging_images(order_id: str, req: RestoreImagesRequest = RestoreImagesRequest(), user=Depends(get_current_user)):
+    """Put removed photos back where they were (admin / packaging)."""
+    if user["role"] not in ["admin", "packaging"]:
+        raise HTTPException(status_code=403, detail="Packaging or admin only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    pkg = order.get("packaging") or {}
+    trash = list(pkg.get("image_trash") or [])
+    if not trash:
+        return {"ok": True, "restored": 0}
+    want = set(req.urls or [t["url"] for t in trash])
+    keep, restored = [], 0
+    for t in trash:
+        if t["url"] not in want:
+            keep.append(t)
+            continue
+        if t["group"] == "item":
+            imgs = dict(pkg.get("item_images") or {})
+            lst = list(imgs.get(t["key"]) or [])
+            if t["url"] not in lst:
+                lst.append(t["url"])
+            imgs[t["key"]] = lst
+            pkg["item_images"] = imgs
+        else:
+            field = "order_images" if t["group"] == "order" else "packed_box_images"
+            lst = list(pkg.get(field) or [])
+            if t["url"] not in lst:
+                lst.append(t["url"])
+            pkg[field] = lst
+        restored += 1
+    pkg["image_trash"] = keep
+    await db.orders.update_one({"id": order_id}, {"$set": {"packaging": pkg, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    logging.info(f"{user['name']} restored {restored} photo(s) on {order.get('order_number')}")
+    return {"ok": True, "restored": restored}
 
 
 # Dispatch
