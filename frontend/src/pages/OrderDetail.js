@@ -201,7 +201,7 @@ export default function OrderDetail() {
   const savePackaging = async (packData) => {
     setSaving(true);
     try {
-      await api.put(`/orders/${id}/packaging`, packData);
+      await api.put(`/orders/${id}/packaging`, { ...packData, loaded_at: order?.updated_at || "" });
       toast.success("Packaging updated"); setPackagingDirty(false); setShowPackaging(false); loadOrder();
     } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
     finally { setSaving(false); }

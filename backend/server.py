@@ -2132,12 +2132,34 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
         raise HTTPException(status_code=400, detail="Cannot modify packaging for a dispatched order")
 
     packaging = order.get("packaging", {})
+    # ── Stale-save protection ──
+    # The same order is often open on the packing phone and on an admin's
+    # screen at once. A save from an editor opened BEFORE someone else's change
+    # must not wipe what arrived in between (CS-1643, 2026-09-24: a photo save
+    # blanked the weight that had been entered and booked meanwhile). When the
+    # client says what it loaded and that is no longer current, photos are
+    # merged instead of replaced; a weight is never blanked by an empty field.
+    loaded_at = str(updates.get("loaded_at") or "")
+    stale = bool(loaded_at) and loaded_at != str(order.get("updated_at") or "")
+    if stale:
+        logging.info(f"packaging save by {user['name']} on {order.get('order_number')} is stale (loaded {loaded_at}); merging")
+
+    def _merge_list(old, new):
+        new = list(new or [])
+        return new + [x for x in (old or []) if x not in new]
+
     if "item_images" in updates:
-        packaging["item_images"] = updates["item_images"]
+        inc = dict(updates["item_images"] or {})
+        if stale:
+            merged = dict(packaging.get("item_images") or {})
+            for k, v in inc.items():
+                merged[k] = _merge_list(merged.get(k), v)
+            inc = merged
+        packaging["item_images"] = inc
     if "order_images" in updates:
-        packaging["order_images"] = updates["order_images"]
+        packaging["order_images"] = _merge_list(packaging.get("order_images"), updates["order_images"]) if stale else updates["order_images"]
     if "packed_box_images" in updates:
-        packaging["packed_box_images"] = updates["packed_box_images"]
+        packaging["packed_box_images"] = _merge_list(packaging.get("packed_box_images"), updates["packed_box_images"]) if stale else updates["packed_box_images"]
     # Who packed is recorded by the My Work tracker (PIN), never picked by hand.
     # Only an admin may set names directly, as an override for exceptions.
     if user["role"] == "admin":
@@ -2149,7 +2171,7 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
     _tracked = await _work_names_for_order(order_id)
     if any(_tracked.values()) or packaging.get("tracker_added"):
         _work_merge_packed_by(packaging, _tracked)
-    if "num_boxes" in updates:
+    if "num_boxes" in updates and not (stale and not str(updates["num_boxes"] or "").strip()):
         packaging["num_boxes"] = updates["num_boxes"]
     # Box dimensions in cm. Optional for DTDC/Amazon, but India Post prices on
     # the greater of actual and volumetric weight and rejects parcels booked
@@ -2157,6 +2179,13 @@ async def update_packaging(order_id: str, updates: dict, user=Depends(get_curren
     for dim in ("length_cm", "breadth_cm", "height_cm"):
         if dim in updates:
             packaging[dim] = updates[dim]
+    # An empty weight from the form never erases a weight already on the order
+    # (that weight may already be booked with a courier). Clearing it on
+    # purpose needs an explicit clear_weight flag.
+    if "weight_kg" in updates and not str(updates["weight_kg"] or "").strip() \
+            and str(packaging.get("weight_kg") or "").strip() and not updates.get("clear_weight"):
+        logging.info(f"packaging save by {user['name']} on {order.get('order_number')}: kept weight {packaging.get('weight_kg')} (form sent empty)")
+        updates = {k: v for k, v in updates.items() if k != "weight_kg"}
     if "weight_kg" in updates:
         packaging["weight_kg"] = updates["weight_kg"]
         # Saving a weight means the box is sealed and weighed. That alone releases

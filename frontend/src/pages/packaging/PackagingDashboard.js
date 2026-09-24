@@ -97,6 +97,7 @@ export default function PackagingDashboard() {
   const [orderImages, setOrderImages] = useState([]);
   const [packedBoxImages, setPackedBoxImages] = useState([]);
   const [weightKg, setWeightKg] = useState("");
+  const [loadedAt, setLoadedAt] = useState("");     // what version of the order this form was opened on
   const [numBoxes, setNumBoxes] = useState("1");
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
@@ -143,6 +144,7 @@ export default function PackagingDashboard() {
       setOrderImages(fullOrder.packaging?.order_images || []);
       setPackedBoxImages(fullOrder.packaging?.packed_box_images || []);
       setWeightKg(fullOrder.packaging?.weight_kg || "");
+      setLoadedAt(fullOrder.updated_at || "");
       setNumBoxes(fullOrder.packaging?.num_boxes || "1");
       setShowDetail(true);
     } catch {
@@ -217,6 +219,7 @@ export default function PackagingDashboard() {
         weight_kg: String(weightKg).trim(),
         num_boxes: String(numBoxes).trim() || "1",
         status: markPacked ? "packed" : "packaging",
+        loaded_at: loadedAt,
       };
       await api.put(`/orders/${selectedOrder.id}/packaging`, payload);
       toast.success(markPacked ? "Order marked as packed!" : "Packaging updated");
