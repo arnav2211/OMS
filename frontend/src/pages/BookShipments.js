@@ -22,9 +22,10 @@ const COURIERS = {
   Amazon: { api: "amazon", badge: "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200", noun: "shipment" },
   Shiprocket: { api: "shiprocket", badge: "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200", noun: "shipment" },
   Delhivery: { api: "delhivery", badge: "bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-200", noun: "shipment" },
+  "Delhivery B2B": { api: "delhivery-b2b", badge: "bg-cyan-100 text-cyan-900 dark:bg-cyan-900/40 dark:text-cyan-200", noun: "LR" },
   Anjani: { badge: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200" },
 };
-const FILTERS = ["All", "DTDC", "Amazon", "Shiprocket", "Delhivery", "Unassigned"];
+const FILTERS = ["All", "DTDC", "Amazon", "Shiprocket", "Delhivery", "Delhivery B2B", "Unassigned"];
 // Neither courier has a recharge API - money is added on their own sites.
 const RECHARGE_URL = { Shiprocket: "https://app.shiprocket.in/" };
 const LOW_WALLET = 500;
@@ -114,7 +115,7 @@ export default function BookShipments() {
   };
 
   // ── single booking: each courier keeps its own confirmation step ──
-  const startBooking = async (o, mode) => {
+  const startBooking = async (o, mode, insureOverride) => {
     const useMode = mode || (o.is_cod ? "cod" : "prepaid");
     setBusy(p => ({ ...p, [o.id]: true }));
     try {
@@ -123,7 +124,9 @@ export default function BookShipments() {
         setConfirm({ order: o, courier: "DTDC", preview: res.data });
       } else {
         setPayMode(useMode);
-        const res = await api.post(`/${COURIERS[o.courier].api}/quote`, { order_id: o.id, payment_mode: useMode });
+        const res = await api.post(`/${COURIERS[o.courier].api}/quote`,
+          { order_id: o.id, payment_mode: useMode, ...(o.courier === "Delhivery B2B" && insureOverride !== undefined ? { insure: insureOverride } : {}) });
+        if (o.courier === "Delhivery B2B" && insureOverride === undefined) setInsure(!!res.data.rov);
         if (!res.data.ok) {
           toast.error(res.data.message || "No rates available");
           if (res.data.detail) toast.error(res.data.detail, { duration: 7000 });
@@ -177,7 +180,7 @@ export default function BookShipments() {
   // ── bulk: the selection may span couriers; each group goes to its own endpoint ──
   const runBulk = async (rows, action, declaredValues = {}, choices = {}) => {
     const merged = { booked: [], failed: [], booked_count: 0, failed_count: 0, action };
-    for (const courier of ["DTDC", "Amazon", "Shiprocket", "Delhivery"]) {
+    for (const courier of ["DTDC", "Amazon", "Shiprocket", "Delhivery", "Delhivery B2B"]) {
       const group = rows.filter(o => o.courier === courier);
       if (!group.length) continue;
       const body = { order_ids: group.map(o => o.id) };
@@ -320,9 +323,10 @@ export default function BookShipments() {
 
   const syncDtdc = async () => {
     try {
-      const [d, s, v] = await Promise.all([api.post("/dtdc/sync-tracking"), api.post("/shiprocket/sync-tracking").catch(() => ({ data: { count: 0 } })),
-                                           api.post("/delhivery/sync-tracking").catch(() => ({ data: { count: 0 } }))]);
-      const n = (d.data.count || 0) + (s.data.count || 0) + (v.data.count || 0);
+      const [d, s, v, b] = await Promise.all([api.post("/dtdc/sync-tracking"), api.post("/shiprocket/sync-tracking").catch(() => ({ data: { count: 0 } })),
+                                              api.post("/delhivery/sync-tracking").catch(() => ({ data: { count: 0 } })),
+                                              api.post("/delhivery-b2b/sync-tracking").catch(() => ({ data: { count: 0 } }))]);
+      const n = (d.data.count || 0) + (s.data.count || 0) + (v.data.count || 0) + (b.data.count || 0);
       toast.success(n ? `${n} order(s) picked up and marked dispatched` : "No new pickups reported yet");
       if (n) load();
     } catch (err) {
@@ -544,7 +548,7 @@ export default function BookShipments() {
                               {o.risk_surcharge && <span className="text-red-600"> · <ShieldCheck className="w-2.5 h-2.5 inline" /> risk</span>}
                             </div>
                           )}
-                          {["Shiprocket", "Delhivery"].includes(o.courier) && sh.courier_name && <div className="text-[10px] text-muted-foreground mt-0.5">{sh.courier_name}</div>}
+                          {["Shiprocket", "Delhivery", "Delhivery B2B"].includes(o.courier) && sh.courier_name && <div className="text-[10px] text-muted-foreground mt-0.5">{sh.courier_name}</div>}
                           {o.courier === "Shiprocket" && !o.booked && o.shiprocket_courier?.name && <div className="text-[10px] text-violet-700 dark:text-violet-300 mt-0.5">wants {o.shiprocket_courier.name}</div>}
                         </TableCell>
                         <TableCell className="font-mono text-sm">{o.order_number}</TableCell>
@@ -798,7 +802,7 @@ export default function BookShipments() {
                       ) : (
                         <>
                           <div className="text-[11px] text-muted-foreground mt-1">
-                            {[r.surface ? "Surface" : "Air", r.rating && `rating ${r.rating}`, r.zone && `zone ${r.zone}`, r.rto_charges != null && `return (RTO) ${inr(r.rto_charges)}`].filter(Boolean).join(" · ")}
+                            {[r.surface ? "Surface" : "Air", r.rating && `rating ${r.rating}`, r.zone && `zone ${r.zone}`, r.charged_wt_kg && `billed ${r.charged_wt_kg} kg`, r.days && `${r.days} days`, r.rto_charges != null && `return (RTO) ${inr(r.rto_charges)}`].filter(Boolean).join(" · ")}
                           </div>
                           {r.cutoff_time && <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-1 flex items-center gap-1"><PackageCheck className="w-3 h-3" /> Same-day pickup if booked before {r.cutoff_time}</p>}
                           {r.etd && <p className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3" /> Expected delivery: {r.etd}{r.days ? ` (${r.days} days)` : ""}</p>}
@@ -817,6 +821,25 @@ export default function BookShipments() {
                     <span className="block text-xs text-muted-foreground">Extra fee charged by Shiprocket. Without it, a lost or damaged parcel is refunded only up to a small fixed limit.</span>
                   </span>
                 </label>
+              )}
+              {confirm.courier === "Delhivery B2B" && (
+                <label className="flex items-start gap-2 rounded-md border p-3 cursor-pointer">
+                  <Checkbox checked={insure} onCheckedChange={v => { setInsure(!!v); startBooking(confirm.order, payMode, !!v); }} className="mt-0.5" data-testid="ship-rov" />
+                  <span className="text-sm">
+                    <b>Carrier risk (ROV insurance)</b>
+                    <span className="block text-xs text-muted-foreground">Pre-ticked when the order carries carrier risk. Changing it re-quotes the freight.</span>
+                  </span>
+                </label>
+              )}
+              {confirm.courier === "Delhivery B2B" && choice?.breakup && (
+                <div className="text-[11px] text-muted-foreground rounded-md border p-2 grid grid-cols-2 gap-x-3">
+                  <span>Freight {inr(choice.breakup.freight)}</span><span>Fuel {inr(choice.breakup.fuel)}</span>
+                  <span>ROV {inr(choice.breakup.rov)}</span><span>Handling {inr(choice.breakup.handling)}</span>
+                  {choice.breakup.cod_fee ? <span>COD fee {inr(choice.breakup.cod_fee)}</span> : null}
+                  {choice.breakup.to_pay_fee ? <span>To-pay fee {inr(choice.breakup.to_pay_fee)}</span> : null}
+                  <span>GST {inr(choice.breakup.gst)}</span>
+                  <span>Billed weight {choice.charged_wt_kg} kg (min {choice.min_wt_kg} kg)</span>
+                </div>
               )}
             </>
           )}

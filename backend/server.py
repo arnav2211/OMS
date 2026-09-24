@@ -299,7 +299,7 @@ async def next_document_number(company: dict, kind: str) -> str:
     return f"{prefix}-{counter['seq']:04d}"
 
 
-COURIER_OPTIONS = ["DTDC", "Anjani", "Amazon", "Shiprocket", "Delhivery", "India Post", "Others"]
+COURIER_OPTIONS = ["DTDC", "Anjani", "Amazon", "Shiprocket", "Delhivery", "Delhivery B2B", "India Post", "Others"]
 
 # Bank details for PI PDFs
 BANK_GST = {
@@ -8945,13 +8945,527 @@ async def _compare_delhivery(pincode: str, weight: float, cod: bool) -> list:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# DELHIVERY B2B / LTL ("transport"): heavy consignments booked as an LR.
+# Username + password → 24 h JWT. Freight is estimated live; the manifest is an
+# async job that returns the LR number. Minimum billed weight is 20 kg.
+# ═══════════════════════════════════════════════════════════════════════════
+DLVB_BASE = "https://ltl-clients-api.delhivery.com"
+DLVB = {
+    "username": os.environ.get("DELHIVERY_B2B_USERNAME", "").strip(),
+    "password": os.environ.get("DELHIVERY_B2B_PASSWORD", "") or _b64.b64decode(os.environ.get("DELHIVERY_B2B_PASSWORD_B64", "") or b"").decode("utf-8", "ignore"),
+    "pickup_name": os.environ.get("DELHIVERY_B2B_PICKUP_NAME", os.environ.get("DELHIVERY_PICKUP_NAME", "MANGALAM AGRO")).strip(),
+    "origin_pin": os.environ.get("DELHIVERY_ORIGIN_PINCODE", "440025"),
+}
+DLVB_COURIER_RE = {"$regex": r"^\s*delhivery\s*b2b", "$options": "i"}
+DLVB_SYNC_INTERVAL = int(os.environ.get("DELHIVERY_B2B_SYNC_INTERVAL", "300"))
+_dlvb_token = {"jwt": "", "expires": 0.0}
+
+
+def _dlvb_configured() -> bool:
+    return bool(DLVB["username"] and DLVB["password"])
+
+
+async def _dlvb_auth() -> str:
+    """JWT, cached well inside its 24 h life. Never retried in a loop: a wrong
+    password locks the user for 10 minutes."""
+    import time
+    if _dlvb_token["jwt"] and _dlvb_token["expires"] > time.time():
+        return _dlvb_token["jwt"]
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(f"{DLVB_BASE}/ums/login", json={"username": DLVB["username"], "password": DLVB["password"]})
+    jwt_ = ((r.json() if r.status_code == 200 else {}).get("data") or {}).get("jwt")
+    if not jwt_:
+        raise RuntimeError(f"Delhivery B2B login failed ({r.status_code}): {r.text[:120]}")
+    _dlvb_token.update(jwt=jwt_, expires=time.time() + 20 * 3600)
+    return jwt_
+
+
+async def _dlvb_call(method: str, path: str, **kw) -> tuple:
+    token = await _dlvb_auth()
+    headers = {"Authorization": f"Bearer {token}", **kw.pop("headers", {})}
+    if "json" in kw:
+        headers.setdefault("Content-Type", "application/json")
+    async with httpx.AsyncClient(timeout=60) as c:
+        r = await c.request(method, DLVB_BASE + path, headers=headers, **kw)
+    try:
+        return r.status_code, r.json()
+    except Exception:
+        return r.status_code, {"raw": r.text[:400]}
+
+
+def _dlvb_require(user):
+    if user["role"] not in DLV_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not _dlvb_configured():
+        raise HTTPException(status_code=400, detail="Delhivery B2B is not configured on the server")
+
+
+def _dlvb_err(data) -> str:
+    e = (data or {}).get("error")
+    return (e.get("message") if isinstance(e, dict) else str(e)) or str(data)[:200]
+
+
+async def _dlvb_pin(pincode: str) -> Optional[dict]:
+    code, d = await _dlvb_call("GET", f"/pincode-service/{pincode}", headers={"Content-Type": "application/json"})
+    rows = ((d or {}).get("data") or {}).get("pincode_serviceability_data") or [] if code == 200 else []
+    return rows[0] if rows else None
+
+
+def _dlvb_boxes(order: dict) -> tuple:
+    """(dimensions list, total weight g, box count) for the estimate / manifest."""
+    pkg = order.get("packaging") or {}
+    weight = float(str(pkg.get("weight_kg") or 0).strip() or 0)
+    try:
+        boxes = max(1, int(str(pkg.get("num_boxes") or "1").strip() or 1))
+    except ValueError:
+        boxes = 1
+    per_box = {"packaging": {"weight_kg": max(0.5, weight / boxes)}}
+    side = _amazon_box(per_box)
+    dims = [{"length_cm": side["length"], "width_cm": side["width"], "height_cm": side["height"], "box_count": boxes}]
+    return dims, int(round(weight * 1000)), boxes
+
+
+async def _dlvb_estimate(dest_pin: str, dims: list, weight_g: int, inv_amount: float, cod_amount: float, rov: bool) -> Optional[dict]:
+    body = {"dimensions": dims, "weight_g": max(1, weight_g), "cheque_payment": False,
+            "source_pin": DLVB["origin_pin"], "consignee_pin": dest_pin,
+            "payment_mode": "cod" if cod_amount > 0 else "prepaid", "inv_amount": max(1, int(round(inv_amount))),
+            "freight_mode": "fod", "rov_insurance": bool(rov)}
+    if cod_amount > 0:
+        body["cod_amount"] = int(round(cod_amount))
+    code, d = await _dlvb_call("POST", "/freight/estimate", json=body)
+    if code != 200 or not (d or {}).get("success"):
+        raise RuntimeError(_dlvb_err(d))
+    data = d["data"]
+    pb = data.get("price_breakup") or {}
+    return {"total": round(float(data.get("total") or 0), 2), "charged_wt_kg": data.get("charged_wt"),
+            "min_wt_kg": data.get("min_charged_wt"), "gst": pb.get("gst"), "freight": pb.get("base_freight_charge"),
+            "fuel": (pb.get("fuel_surcharge") or 0) + (pb.get("fuel_hike") or 0), "rov": pb.get("insurance_rov"),
+            "handling": pb.get("other_handling_charges"), "cod_fee": (pb.get("meta_charges") or {}).get("cod"),
+            "to_pay_fee": (pb.get("meta_charges") or {}).get("to_pay")}
+
+
+@api_router.get("/delhivery-b2b/check/{pincode}")
+async def delhivery_b2b_check(pincode: str, weight: float = 20.0, cod: bool = False, user=Depends(get_current_user)):
+    pincode = pincode.strip()
+    if not pincode.isdigit() or len(pincode) != 6:
+        return {"serviceable": False, "configured": True, "message": "Invalid pincode format."}
+    if not _dlvb_configured():
+        return {"serviceable": None, "configured": False, "message": "Delhivery B2B is not configured on the server."}
+    try:
+        pin = await _dlvb_pin(pincode)
+        if not pin:
+            return {"serviceable": False, "configured": True, "message": "Delhivery B2B does not serve this pincode."}
+        w = max(1.0, float(weight or 20))
+        dims = [{"length_cm": 40, "width_cm": 40, "height_cm": 40, "box_count": 1}]
+        est = await _dlvb_estimate(pincode, dims, int(w * 1000), 5000, 5000.0 if cod else 0.0, False)
+        code, t = await _dlvb_call("GET", "/tat/estimate", params={"origin_pin": DLVB["origin_pin"], "destination_pin": pincode})
+        tat = ((t or {}).get("data") or {}).get("tat") if code == 200 else None
+        return {"serviceable": True, "configured": True, "city": pin.get("city") or "", "state": pin.get("state") or "",
+                "center": pin.get("center") or "", "oda": bool(pin.get("oda")), "tat_days": tat,
+                "couriers": [{"courier_id": 1, "name": "Delhivery B2B Surface (LTL)", "rate": est["total"], "surface": True,
+                              "days": tat, "etd": "", "charged_wt_kg": est["charged_wt_kg"], "min_wt_kg": est["min_wt_kg"],
+                              "cod_charges": est["cod_fee"], "breakup": est}], "count": 1}
+    except Exception as e:
+        logging.error(f"delhivery b2b check: {e}")
+        return {"serviceable": False, "configured": True, "message": f"Delhivery B2B: {str(e)[:160]}"}
+
+
+@api_router.get("/delhivery-b2b/bookable")
+async def delhivery_b2b_bookable(user=Depends(get_current_user)):
+    _dlvb_require(user)
+    orders = await db.orders.find({
+        "courier_name": DLVB_COURIER_RE, "status": {"$nin": ["cancelled", "dispatched"]},
+        "$or": [{"packaging.weight_kg": {"$nin": ["", None]}}, {"delhivery_b2b_shipment.lrn": {"$nin": ["", None]}}],
+    }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "shipping_address": 1,
+        "packaging": 1, "delhivery_b2b_shipment": 1, "status": 1, "is_cod": 1, "amount_paid": 1, "cod_amount": 1,
+        "carrier_risk_applicable": 1}).sort("created_at", -1).to_list(300)
+    out = []
+    for o in orders:
+        pkg = o.get("packaging") or {}
+        sh = o.get("delhivery_b2b_shipment") or None
+        try:
+            weight = float(str(pkg.get("weight_kg", "")).strip() or 0)
+        except (TypeError, ValueError):
+            weight = 0.0
+        if weight <= 0 and sh and sh.get("lrn"):
+            weight = float(sh.get("weight_kg") or 0)
+        if weight <= 0:
+            continue
+        out.append({"id": o["id"], "order_number": o.get("order_number"), "customer_name": o.get("customer_name"),
+                    "grand_total": o.get("grand_total"), "status": o.get("status"),
+                    "weight_kg": weight, "num_boxes": pkg.get("num_boxes") or "1",
+                    "shipping_address": o.get("shipping_address") or {},
+                    "is_cod": bool(o.get("is_cod")), "cod_amount": _amazon_cod_amount(o),
+                    "carrier_risk": bool(o.get("carrier_risk_applicable")),
+                    "delhivery_b2b_shipment": ({k: v for k, v in sh.items() if k != "raw"} if sh else None)})
+    return out
+
+
+class DelhiveryB2BBookRequest(BaseModel):
+    order_id: str
+    courier_id: Optional[int] = None
+    payment_mode: Optional[str] = None
+    declared_value: Optional[float] = None
+    insure: Optional[bool] = None            # ROV insurance (carrier risk); default = order's carrier-risk flag
+    ewaybill: Optional[str] = ""             # needed when the invoice is above the e-way bill limit
+
+
+@api_router.post("/delhivery-b2b/quote")
+async def delhivery_b2b_quote(req: DelhiveryB2BBookRequest, user=Depends(get_current_user)):
+    _dlvb_require(user)
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    sa = order.get("shipping_address") or {}
+    dims, weight_g, boxes = _dlvb_boxes(order)
+    if weight_g <= 0:
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+    cod = _dlv_cod(order, req.payment_mode)
+    if (req.payment_mode or "").lower() == "cod" and cod <= 0:
+        raise HTTPException(status_code=400, detail="Nothing left to collect - this order is fully paid.")
+    rov = bool(order.get("carrier_risk_applicable")) if req.insure is None else bool(req.insure)
+    try:
+        pin = await _dlvb_pin(str(sa.get("pincode") or ""))
+        if not pin:
+            return {"ok": False, "message": "Delhivery B2B does not serve this address"}
+        est = await _dlvb_estimate(str(sa.get("pincode") or ""), dims, weight_g, _declared_value(order), cod, rov)
+        code, t = await _dlvb_call("GET", "/tat/estimate", params={"origin_pin": DLVB["origin_pin"], "destination_pin": str(sa.get("pincode") or "")})
+        tat = ((t or {}).get("data") or {}).get("tat") if code == 200 else None
+    except Exception as e:
+        return {"ok": False, "message": f"Delhivery B2B: {str(e)[:200]}"}
+    return {"ok": True, "is_cod": cod > 0, "cod_amount": cod, "weight_kg": weight_g / 1000.0, "boxes": boxes, "rov": rov,
+            "oda": bool(pin.get("oda")), "center": pin.get("center") or "",
+            "couriers": [{"courier_id": 1, "name": "Delhivery B2B Surface (LTL)", "rate": est["total"], "surface": True,
+                          "days": tat, "etd": "", "charged_wt_kg": est["charged_wt_kg"], "min_wt_kg": est["min_wt_kg"],
+                          "cod_charges": est["cod_fee"], "breakup": est}]}
+
+
+@api_router.post("/delhivery-b2b/book")
+async def delhivery_b2b_book(req: DelhiveryB2BBookRequest, user=Depends(get_current_user)):
+    """BOOKS a real Delhivery B2B LR (manifest job → LR number) and requests a pickup."""
+    _dlvb_require(user)
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if (order.get("delhivery_b2b_shipment") or {}).get("lrn"):
+        raise HTTPException(status_code=400, detail="This order already has a Delhivery B2B LR")
+    if req.declared_value and float(req.declared_value) > 0:
+        order["declared_value_override"] = float(req.declared_value)
+    elif float(order.get("grand_total") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Order total is \u20b90 - enter a declared value for the shipment before booking")
+    dims, weight_g, boxes = _dlvb_boxes(order)
+    if weight_g <= 0:
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+    phone = await _order_recipient_phone(order)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Customer has no valid phone number. Add one before booking.")
+    sa = order.get("shipping_address") or {}
+    line1, line2 = _address_lines(sa, cap=150)
+    if len((line1 or "").strip()) < 3:
+        raise HTTPException(status_code=400, detail="Shipping address is too short for the courier")
+    cod = _dlv_cod(order, req.payment_mode)
+    if (req.payment_mode or "").lower() == "cod" and cod <= 0:
+        raise HTTPException(status_code=400, detail="Nothing left to collect - this order is fully paid.")
+    declared = _declared_value(order)
+    rov = bool(order.get("carrier_risk_applicable")) if req.insure is None else bool(req.insure)
+    try:
+        est = await _dlvb_estimate(str(sa.get("pincode") or ""), dims, weight_g, declared, cod, rov)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Delhivery B2B: {str(e)[:200]}")
+
+    rebooks = sum(1 for c in (order.get("cancelled_shipments") or []) if (c.get("courier") or "") == "Delhivery B2B")
+    rebooks += int(order.get("delhivery_b2b_failed_attempts") or 0)
+    ref = (order.get("order_number") or order["id"][:20]) + (f"-R{rebooks}" if rebooks else "")
+    items = [(it.get("product_name") or "").strip() for it in (order.get("items") or []) if it.get("product_name")]
+    desc = (", ".join(items) or "Aroma products")[:120]
+    name = (sa.get("address_name") or order.get("customer_name") or "Customer").strip()[:60]
+    form = {
+        "lrn": "", "pickup_location_name": DLVB["pickup_name"],
+        "payment_mode": "cod" if cod > 0 else "prepaid", "weight": str(weight_g),
+        "dropoff_location": json.dumps({"consignee_name": name, "address": (line1 + (", " + line2 if line2 else ""))[:250],
+                                        "city": sa.get("city") or "", "state": sa.get("state") or "",
+                                        "zip": str(sa.get("pincode") or ""), "phone": phone,
+                                        "email": await _amazon_recipient_email(order) or ""}),
+        "rov_insurance": "True" if rov else "False",
+        "invoices": json.dumps([{"ewaybill": (req.ewaybill or "").strip(), "inv_num": order.get("order_number") or ref,
+                                 "inv_amt": round(declared, 2), "inv_qr_code": ""}]),
+        "shipment_details": json.dumps([{"order_id": ref, "box_count": boxes, "description": desc,
+                                         "weight": weight_g, "waybills": [], "master": False}]),
+        "fm_pickup": "True", "freight_mode": "fod",
+        "billing_address": json.dumps({"name": COMPANY["brand"], "company": COMPANY["name"], "consignor": COMPANY["name"],
+                                       "address": COMPANY["address"], "city": "Nagpur", "state": "Maharashtra",
+                                       "pin": DLVB["origin_pin"], "phone": COMPANY["mobile"], "gst_number": COMPANY["gstin"]}),
+    }
+    if cod > 0:
+        form["cod_amount"] = str(int(round(cod)))
+    token = await _dlvb_auth()
+    async with httpx.AsyncClient(timeout=90) as c:
+        r = await c.post(f"{DLVB_BASE}/manifest", data=form, headers={"Authorization": f"Bearer {token}"})
+    try:
+        data = r.json()
+    except Exception:
+        data = {"raw": r.text[:300]}
+    job_id = ((data or {}).get("data") or {}).get("job_id") if isinstance((data or {}).get("data"), dict) else (data or {}).get("job_id")
+    if r.status_code not in (200, 201, 202) or not job_id:
+        await db.orders.update_one({"id": req.order_id}, {"$inc": {"delhivery_b2b_failed_attempts": 1}})
+        logging.error(f"Delhivery B2B manifest failed for {ref}: {r.status_code} {str(data)[:400]}")
+        raise HTTPException(status_code=400, detail=f"Delhivery B2B refused the booking: {_dlvb_err(data)}")
+
+    # The manifest is asynchronous: poll the job until the LR number appears.
+    lrn, job_status, job_raw = "", "", {}
+    for _ in range(12):
+        await asyncio.sleep(2.5)
+        code, jd = await _dlvb_call("GET", "/manifest", params={"job_id": job_id})
+        job_raw = (jd or {}).get("data") or jd or {}
+        job_status = str(job_raw.get("status") or job_raw.get("job_status") or "")
+        lrn = str(job_raw.get("lrn") or job_raw.get("lr_number") or (job_raw.get("lrnum") or ""))
+        if lrn or job_status.lower() in ("failed", "error", "fail"):
+            break
+    if not lrn:
+        await db.orders.update_one({"id": req.order_id}, {"$set": {"delhivery_b2b_pending_job": {"job_id": job_id, "ref": ref, "at": datetime.now(timezone.utc).isoformat(), "last": str(job_raw)[:300]}}})
+        raise HTTPException(status_code=400, detail=f"Delhivery accepted the manifest (job {job_id}) but gave no LR yet: {str(job_raw)[:200]}. Press Refresh in a minute.")
+
+    pickup_note, pickup_date = "", ""
+    try:
+        now_ist = datetime.now(IST)
+        day = now_ist.date() if now_ist.hour < 13 else (now_ist + timedelta(days=1)).date()
+        code, pr = await _dlvb_call("POST", "/pickup_requests/", json={
+            "client_warehouse": DLVB["pickup_name"], "pickup_date": day.isoformat(), "start_time": "14:00:00", "expected_package_count": boxes})
+        pickup_note = f"{code}: {str(pr)[:160]}"
+        pickup_date = day.isoformat() if code in (200, 201) else ""
+    except Exception as e:
+        pickup_note = f"pickup request failed: {e}"
+    shipment_doc = {
+        "lrn": lrn, "awb": lrn, "tracking_id": lrn, "job_id": job_id, "reference": ref, "courier_name": "Delhivery B2B (LTL)",
+        "rate": est["total"], "charged_wt_kg": est["charged_wt_kg"], "boxes": boxes,
+        "is_cod": cod > 0, "cod_amount": cod, "declared_value": round(declared, 2), "insured": rov,
+        "weight_kg": weight_g / 1000.0, "pickup_date": pickup_date, "pickup_note": pickup_note[:200],
+        "booked_by": user["name"], "booked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.orders.update_one({"id": req.order_id}, {"$set": {
+        "delhivery_b2b_shipment": shipment_doc, "courier_name": "Delhivery B2B", "updated_at": datetime.now(timezone.utc).isoformat()},
+        "$unset": {"delhivery_b2b_pending_job": ""}})
+    return {"ok": True, "shipment": shipment_doc}
+
+
+@api_router.post("/delhivery-b2b/bulk-book")
+async def delhivery_b2b_bulk_book(req: BulkBookRequest, user=Depends(get_current_user)):
+    _dlvb_require(user)
+    mode = (req.payment_mode or "prepaid").strip().lower()
+
+    async def one(oid):
+        ch = (req.choices or {}).get(oid) or {}
+        return await delhivery_b2b_book(DelhiveryB2BBookRequest(
+            order_id=oid, payment_mode=(ch.get("payment_mode") or mode), insure=ch.get("insure"),
+            declared_value=(req.declared_values or {}).get(oid)), user=user)
+
+    return await _bulk_book(req.order_ids, one, user, "Delhivery B2B")
+
+
+async def _dlvb_cancel_one(order_id: str, user) -> dict:
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    shp = order.get("delhivery_b2b_shipment") or {}
+    if not shp.get("lrn"):
+        raise HTTPException(status_code=400, detail="No Delhivery B2B LR on this order")
+    if (order.get("status") or "") == "dispatched":
+        raise HTTPException(status_code=400, detail="Order is already dispatched - undo the dispatch before cancelling the LR")
+    code, data = await _dlvb_call("DELETE", f"/lrn/cancel/{shp['lrn']}")
+    if code not in (200, 201, 204) or not (data or {}).get("success", True):
+        raise HTTPException(status_code=400, detail=f"Delhivery B2B cancel failed: {_dlvb_err(data)}")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.orders.update_one({"id": order_id}, {
+        "$push": {"cancelled_shipments": {"courier": "Delhivery B2B", **shp, "cancelled_by": user["name"], "cancelled_at": now}},
+        "$unset": {"delhivery_b2b_shipment": ""}, "$set": {"updated_at": now}})
+    return {"ok": True, "cancelled": shp.get("lrn"), "response": data}
+
+
+@api_router.post("/delhivery-b2b/cancel")
+async def delhivery_b2b_cancel(req: CancelLabelRequest, user=Depends(get_current_user)):
+    _dlvb_require(user)
+    return await _dlvb_cancel_one(req.order_id, user)
+
+
+@api_router.post("/delhivery-b2b/bulk-cancel")
+async def delhivery_b2b_bulk_cancel(req: BulkBookRequest, user=Depends(get_current_user)):
+    _dlvb_require(user)
+
+    async def one(oid):
+        return await _dlvb_cancel_one(oid, user)
+
+    return await _bulk_book(req.order_ids, one, user, "Delhivery B2B cancel")
+
+
+async def _dlvb_label_pdf(lrn: str) -> bytes:
+    """Shipping label (std size) as PDF bytes; falls back to the LR copy."""
+    for path in (f"/label/get_urls/std/{lrn}", f"/lr_copy/print/{lrn}"):
+        code, d = await _dlvb_call("GET", path)
+        data = (d or {}).get("data") if isinstance(d, dict) else None
+        urls = []
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if isinstance(v, str) and v.startswith("http"):
+                    urls.append(v)
+                elif isinstance(v, list):
+                    urls += [x for x in v if isinstance(x, str) and x.startswith("http")]
+        elif isinstance(data, list):
+            urls = [x for x in data if isinstance(x, str) and x.startswith("http")]
+        elif isinstance(data, str) and data.startswith("http"):
+            urls = [data]
+        if urls:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+                return (await c.get(urls[0])).content
+    raise RuntimeError(f"no label for LR {lrn}")
+
+
+@api_router.get("/delhivery-b2b/labels")
+async def delhivery_b2b_labels(ids: str, token: str = "", user=None):
+    if token:
+        user = await get_user_from_token_param(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    images, missing = [], []
+    for oid in [i for i in (ids or "").split(",") if i][:50]:
+        o = await db.orders.find_one({"id": oid}, {"_id": 0, "order_number": 1, "delhivery_b2b_shipment": 1})
+        lrn = ((o or {}).get("delhivery_b2b_shipment") or {}).get("lrn")
+        if not lrn:
+            missing.append((o or {}).get("order_number") or oid[:8])
+            continue
+        try:
+            images.extend(_pdf_pages_jpg(await _dlvb_label_pdf(lrn)) or [])
+        except Exception as e:
+            logging.warning(f"delhivery b2b label {lrn}: {e}")
+            missing.append((o or {}).get("order_number") or oid[:8])
+    if not images:
+        raise HTTPException(status_code=404, detail=f"No labels available for: {', '.join(missing)}")
+    return StreamingResponse(_quarter_sheet_pdf(images, per_page=1), media_type="application/pdf",
+                             headers={"Content-Disposition": "inline; filename=delhivery-b2b-labels.pdf"})
+
+
+async def _delhivery_b2b_mark_dispatched(order: dict, when: str, by: str, docket: str = "") -> dict:
+    shp = order.get("delhivery_b2b_shipment") or {}
+    docket = docket or shp.get("lrn") or ""
+    dispatch = order.get("dispatch") or {}
+    slips = list(dispatch.get("dispatch_slip_images") or [])
+    if not slips and shp.get("lrn"):
+        try:
+            jpg = _pdf_first_page_jpg(await _dlvb_label_pdf(shp["lrn"]))
+            if jpg:
+                fname = f"{uuid.uuid4()}.jpg"
+                async with aiofiles.open(UPLOAD_DIR / fname, "wb") as f:
+                    await f.write(jpg)
+                slips.append(f"/api/uploads/{fname}")
+        except Exception as e:
+            logging.warning(f"delhivery b2b slip image failed: {e}")
+    # An LR is a transport consignment: the WhatsApp tells the customer the LR number.
+    dispatch.update({"courier_name": "Delhivery B2B", "courier_partner": "Delhivery B2B (LTL)",
+                     "transporter_name": "Delhivery B2B", "lr_no": docket, "dispatch_slip_images": slips,
+                     "dispatch_type": "transport", "porter_link": "", "dispatched_by": by, "dispatched_at": when})
+    await db.orders.update_one({"id": order["id"]}, {"$set": {
+        "dispatch": dispatch, "status": "dispatched", "courier_name": "Delhivery B2B", "shipping_method": "transport",
+        "transporter_name": "Delhivery B2B", "delhivery_b2b_shipment.picked_up_at": when,
+        "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"ok": True, "lr_no": docket, "slips": slips}
+
+
+class DelhiveryB2BDispatchRequest(BaseModel):
+    order_id: str
+    docket_no: Optional[str] = ""
+
+
+@api_router.post("/delhivery-b2b/dispatch")
+async def delhivery_b2b_dispatch(req: DelhiveryB2BDispatchRequest, user=Depends(get_current_user)):
+    _dlvb_require(user)
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    docket = (req.docket_no or "").strip() or (order.get("delhivery_b2b_shipment") or {}).get("lrn") or ""
+    if not docket:
+        raise HTTPException(status_code=400, detail="LR number is required")
+    return await _delhivery_b2b_mark_dispatched(order, datetime.now(timezone.utc).isoformat(), user["name"], docket)
+
+
+async def _delhivery_b2b_sync_all() -> int:
+    n = 0
+    async for o in db.orders.find({"delhivery_b2b_shipment.lrn": {"$nin": ["", None]},
+                                   "status": {"$nin": ["dispatched", "cancelled"]}}, {"_id": 0}).limit(50):
+        lrn = o["delhivery_b2b_shipment"]["lrn"]
+        try:
+            code, d = await _dlvb_call("GET", "/lrn/track", params={"lrnum": lrn})
+        except Exception as e:
+            logging.warning(f"delhivery b2b track {lrn}: {e}")
+            continue
+        if code != 200:
+            continue
+        blob = json.dumps((d or {}).get("data") or d or {}).lower()
+        gone = any(w in blob for w in ('"picked up"', "in transit", "in-transit", "dispatched", "delivered", "out for delivery", "reached"))
+        if not gone:
+            continue
+        await _delhivery_b2b_mark_dispatched(o, datetime.now(timezone.utc).isoformat(), "Delhivery B2B (auto)", lrn)
+        n += 1
+        logging.info(f"Delhivery B2B pickup: {o.get('order_number')} dispatched")
+    return n
+
+
+async def _delhivery_b2b_sync_loop():
+    await asyncio.sleep(90)
+    while True:
+        try:
+            await _delhivery_b2b_sync_all()
+        except Exception as e:
+            logging.error(f"Delhivery B2B sync loop error: {e}")
+        await asyncio.sleep(DLVB_SYNC_INTERVAL)
+
+
+@app.on_event("startup")
+async def _start_delhivery_b2b_sync():
+    if _dlvb_configured():
+        asyncio.create_task(_delhivery_b2b_sync_loop())
+        logging.info(f"Delhivery B2B pickup sync every {DLVB_SYNC_INTERVAL}s")
+
+
+@api_router.post("/delhivery-b2b/sync-tracking")
+async def delhivery_b2b_sync_now(user=Depends(get_current_user)):
+    _dlvb_require(user)
+    return {"count": await _delhivery_b2b_sync_all()}
+
+
+@api_router.get("/delhivery-b2b/track/{lrn}")
+async def delhivery_b2b_track(lrn: str, user=Depends(get_current_user)):
+    """Raw Delhivery B2B tracking + freight breakup for one LR (read-only)."""
+    _dlvb_require(user)
+    code, d = await _dlvb_call("GET", "/lrn/track", params={"lrnum": lrn.strip()})
+    code2, f = await _dlvb_call("GET", "/lrn/freight-breakup", params={"lrns": lrn.strip()})
+    return {"track": d, "freight": f}
+
+
+async def _compare_delhivery_b2b(pincode: str, weight: float, cod: bool) -> list:
+    if not _dlvb_configured():
+        return [{"carrier": "Delhivery B2B", "service": "", "serviceable": None, "note": "Not configured on the server"}]
+    try:
+        pin = await _dlvb_pin(pincode)
+        if not pin:
+            return [{"carrier": "Delhivery B2B", "service": "", "serviceable": False, "note": "Not served by Delhivery B2B"}]
+        est = await _dlvb_estimate(pincode, [{"length_cm": 40, "width_cm": 40, "height_cm": 40, "box_count": 1}],
+                                   int(weight * 1000), 5000, 5000.0 if cod else 0.0, False)
+        return [{"carrier": "Delhivery B2B", "service": "Surface LTL (transport)", "serviceable": True, "total": est["total"],
+                 "gst_note": "GST included", "eta": "",
+                 "note": f"billed at {est['charged_wt_kg']} kg (min {est['min_wt_kg']} kg)" + (" · ODA area" if pin.get("oda") else ""),
+                 "cod_charge": est["cod_fee"] if cod else None}]
+    except Exception as e:
+        logging.error(f"compare/delhivery-b2b: {e}")
+        return [{"carrier": "Delhivery B2B", "service": "", "serviceable": None, "note": f"Could not check: {str(e)[:80]}"}]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # BOOK SHIPMENTS: one screen for every courier we book by API (DTDC, Amazon
 # Shipping, Shiprocket). Booking, cancelling and dispatching still go through
 # each courier's own endpoints - this only gathers the orders into one list,
 # prints their labels as one PDF, and lets a weighed order be given a courier.
 # ═══════════════════════════════════════════════════════════════════════════
 SHIP_ROLES = ["admin", "dispatch", "packaging", "accounts"]
-SHIP_API_COURIERS = ["DTDC", "Amazon", "Shiprocket", "Delhivery"]
+SHIP_API_COURIERS = ["DTDC", "Amazon", "Shiprocket", "Delhivery", "Delhivery B2B"]
 
 
 @api_router.get("/shipments/bookable")
@@ -8962,13 +9476,14 @@ async def shipments_bookable(user=Depends(get_current_user)):
     for courier, fn, key in (("DTDC", dtdc_bookable_orders, "dtdc_shipment"),
                              ("Amazon", amazon_bookable_orders, "amazon_shipment"),
                              ("Shiprocket", shiprocket_bookable, "shiprocket_shipment"),
-                             ("Delhivery", delhivery_bookable, "delhivery_shipment")):
+                             ("Delhivery", delhivery_bookable, "delhivery_shipment"),
+                             ("Delhivery B2B", delhivery_b2b_bookable, "delhivery_b2b_shipment")):
         try:
             for o in await fn(user=user):
                 sh = o.get(key) or {}
-                booked = bool(sh.get("reference_number") or sh.get("shipment_id") or sh.get("awb"))
+                booked = bool(sh.get("reference_number") or sh.get("shipment_id") or sh.get("awb") or sh.get("lrn"))
                 rows.append({**o, "courier": courier, "booked": booked,
-                             "tracking": sh.get("awb") or sh.get("tracking_id") or sh.get("reference_number") or ""})
+                             "tracking": sh.get("awb") or sh.get("lrn") or sh.get("tracking_id") or sh.get("reference_number") or ""})
         except HTTPException as e:
             errors[courier] = str(e.detail)
         except Exception as e:
@@ -9015,7 +9530,7 @@ async def shipments_set_courier(req: SetCourierRequest, user=Depends(get_current
         raise HTTPException(status_code=403, detail="Not authorized")
     courier = (req.courier_name or "").strip()
     if courier not in SHIP_API_COURIERS + ["Anjani"]:
-        raise HTTPException(status_code=400, detail="Courier must be DTDC, Amazon, Shiprocket, Delhivery or Anjani")
+        raise HTTPException(status_code=400, detail="Courier must be DTDC, Amazon, Shiprocket, Delhivery, Delhivery B2B or Anjani")
     order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -9024,7 +9539,8 @@ async def shipments_set_courier(req: SetCourierRequest, user=Depends(get_current
     if ((order.get("dtdc_shipment") or {}).get("reference_number")
             or (order.get("amazon_shipment") or {}).get("shipment_id")
             or (order.get("shiprocket_shipment") or {}).get("awb")
-            or (order.get("delhivery_shipment") or {}).get("awb")):
+            or (order.get("delhivery_shipment") or {}).get("awb")
+            or (order.get("delhivery_b2b_shipment") or {}).get("lrn")):
         raise HTTPException(status_code=400, detail="This order already has a booked label. Cancel the label before changing the courier.")
     # Carrier risk is a DTDC charge the customer has been billed for.
     if order.get("carrier_risk_applicable") and courier != "DTDC":
@@ -9084,6 +9600,12 @@ async def shipments_labels(ids: str, token: str = "", user=None):
                 missing.append(num)
         elif (o.get("shiprocket_shipment") or {}).get("shipment_id"):
             sr_ids.append(o["shiprocket_shipment"]["shipment_id"])
+        elif (o.get("delhivery_b2b_shipment") or {}).get("lrn"):
+            try:
+                full_pages.extend(_pdf_pages_jpg(await _dlvb_label_pdf(o["delhivery_b2b_shipment"]["lrn"])) or [])
+            except Exception as e:
+                logging.warning(f"delhivery b2b label: {e}")
+                missing.append(num)
         elif (o.get("delhivery_shipment") or {}).get("awb"):
             try:
                 quarter.extend(_pdf_pages_jpg(await _dlv_label_pdf(o["delhivery_shipment"]["awb"])) or [])
@@ -9129,10 +9651,10 @@ async def rates_compare(pincode: str, weight: float = 1.0, cod: bool = False, us
     groups = await asyncio.gather(
         _compare_dtdc(pincode, weight), _compare_anjani(pincode, weight, state),
         _compare_amazon(pincode, weight, cod), _compare_shiprocket(pincode, weight, cod),
-        _compare_delhivery(pincode, weight, cod),
+        _compare_delhivery(pincode, weight, cod), _compare_delhivery_b2b(pincode, weight, cod),
         return_exceptions=True)
     options = []
-    for name, g in zip(("DTDC", "Anjani", "Amazon Shipping", "Shiprocket", "Delhivery"), groups):
+    for name, g in zip(("DTDC", "Anjani", "Amazon Shipping", "Shiprocket", "Delhivery", "Delhivery B2B"), groups):
         if isinstance(g, Exception):
             logging.error(f"compare/{name}: {g}")
             options.append({"carrier": name, "service": "", "serviceable": None, "note": "Could not check right now"})
