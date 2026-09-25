@@ -9472,6 +9472,42 @@ async def delhivery_b2b_dispatch(req: DelhiveryB2BDispatchRequest, user=Depends(
     return await _delhivery_b2b_mark_dispatched(order, datetime.now(timezone.utc).isoformat(), user["name"], docket)
 
 
+# Documented B2B status codes that mean the parcel has left us. MANIFESTED and
+# NOT_PICKED never count; anything later in the journey does.
+DLVB_GONE_STATUSES = {"PICKED_UP", "LEFT_ORIGIN", "REACH_DESTINATION", "UNDEL_REATTEMPT", "PART_DEL", "OFD", "DELIVERED"}
+
+
+def _dlvb_statuses(data) -> tuple:
+    """(set of status codes found under any *status* key, ISO time of the PICKED_UP event or "")."""
+    found, when = set(), ""
+
+    def walk(x):
+        nonlocal when
+        if isinstance(x, dict):
+            st = None
+            for k, v in x.items():
+                if "status" in k.lower() and isinstance(v, str):
+                    st = v.strip().upper().replace(" ", "_")
+                    found.add(st)
+            if st == "PICKED_UP" and not when:
+                for k, v in x.items():
+                    if isinstance(v, str) and any(t in k.lower() for t in ("time", "date")) and len(v) >= 16:
+                        try:
+                            dt = datetime.fromisoformat(v.replace("Z", "+00:00")[:25])
+                            when = (dt if dt.tzinfo else dt.replace(tzinfo=IST)).astimezone(timezone.utc).isoformat()
+                        except ValueError:
+                            pass
+                        break
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(data)
+    return found, when
+
+
 async def _delhivery_b2b_sync_all() -> int:
     n = 0
     async for o in db.orders.find({"delhivery_b2b_shipment.lrn": {"$nin": ["", None]},
@@ -9484,11 +9520,10 @@ async def _delhivery_b2b_sync_all() -> int:
             continue
         if code != 200:
             continue
-        blob = json.dumps((d or {}).get("data") or d or {}).lower()
-        gone = any(w in blob for w in ('"picked up"', "in transit", "in-transit", "dispatched", "delivered", "out for delivery", "reached"))
-        if not gone:
+        statuses, when = _dlvb_statuses((d or {}).get("data") or d or {})
+        if not (statuses & DLVB_GONE_STATUSES):
             continue
-        await _delhivery_b2b_mark_dispatched(o, datetime.now(timezone.utc).isoformat(), "Delhivery B2B (auto)", lrn)
+        await _delhivery_b2b_mark_dispatched(o, when or datetime.now(timezone.utc).isoformat(), "Delhivery B2B (auto)", lrn)
         n += 1
         logging.info(f"Delhivery B2B pickup: {o.get('order_number')} dispatched")
     return n
