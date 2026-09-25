@@ -9517,6 +9517,44 @@ async def delhivery_b2b_sync_now(user=Depends(get_current_user)):
     return {"count": await _delhivery_b2b_sync_all()}
 
 
+class AttachLRRequest(BaseModel):
+    order_id: str
+    lrn: str
+
+
+@api_router.post("/delhivery-b2b/attach")
+async def delhivery_b2b_attach(req: AttachLRRequest, user=Depends(get_current_user)):
+    """Link an LR that was booked directly on the Delhivery portal to an OMS order.
+    Books nothing and charges nothing - it only lets the pickup poller dispatch
+    the order (and WhatsApp the customer) when Delhivery collects it."""
+    _dlvb_require(user)
+    lrn = re.sub(r"\D", "", req.lrn or "")
+    if not re.fullmatch(r"[1-9][0-9]{8}", lrn):
+        raise HTTPException(status_code=400, detail="A Delhivery B2B LR number is 9 digits")
+    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if (order.get("status") or "") in ("cancelled", "dispatched"):
+        raise HTTPException(status_code=400, detail=f"Order is already {order.get('status')}")
+    other = await db.orders.find_one({"delhivery_b2b_shipment.lrn": lrn, "id": {"$ne": req.order_id}}, {"_id": 0, "order_number": 1})
+    if other:
+        raise HTTPException(status_code=400, detail=f"LR {lrn} is already linked to {other.get('order_number')}")
+    code, d = await _dlvb_call("GET", "/lrn/track", params={"lrnum": lrn})
+    if code != 200 or not (d or {}).get("success", True):
+        raise HTTPException(status_code=400, detail=f"Delhivery does not know LR {lrn} on this account: {_dlvb_err(d)}")
+    code2, f = await _dlvb_call("GET", "/lrn/freight-breakup", params={"lrns": lrn})
+    now = datetime.now(timezone.utc).isoformat()
+    shipment = {"lrn": lrn, "awb": lrn, "tracking_id": lrn, "courier_name": "Delhivery B2B (LTL)", "attached": True,
+                "attached_by": user["name"], "attached_at": now, "booked_at": now, "booked_by": "Delhivery portal",
+                "freight": (f or {}).get("data") if code2 == 200 else None,
+                "weight_kg": float(str((order.get("packaging") or {}).get("weight_kg") or 0).strip() or 0)}
+    await db.orders.update_one({"id": req.order_id}, {"$set": {
+        "delhivery_b2b_shipment": shipment, "courier_name": "Delhivery B2B", "transporter_name": "Delhivery B2B",
+        "shipping_method": "transport", "updated_at": now}})
+    logging.info(f"{user['name']} attached Delhivery B2B LR {lrn} to {order.get('order_number')}")
+    return {"ok": True, "lrn": lrn, "track": d}
+
+
 @api_router.get("/delhivery-b2b/track/{lrn}")
 async def delhivery_b2b_track(lrn: str, user=Depends(get_current_user)):
     """Raw Delhivery B2B tracking + freight breakup for one LR (read-only)."""
