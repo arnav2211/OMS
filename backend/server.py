@@ -9661,24 +9661,40 @@ async def delhivery_b2b_bulk_cancel(req: BulkBookRequest, user=Depends(get_curre
 
 
 async def _dlvb_label_pdf(lrn: str) -> bytes:
-    """Shipping label (std size) as PDF bytes; falls back to the LR copy."""
-    for path in (f"/label/get_urls/std/{lrn}", f"/lr_copy/print/{lrn}"):
-        code, d = await _dlvb_call("GET", path)
-        data = (d or {}).get("data") if isinstance(d, dict) else None
+    """Shipping label (std size, one page per box) as PDF bytes; the LR copy as fallback.
+    Both the label links and the LR copy need the login token."""
+    token = await _dlvb_auth()
+    h = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+        r = await c.get(f"{DLVB_BASE}/label/get_urls/std/{lrn}", headers=h)
         urls = []
-        if isinstance(data, dict):
-            for k, v in data.items():
-                if isinstance(v, str) and v.startswith("http"):
-                    urls.append(v)
-                elif isinstance(v, list):
-                    urls += [x for x in v if isinstance(x, str) and x.startswith("http")]
-        elif isinstance(data, list):
+        try:
+            data = (r.json() or {}).get("data") if r.status_code == 200 else None
+        except Exception:
+            data = None
+        if isinstance(data, list):
             urls = [x for x in data if isinstance(x, str) and x.startswith("http")]
-        elif isinstance(data, str) and data.startswith("http"):
-            urls = [data]
-        if urls:
-            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
-                return (await c.get(urls[0])).content
+        elif isinstance(data, dict):
+            urls = [v for v in data.values() if isinstance(v, str) and v.startswith("http")]
+        pdfs = []
+        for u in urls[:10]:
+            rr = await c.get(u, headers=h)
+            if rr.status_code == 200 and rr.content[:4] == b"%PDF":
+                pdfs.append(rr.content)
+        if len(pdfs) == 1:
+            return pdfs[0]
+        if pdfs:
+            from pypdf import PdfReader, PdfWriter
+            w = PdfWriter()
+            for b in pdfs:
+                for pg in PdfReader(io.BytesIO(b)).pages:
+                    w.add_page(pg)
+            out = io.BytesIO()
+            w.write(out)
+            return out.getvalue()
+        rr = await c.get(f"{DLVB_BASE}/lr_copy/print/{lrn}", headers=h)
+        if rr.status_code == 200 and rr.content[:4] == b"%PDF":
+            return rr.content
     raise RuntimeError(f"no label for LR {lrn}")
 
 
@@ -9766,6 +9782,12 @@ def _dlvb_statuses(data) -> tuple:
                 if "status" in k.lower() and isinstance(v, str):
                     st = v.strip().upper().replace(" ", "_")
                     found.add(st)
+            # Delhivery puts the pickup moment in `pickup_date` on each waybill.
+            if not when and isinstance(x.get("pickup_date"), str) and len(x["pickup_date"]) >= 16:
+                try:
+                    when = datetime.fromisoformat(x["pickup_date"][:19]).replace(tzinfo=IST).astimezone(timezone.utc).isoformat()
+                except ValueError:
+                    pass
             if st == "PICKED_UP" and not when:
                 for k, v in x.items():
                     if isinstance(v, str) and any(t in k.lower() for t in ("time", "date")) and len(v) >= 16:
