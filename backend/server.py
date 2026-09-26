@@ -6049,6 +6049,8 @@ async def dispatch_amazon_order(order_id: str, data: dict = {}, user=Depends(get
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
+    if order.get("ship_type") != "self_ship":
+        raise HTTPException(status_code=400, detail="Easy Ship orders are dispatched automatically when Amazon's courier scans the pickup - nothing to do by hand")
     dispatch = {
         "dispatched_at": datetime.now(timezone.utc).isoformat(),
         "dispatched_by": user["username"],
@@ -6079,7 +6081,8 @@ async def bulk_dispatch_amazon(data: dict, user=Depends(get_current_user)):
     dispatched = 0
     for oid in order_ids:
         order = await db.amazon_orders.find_one({"id": oid}, {"_id": 0})
-        if not order or order.get("status") == "dispatched":
+        # Easy Ship leaves only when Amazon's courier scans it; never by hand.
+        if not order or order.get("status") == "dispatched" or order.get("ship_type") != "self_ship":
             continue
         dispatch_data = {
             "dispatched_at": datetime.now(timezone.utc).isoformat(),

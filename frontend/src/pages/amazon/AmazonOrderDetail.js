@@ -50,7 +50,8 @@ export default function AmazonOrderDetail() {
   const canEditCourier = ["admin", "packaging", "dispatch"].includes(user?.role) && order?.status !== "dispatched" && order?.ship_type === "self_ship";
 
   const canEditPackaging = isAdmin || (isPacking && order?.status !== "dispatched");
-  const canDispatch = ["admin", "packaging", "dispatch"].includes(user?.role) && order?.status === "packed";
+  // Easy Ship is dispatched by Amazon's pickup scan; only self-ship is dispatched by hand.
+  const canDispatch = ["admin", "packaging", "dispatch"].includes(user?.role) && order?.status === "packed" && order?.ship_type === "self_ship";
   const isDispatched = order?.status === "dispatched";
 
   useEffect(() => { loadOrder(); loadStaff(); }, [id]);

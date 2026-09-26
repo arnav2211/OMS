@@ -120,12 +120,8 @@ export default function AmazonDispatch() {
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between flex-wrap gap-2">
-                <CardTitle className="text-base">Easy Ship Orders — Ready for Dispatch</CardTitle>
-                {easyShipOrders.length > 0 && (
-                  <Button size="sm" onClick={bulkDispatchEasy} disabled={dispatching || selectedEasy.size === 0} data-testid="bulk-dispatch-easy">
-                    <Truck className="w-4 h-4 mr-1" /> Dispatch Selected ({selectedEasy.size})
-                  </Button>
-                )}
+                <CardTitle className="text-base">Easy Ship Orders — Waiting for Amazon Pickup</CardTitle>
+                <span className="text-xs text-muted-foreground">Dispatched automatically when Amazon's courier scans the pickup.</span>
               </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -133,13 +129,11 @@ export default function AmazonDispatch() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-10">
-                        <Checkbox checked={easyShipOrders.length > 0 && selectedEasy.size === easyShipOrders.length} onCheckedChange={selectAllEasy} data-testid="select-all-easy" />
-                      </TableHead>
                       <TableHead className="text-xs uppercase">Order</TableHead>
                       <TableHead className="text-xs uppercase">Customer</TableHead>
                       <TableHead className="text-xs uppercase">Amount</TableHead>
                       <TableHead className="text-xs uppercase">Status</TableHead>
+                      <TableHead className="text-xs uppercase">Amazon</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -147,14 +141,12 @@ export default function AmazonDispatch() {
                     {easyShipOrders.map(o => (
                       <TableRow key={o.id} data-testid={`easy-row-${o.id}`}>
                         <TableCell>
-                          <Checkbox checked={selectedEasy.has(o.id)} onCheckedChange={() => toggleEasySelect(o.id)} />
-                        </TableCell>
-                        <TableCell>
                           <Link to={`/amazon-orders/${o.id}`} className="font-mono text-sm text-primary hover:underline">{o.am_order_number}</Link>
                         </TableCell>
                         <TableCell className="text-sm">{o.customer_name}</TableCell>
                         <TableCell className="text-sm font-mono">{"\u20B9"}{o.grand_total?.toLocaleString("en-IN")}</TableCell>
                         <TableCell><Badge variant="outline" className="text-xs capitalize">{o.status}</Badge></TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{o.easy_ship_status || o.amazon_status || "—"}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
