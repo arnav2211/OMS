@@ -6103,10 +6103,11 @@ async def update_amazon_courier(order_id: str, data: dict, user=Depends(get_curr
     if order.get("status") == "dispatched":
         raise HTTPException(status_code=400, detail="Cannot modify dispatched order")
     courier_name = data.get("courier_name", "")
-    await db.amazon_orders.update_one(
-        {"id": order_id},
-        {"$set": {"courier_name": courier_name, "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
+    upd = {"courier_name": courier_name, "updated_at": datetime.now(timezone.utc).isoformat()}
+    # The Shiprocket carrier picked with live fares; booking preselects it.
+    sr = data.get("shiprocket_courier")
+    upd["shiprocket_courier"] = sr if (courier_name or "").lower().startswith("shiprocket") and isinstance(sr, dict) else None
+    await db.amazon_orders.update_one({"id": order_id}, {"$set": upd})
     return {"status": "updated", "courier_name": courier_name}
 
 

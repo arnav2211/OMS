@@ -4,6 +4,7 @@ import api from "@/lib/api";
 import { compressImage } from "@/lib/compressImage";
 import { useAuth } from "@/contexts/AuthContext";
 import OrderWorkStrip from "@/components/OrderWorkStrip";
+import ShiprocketCarrierPick from "@/components/ShiprocketCarrierPick";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,7 @@ export default function AmazonOrderDetail() {
   const [lrValidationError, setLrValidationError] = useState("");
   const [editingCourier, setEditingCourier] = useState(false);
   const [courierValue, setCourierValue] = useState("");
+  const [srPick, setSrPick] = useState(null);
 
   const COURIERS = COURIER_DROPDOWN;
   const canEditCourier = ["admin", "packaging", "dispatch"].includes(user?.role) && order?.status !== "dispatched" && order?.ship_type === "self_ship";
@@ -112,7 +114,8 @@ export default function AmazonOrderDetail() {
   const saveCourier = async () => {
     if (!courierValue) return toast.error("Select a courier");
     try {
-      await api.put(`/amazon/orders/${id}/courier`, { courier_name: courierValue });
+      if (courierValue === "Shiprocket" && !srPick) return toast.error("Pick a Shiprocket carrier first");
+      await api.put(`/amazon/orders/${id}/courier`, { courier_name: courierValue, shiprocket_courier: courierValue === "Shiprocket" ? srPick : null });
       toast.success("Courier updated");
       setEditingCourier(false);
       loadOrder();
@@ -188,7 +191,7 @@ export default function AmazonOrderDetail() {
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Courier</span>
               {editingCourier ? (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap justify-end">
                   <Select value={courierValue} onValueChange={setCourierValue}>
                     <SelectTrigger className="w-36 h-8 text-xs" data-testid="courier-edit-select"><SelectValue placeholder="Select" /></SelectTrigger>
                     <SelectContent>{COURIERS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
@@ -198,15 +201,21 @@ export default function AmazonOrderDetail() {
                 </div>
               ) : (
                 <div className="flex items-center gap-1">
-                  <span className="text-sm">{order.courier_name || <span className="italic text-muted-foreground">Not set</span>}</span>
+                  <span className="text-sm">{order.courier_name || <span className="italic text-muted-foreground">Not set</span>}
+                    {order.courier_name === "Shiprocket" && order.shiprocket_courier?.name && <span className="text-muted-foreground"> · {order.shiprocket_courier.name} ₹{Number(order.shiprocket_courier.rate).toFixed(0)}</span>}
+                  </span>
                   {canEditCourier && (
-                    <button onClick={() => { setCourierValue(order.courier_name || ""); setEditingCourier(true); }} className="p-1 hover:bg-accent rounded" data-testid="edit-courier-btn">
+                    <button onClick={() => { setCourierValue(order.courier_name || ""); setSrPick(order.shiprocket_courier || null); setEditingCourier(true); }} className="p-1 hover:bg-accent rounded" data-testid="edit-courier-btn">
                       <Edit2 className="w-3 h-3 text-muted-foreground" />
                     </button>
                   )}
                 </div>
               )}
             </div>
+          )}
+          {order.ship_type === "self_ship" && editingCourier && courierValue === "Shiprocket" && (
+            <ShiprocketCarrierPick pincode={(String(order.address || "").match(/(\d{6})/) || [])[1]} cod={!!order.is_cod}
+                                   value={srPick || (order.packaging?.weight_kg ? { weight_kg: order.packaging.weight_kg } : null)} onChange={setSrPick} />
           )}
           {order.dispatch?.lr_number && (
             <div className="flex justify-between items-center">
