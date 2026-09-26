@@ -58,6 +58,9 @@ export default function OrderDetail() {
   const [formulationVisible, setFormulationVisible] = useState(true);
   const [packagingStaff, setPackagingStaff] = useState([]);
   const [dispatchData, setDispatchData] = useState({ courier_name: "", transporter_name: "", lr_no: "", dispatch_type: "", porter_link: "" });
+  // Delhivery B2B: LR booked on the portal, linked from the order page
+  const [lrAttach, setLrAttach] = useState("");
+  const [lrAttaching, setLrAttaching] = useState(false);
   const [dispatchSlipImages, setDispatchSlipImages] = useState([]);
   const [lrValidationError, setLrValidationError] = useState("");
   const [porterPasteText, setPorterPasteText] = useState("");
@@ -312,8 +315,6 @@ export default function OrderDetail() {
     && (["admin", "dispatch", "accounts"].includes(user?.role) || (user?.role === "telecaller" && order.telecaller_id === user?.id));
   // Delhivery B2B LR booked on Delhivery's own portal: link it here so the
   // pickup poller can dispatch the order (and WhatsApp the customer).
-  const [lrAttach, setLrAttach] = useState("");
-  const [lrAttaching, setLrAttaching] = useState(false);
   const canAttachLr = !isDispatched && (order.courier_name || "").toLowerCase().startsWith("delhivery b2b")
     && !order.delhivery_b2b_shipment?.lrn && ["admin", "dispatch", "packaging", "accounts"].includes(user?.role);
   const attachLr = async () => {
