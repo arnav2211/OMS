@@ -11325,6 +11325,14 @@ async def _shopify_fulfill(order: dict, by: str = "auto", force: bool = False) -
 async def _shopify_fulfil_sweep():
     if not _shopify_configured():
         return
+    if not SHOPIFY["token"]:
+        # Until the store approves the app's order permissions, wait without
+        # spending retry attempts; re-fetch the token so an approval is picked up.
+        if "read_orders" not in (_shopify_token.get("scope") or ""):
+            _shopify_token.update(token="", expires=0.0)
+            await _shopify_access_token()
+            if "read_orders" not in (_shopify_token.get("scope") or ""):
+                return
     q = {"website_order": True, "status": "dispatched", "dispatch.dispatched_at": {"$gte": SHOPIFY_FULFIL_SINCE},
          "shopify_fulfillment.status": {"$ne": "fulfilled"},
          "$or": [{"shopify_fulfillment.attempts": {"$exists": False}}, {"shopify_fulfillment.attempts": {"$lt": 8}}]}
