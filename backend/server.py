@@ -626,6 +626,9 @@ class OrderCreate(BaseModel):
     # Carrier the telecaller picked from Shiprocket's live quote while making the
     # order: {courier_id, name, rate, weight_kg, cod, quoted_at}. Booking preselects it.
     shiprocket_courier: Optional[dict] = None
+    # Set by the CRM for website orders: the Shopify order this one mirrors.
+    shopify_order_id: str = ""
+    shopify_order_name: str = ""
 
 class FormulationUpdate(BaseModel):
     items: List[Dict[str, Any]]
@@ -1340,6 +1343,8 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "grand_total": grand_total,
         "discount": discount,
         "website_order": is_website,
+        "shopify_order_id": (req.shopify_order_id or "").strip(),
+        "shopify_order_name": (req.shopify_order_name or "").strip(),
         "discount_enabled": (not is_website) and bool(req.discount_enabled),
         "discount_mode": req.discount_mode or "total",
         "discount_value": float(req.discount_value or 0),
@@ -11200,6 +11205,126 @@ async def _start_spapi_sync():
     if _spapi_configured():
         asyncio.create_task(_spapi_sync_loop())
         logging.info(f"Amazon seller order sync every {SPAPI_SYNC_INTERVAL_SECONDS}s")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# WEBSITE ORDERS → SHOPIFY. When a website order is dispatched, the matching
+# Shopify order is fulfilled with the carrier and tracking number, so Shopify
+# shows it shipped and mails the customer. A sweep retries every 5 minutes.
+# ═══════════════════════════════════════════════════════════════════════════
+SHOPIFY = {
+    "domain": os.environ.get("SHOPIFY_SHOP_DOMAIN", "").strip().replace("https://", "").rstrip("/"),
+    "token": os.environ.get("SHOPIFY_ADMIN_TOKEN", "").strip(),
+    "api": os.environ.get("SHOPIFY_API_VERSION", "2024-10").strip(),
+}
+SHOPIFY_FULFIL_SINCE = os.environ.get("SHOPIFY_FULFIL_SINCE", "2026-09-26T00:00:00+00:00")
+SHOPIFY_NOTIFY_WITHIN_DAYS = 3          # older dispatches are marked fulfilled quietly
+
+
+def _shopify_configured() -> bool:
+    return bool(SHOPIFY["domain"] and SHOPIFY["token"])
+
+
+async def _shopify_call(method: str, path: str, **kw) -> tuple:
+    async with httpx.AsyncClient(timeout=40) as c:
+        r = await c.request(method, f"https://{SHOPIFY['domain']}/admin/api/{SHOPIFY['api']}{path}",
+                            headers={"X-Shopify-Access-Token": SHOPIFY["token"], "Content-Type": "application/json"}, **kw)
+    try:
+        return r.status_code, r.json()
+    except Exception:
+        return r.status_code, {"raw": r.text[:300]}
+
+
+async def _shopify_fulfill(order: dict, by: str = "auto", force: bool = False) -> dict:
+    prev = order.get("shopify_fulfillment") or {}
+    if prev.get("status") == "fulfilled" and not force:
+        return prev
+    rec = {"attempts": int(prev.get("attempts") or 0) + 1, "at": datetime.now(timezone.utc).isoformat(), "by": by}
+    sid = str(order.get("shopify_order_id") or "").strip()
+    d = order.get("dispatch") or {}
+    lr = (d.get("lr_no") or "").strip()
+    if not _shopify_configured():
+        rec.update(status="failed", error="Shopify is not configured on the server (SHOPIFY_SHOP_DOMAIN / SHOPIFY_ADMIN_TOKEN)")
+    elif not sid:
+        rec.update(status="failed", error="Order has no Shopify order id")
+    elif not lr:
+        rec.update(status="failed", error="No tracking / LR number on the dispatch yet")
+    else:
+        try:
+            code, fo = await _shopify_call("GET", f"/orders/{sid}/fulfillment_orders.json")
+            fos = [x for x in ((fo or {}).get("fulfillment_orders") or []) if x.get("status") in ("open", "in_progress", "scheduled")]
+            if code != 200:
+                rec.update(status="failed", error=f"Shopify {code}: {str(fo)[:200]}")
+            elif not fos:
+                already = [x for x in ((fo or {}).get("fulfillment_orders") or []) if x.get("status") == "closed"]
+                rec.update(status="fulfilled" if already else "failed",
+                           error="" if already else "Shopify has nothing left to fulfil on this order", note="already fulfilled on Shopify" if already else "")
+            else:
+                courier = _dispatch_courier_label(order) if (d.get("dispatch_type") or order.get("shipping_method")) != "transport" \
+                    else (d.get("transporter_name") or order.get("transporter_name") or "Transport")
+                url = _dispatch_tracking_url(d.get("courier_name") or order.get("courier_name") or "", lr)
+                try:
+                    when = datetime.fromisoformat(str(d.get("dispatched_at") or "").replace("Z", "+00:00"))
+                except ValueError:
+                    when = datetime.now(timezone.utc)
+                recent = (datetime.now(timezone.utc) - when) <= timedelta(days=SHOPIFY_NOTIFY_WITHIN_DAYS)
+                body = {"fulfillment": {
+                    "line_items_by_fulfillment_order": [{"fulfillment_order_id": x["id"]} for x in fos],
+                    "tracking_info": {"number": lr, "company": courier, **({"url": url} if url else {})},
+                    "notify_customer": bool(recent)}}
+                code, res = await _shopify_call("POST", "/fulfillments.json", json=body)
+                f = (res or {}).get("fulfillment") or {}
+                if code in (200, 201) and f.get("id"):
+                    rec.update(status="fulfilled", fulfillment_id=f["id"], carrier=courier, tracking=lr, url=url,
+                               notified_customer=bool(recent), error="")
+                else:
+                    rec.update(status="failed", error=f"Shopify {code}: {str(res)[:240]}")
+        except Exception as e:
+            rec.update(status="failed", error=str(e)[:240])
+    await db.orders.update_one({"id": order["id"]}, {"$set": {"shopify_fulfillment": rec}})
+    if rec["status"] != "fulfilled":
+        logging.warning(f"shopify fulfil {order.get('order_number')}: {rec.get('error')}")
+    return rec
+
+
+async def _shopify_fulfil_sweep():
+    if not _shopify_configured():
+        return
+    q = {"website_order": True, "status": "dispatched", "dispatch.dispatched_at": {"$gte": SHOPIFY_FULFIL_SINCE},
+         "shopify_fulfillment.status": {"$ne": "fulfilled"},
+         "$or": [{"shopify_fulfillment.attempts": {"$exists": False}}, {"shopify_fulfillment.attempts": {"$lt": 8}}]}
+    async for o in db.orders.find(q, {"_id": 0}).limit(20):
+        await _shopify_fulfill(o)
+
+
+async def _shopify_fulfil_loop():
+    await asyncio.sleep(90)
+    while True:
+        try:
+            await _shopify_fulfil_sweep()
+        except Exception as e:
+            logging.error(f"shopify fulfil sweep: {e}")
+        await asyncio.sleep(300)
+
+
+@app.on_event("startup")
+async def _start_shopify_fulfil():
+    asyncio.create_task(_shopify_fulfil_loop())
+    logging.info("Shopify fulfilment sweep " + ("on" if _shopify_configured() else "idle - not configured"))
+
+
+@api_router.post("/orders/{order_id}/shopify-fulfill")
+async def shopify_fulfill_now(order_id: str, user=Depends(get_current_user)):
+    if user["role"] not in ("admin", "dispatch", "accounts"):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not order.get("website_order"):
+        raise HTTPException(status_code=400, detail="Not a website order")
+    if order.get("status") != "dispatched":
+        raise HTTPException(status_code=400, detail="Order is not dispatched yet")
+    return await _shopify_fulfill(order, by=user["name"], force=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

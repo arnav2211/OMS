@@ -730,6 +730,25 @@ export default function OrderDetail() {
                 <span className="text-sm" data-testid="order-transporter-name">{order.dispatch?.transporter_name || order.transporter_name}</span>
               </div>
             )}
+            {isDispatched && order.website_order && (
+              <div className="flex justify-between items-start gap-2">
+                <span className="text-sm text-muted-foreground">Shopify</span>
+                <span className="text-sm text-right" data-testid="order-shopify-fulfil">
+                  {order.shopify_fulfillment?.status === "fulfilled"
+                    ? <span className="text-emerald-700 dark:text-emerald-400">marked shipped{order.shopify_fulfillment.carrier ? ` · ${order.shopify_fulfillment.carrier}` : ""}{order.shopify_fulfillment.notified_customer ? " · customer emailed" : ""}</span>
+                    : <span className="text-amber-700 dark:text-amber-300">not yet marked shipped{order.shopify_fulfillment?.error ? `: ${order.shopify_fulfillment.error}` : ""}</span>}
+                  {["admin", "dispatch", "accounts"].includes(user?.role) && order.shopify_fulfillment?.status !== "fulfilled" && (
+                    <button type="button" className="ml-2 underline text-primary text-xs" data-testid="order-shopify-fulfil-btn" onClick={async () => {
+                      try {
+                        const r = await api.post(`/orders/${order.id}/shopify-fulfill`);
+                        if (r.data.status === "fulfilled") toast.success("Marked shipped on Shopify"); else toast.error(r.data.error || "Shopify refused", { duration: 9000 });
+                        loadOrder();
+                      } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+                    }}>Mark shipped on Shopify</button>
+                  )}
+                </span>
+              </div>
+            )}
             {isDispatched && ["courier", "transport"].includes(activeShippingMethod) && (
               <div className="flex justify-between items-start gap-2">
                 <span className="text-sm text-muted-foreground">Customer WhatsApp</span>
