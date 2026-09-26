@@ -310,6 +310,24 @@ export default function OrderDetail() {
   const notifyOk = notify && ["sent", "sent_mock", "delivered", "read", "already_sent"].includes(notify.status);
   const canNotify = isDispatched && ["courier", "transport"].includes(activeShippingMethod)
     && (["admin", "dispatch", "accounts"].includes(user?.role) || (user?.role === "telecaller" && order.telecaller_id === user?.id));
+  // Delhivery B2B LR booked on Delhivery's own portal: link it here so the
+  // pickup poller can dispatch the order (and WhatsApp the customer).
+  const [lrAttach, setLrAttach] = useState("");
+  const [lrAttaching, setLrAttaching] = useState(false);
+  const canAttachLr = !isDispatched && (order.courier_name || "").toLowerCase().startsWith("delhivery b2b")
+    && !order.delhivery_b2b_shipment?.lrn && ["admin", "dispatch", "packaging", "accounts"].includes(user?.role);
+  const attachLr = async () => {
+    const lrn = lrAttach.replace(/\D/g, "");
+    if (lrn.length !== 9) return toast.error("A Delhivery B2B LR number has 9 digits");
+    setLrAttaching(true);
+    try {
+      await api.post("/delhivery-b2b/attach", { order_id: order.id, lrn });
+      toast.success(`LR ${lrn} linked - the order dispatches itself when Delhivery reports the pickup`);
+      setLrAttach("");
+      loadOrder();
+    } catch (err) { toast.error(err.response?.data?.detail || "Could not link the LR", { duration: 9000 }); }
+    finally { setLrAttaching(false); }
+  };
   const sendDispatchWhatsApp = async () => {
     if (notifyOk && !window.confirm("The customer already got the dispatch message. Send it again?")) return;
     try {
@@ -689,6 +707,21 @@ export default function OrderDetail() {
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Shiprocket carrier (booked)</span>
                 <span className="text-sm">{order.shiprocket_shipment.courier_name} · AWB {order.shiprocket_shipment.awb}</span>
+              </div>
+            )}
+            {order.delhivery_b2b_shipment?.lrn && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Delhivery B2B LR</span>
+                <span className="text-sm font-mono" data-testid="order-b2b-lrn">{order.delhivery_b2b_shipment.lrn}{order.delhivery_b2b_shipment.attached ? " (linked from portal)" : ""}</span>
+              </div>
+            )}
+            {canAttachLr && (
+              <div className="rounded-md border border-cyan-300 bg-cyan-50 dark:bg-cyan-950/20 p-3 space-y-1.5" data-testid="order-b2b-attach">
+                <p className="text-xs text-cyan-900 dark:text-cyan-200">Booked on the Delhivery B2B portal? Paste the 9-digit LR number so the OMS can track the pickup and dispatch this order automatically.</p>
+                <div className="flex gap-2">
+                  <Input value={lrAttach} onChange={e => setLrAttach(e.target.value.replace(/\D/g, "").slice(0, 9))} placeholder="LR number" inputMode="numeric" className="h-8 w-40 font-mono" data-testid="order-b2b-lrn-input" />
+                  <Button size="sm" className="h-8" onClick={attachLr} disabled={lrAttaching || lrAttach.length !== 9} data-testid="order-b2b-attach-btn">{lrAttaching ? "Linking..." : "Link LR"}</Button>
+                </div>
               </div>
             )}
             {activeShippingMethod === "transport" && (order.dispatch?.transporter_name || order.transporter_name) && (
