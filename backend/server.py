@@ -11214,25 +11214,56 @@ async def _start_spapi_sync():
 # ═══════════════════════════════════════════════════════════════════════════
 SHOPIFY = {
     "domain": os.environ.get("SHOPIFY_SHOP_DOMAIN", "").strip().replace("https://", "").rstrip("/"),
-    "token": os.environ.get("SHOPIFY_ADMIN_TOKEN", "").strip(),
-    "api": os.environ.get("SHOPIFY_API_VERSION", "2024-10").strip(),
+    # Dev Dashboard app installed on our own store: the token comes from the
+    # client-credentials grant (valid ~24 h, refreshed automatically).
+    "client_id": os.environ.get("SHOPIFY_CLIENT_ID", "").strip(),
+    "client_secret": os.environ.get("SHOPIFY_CLIENT_SECRET", "").strip(),
+    "token": os.environ.get("SHOPIFY_ADMIN_TOKEN", "").strip(),     # optional static token instead
+    "api": os.environ.get("SHOPIFY_API_VERSION", "2026-07").strip(),
 }
 SHOPIFY_FULFIL_SINCE = os.environ.get("SHOPIFY_FULFIL_SINCE", "2026-09-26T00:00:00+00:00")
 SHOPIFY_NOTIFY_WITHIN_DAYS = 3          # older dispatches are marked fulfilled quietly
+_shopify_token = {"token": "", "expires": 0.0}
 
 
 def _shopify_configured() -> bool:
-    return bool(SHOPIFY["domain"] and SHOPIFY["token"])
+    return bool(SHOPIFY["domain"] and (SHOPIFY["token"] or (SHOPIFY["client_id"] and SHOPIFY["client_secret"])))
 
 
-async def _shopify_call(method: str, path: str, **kw) -> tuple:
+async def _shopify_access_token() -> str:
+    import time
+    if SHOPIFY["token"]:
+        return SHOPIFY["token"]
+    if _shopify_token["token"] and _shopify_token["expires"] > time.time() + 300:
+        return _shopify_token["token"]
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(f"https://{SHOPIFY['domain']}/admin/oauth/access_token",
+                         data={"grant_type": "client_credentials", "client_id": SHOPIFY["client_id"],
+                               "client_secret": SHOPIFY["client_secret"]})
+    d = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    if r.status_code != 200 or not d.get("access_token"):
+        raise RuntimeError(f"Shopify token request failed ({r.status_code}): {r.text[:200]}")
+    _shopify_token.update(token=d["access_token"], expires=time.time() + int(d.get("expires_in") or 86399),
+                          scope=d.get("scope") or "")
+    return d["access_token"]
+
+
+async def _shopify_gql(query: str, variables: Optional[dict] = None) -> dict:
+    token = await _shopify_access_token()
     async with httpx.AsyncClient(timeout=40) as c:
-        r = await c.request(method, f"https://{SHOPIFY['domain']}/admin/api/{SHOPIFY['api']}{path}",
-                            headers={"X-Shopify-Access-Token": SHOPIFY["token"], "Content-Type": "application/json"}, **kw)
-    try:
-        return r.status_code, r.json()
-    except Exception:
-        return r.status_code, {"raw": r.text[:300]}
+        r = await c.post(f"https://{SHOPIFY['domain']}/admin/api/{SHOPIFY['api']}/graphql.json",
+                         json={"query": query, "variables": variables or {}},
+                         headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"})
+    d = r.json() if r.status_code == 200 else {"errors": [{"message": f"HTTP {r.status_code}: {r.text[:200]}"}]}
+    if d.get("errors"):
+        raise RuntimeError("; ".join(str(e.get("message", e)) for e in d["errors"])[:300])
+    return d.get("data") or {}
+
+
+_SHOPIFY_FO_QUERY = """query($id: ID!) { order(id: $id) { id name displayFulfillmentStatus
+  fulfillmentOrders(first: 20) { nodes { id status } } } }"""
+_SHOPIFY_FULFIL_MUTATION = """mutation($f: FulfillmentInput!) { fulfillmentCreate(fulfillment: $f) {
+  fulfillment { id status } userErrors { field message } } }"""
 
 
 async def _shopify_fulfill(order: dict, by: str = "auto", force: bool = False) -> dict:
@@ -11244,41 +11275,45 @@ async def _shopify_fulfill(order: dict, by: str = "auto", force: bool = False) -
     d = order.get("dispatch") or {}
     lr = (d.get("lr_no") or "").strip()
     if not _shopify_configured():
-        rec.update(status="failed", error="Shopify is not configured on the server (SHOPIFY_SHOP_DOMAIN / SHOPIFY_ADMIN_TOKEN)")
+        rec.update(status="failed", error="Shopify is not configured on the server")
     elif not sid:
         rec.update(status="failed", error="Order has no Shopify order id")
     elif not lr:
         rec.update(status="failed", error="No tracking / LR number on the dispatch yet")
     else:
         try:
-            code, fo = await _shopify_call("GET", f"/orders/{sid}/fulfillment_orders.json")
-            fos = [x for x in ((fo or {}).get("fulfillment_orders") or []) if x.get("status") in ("open", "in_progress", "scheduled")]
-            if code != 200:
-                rec.update(status="failed", error=f"Shopify {code}: {str(fo)[:200]}")
-            elif not fos:
-                already = [x for x in ((fo or {}).get("fulfillment_orders") or []) if x.get("status") == "closed"]
-                rec.update(status="fulfilled" if already else "failed",
-                           error="" if already else "Shopify has nothing left to fulfil on this order", note="already fulfilled on Shopify" if already else "")
+            gid = sid if sid.startswith("gid://") else f"gid://shopify/Order/{sid}"
+            o = (await _shopify_gql(_SHOPIFY_FO_QUERY, {"id": gid})).get("order")
+            if not o:
+                raise RuntimeError(f"Shopify has no order {sid} (or the app cannot read orders)")
+            fos = [x for x in o["fulfillmentOrders"]["nodes"] if x["status"] in ("OPEN", "IN_PROGRESS", "SCHEDULED")]
+            if not fos:
+                done = o.get("displayFulfillmentStatus") == "FULFILLED"
+                rec.update(status="fulfilled" if done else "failed", shopify_order=o.get("name"),
+                           note="already fulfilled on Shopify" if done else "",
+                           error="" if done else f"Nothing left to fulfil (Shopify status {o.get('displayFulfillmentStatus')})")
             else:
-                courier = _dispatch_courier_label(order) if (d.get("dispatch_type") or order.get("shipping_method")) != "transport" \
-                    else (d.get("transporter_name") or order.get("transporter_name") or "Transport")
+                transport = (d.get("dispatch_type") or order.get("shipping_method")) == "transport"
+                courier = (d.get("transporter_name") or order.get("transporter_name") or "Transport") if transport \
+                    else _dispatch_courier_label(order)
                 url = _dispatch_tracking_url(d.get("courier_name") or order.get("courier_name") or "", lr)
                 try:
                     when = datetime.fromisoformat(str(d.get("dispatched_at") or "").replace("Z", "+00:00"))
                 except ValueError:
                     when = datetime.now(timezone.utc)
                 recent = (datetime.now(timezone.utc) - when) <= timedelta(days=SHOPIFY_NOTIFY_WITHIN_DAYS)
-                body = {"fulfillment": {
-                    "line_items_by_fulfillment_order": [{"fulfillment_order_id": x["id"]} for x in fos],
-                    "tracking_info": {"number": lr, "company": courier, **({"url": url} if url else {})},
-                    "notify_customer": bool(recent)}}
-                code, res = await _shopify_call("POST", "/fulfillments.json", json=body)
-                f = (res or {}).get("fulfillment") or {}
-                if code in (200, 201) and f.get("id"):
-                    rec.update(status="fulfilled", fulfillment_id=f["id"], carrier=courier, tracking=lr, url=url,
-                               notified_customer=bool(recent), error="")
+                tracking = {"company": courier, "number": lr}
+                if url:
+                    tracking["url"] = url
+                res = (await _shopify_gql(_SHOPIFY_FULFIL_MUTATION, {"f": {
+                    "lineItemsByFulfillmentOrder": [{"fulfillmentOrderId": x["id"]} for x in fos],
+                    "notifyCustomer": bool(recent), "trackingInfo": tracking}})).get("fulfillmentCreate") or {}
+                errs = res.get("userErrors") or []
+                if res.get("fulfillment") and not errs:
+                    rec.update(status="fulfilled", fulfillment_id=res["fulfillment"]["id"], shopify_order=o.get("name"),
+                               carrier=courier, tracking=lr, url=url, notified_customer=bool(recent), error="")
                 else:
-                    rec.update(status="failed", error=f"Shopify {code}: {str(res)[:240]}")
+                    rec.update(status="failed", error="; ".join(e.get("message", "") for e in errs)[:240] or "Shopify returned no fulfillment")
         except Exception as e:
             rec.update(status="failed", error=str(e)[:240])
     await db.orders.update_one({"id": order["id"]}, {"$set": {"shopify_fulfillment": rec}})
