@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { RefreshCw, Camera, Image, Upload, X, CheckCircle } from "lucide-react";
 
@@ -180,6 +181,9 @@ function PackForm({ order, staffList, onSave, onCancel, saving }) {
   const [orderImages, setOrderImages] = useState(order.packaging?.order_images || []);
   const [packedBoxImages, setPackedBoxImages] = useState(order.packaging?.packed_box_images || []);
   const [uploading, setUploading] = useState(false);
+  const [weightKg, setWeightKg] = useState(order.packaging?.weight_kg || "");
+  const [numBoxes, setNumBoxes] = useState(order.packaging?.num_boxes || "1");
+  const selfShip = order.ship_type === "self_ship";
 
   const toggleStaff = (list, setList, name) => setList(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
 
@@ -247,6 +251,19 @@ function PackForm({ order, staffList, onSave, onCancel, saving }) {
           )}
         </div>
       ))}
+      {selfShip && (
+        <div className="grid grid-cols-2 gap-3 rounded-md border border-sky-300 bg-sky-50/60 dark:bg-sky-950/20 p-3">
+          <div>
+            <Label className="text-sm">Weight (KG) <span className="text-red-500">*</span></Label>
+            <Input type="number" step="0.001" min="0" value={weightKg} onChange={e => setWeightKg(e.target.value)} placeholder="Total weight of all boxes" data-testid="am-pkg-weight" />
+          </div>
+          <div>
+            <Label className="text-sm">Boxes</Label>
+            <Input type="number" min="1" value={numBoxes} onChange={e => setNumBoxes(e.target.value)} data-testid="am-pkg-boxes" />
+          </div>
+          <p className="col-span-2 text-[11px] text-muted-foreground">Self-ship order: we ship it ourselves, so the weight sends it to Book Shipments.</p>
+        </div>
+      )}
       <Separator />
       <Label className="text-sm font-medium">Packaging Images</Label>
       {order.items?.map(item => (
@@ -257,7 +274,7 @@ function PackForm({ order, staffList, onSave, onCancel, saving }) {
       {uploading && <p className="text-xs text-muted-foreground">Uploading...</p>}
       <DialogFooter>
         <Button variant="outline" onClick={onCancel}>Cancel</Button>
-        <Button onClick={() => onSave({ item_packed_by: itemPackedBy, box_packed_by: boxPackedBy, checked_by: checkedBy, item_images: itemImages, order_images: orderImages, packed_box_images: packedBoxImages })} disabled={saving || uploading}>
+        <Button onClick={() => onSave({ item_packed_by: itemPackedBy, box_packed_by: boxPackedBy, checked_by: checkedBy, item_images: itemImages, order_images: orderImages, packed_box_images: packedBoxImages, ...(selfShip ? { weight_kg: String(weightKg).trim(), num_boxes: String(numBoxes).trim() || "1" } : {}) })} disabled={saving || uploading}>
           {saving ? "Saving..." : "Save Packaging"}
         </Button>
       </DialogFooter>

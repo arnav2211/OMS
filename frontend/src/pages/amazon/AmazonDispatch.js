@@ -14,9 +14,10 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RefreshCw, Truck, Edit2 } from "lucide-react";
+import { COURIER_DROPDOWN } from "@/lib/courierTracking";
 import { validateLrNumber, COURIER_LR_PATTERNS } from "@/lib/courierTracking";
 
-const COURIERS = ["DTDC", "Anjani", "India Post", "Others"];
+const COURIERS = COURIER_DROPDOWN;
 
 export default function AmazonDispatch() {
   const { user } = useAuth();

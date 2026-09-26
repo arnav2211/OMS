@@ -5975,6 +5975,7 @@ async def get_amazon_order(order_id: str, user=Depends(get_current_user)):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     _pii_open(order)
+    order.pop("ship_to", None)          # served, access-checked, by /amazon/orders/{id}/ship-to
     if user["role"] not in PII_ROLES:
         _pii_mask(order)
     elif order.get("has_buyer_pii") and not order.get("pii_purged_at"):
@@ -5993,6 +5994,13 @@ async def update_amazon_packaging(order_id: str, updates: dict, user=Depends(get
         raise HTTPException(status_code=400, detail="Cannot modify dispatched order")
 
     packaging = order.get("packaging", {})
+    for key in ("num_boxes", "length_cm", "breadth_cm", "height_cm"):
+        if key in updates and str(updates[key] or "").strip():
+            packaging[key] = updates[key]
+    if "weight_kg" in updates and str(updates["weight_kg"] or "").strip():
+        packaging["weight_kg"] = str(updates["weight_kg"]).strip()
+        packaging["ready_to_book"] = True
+        packaging.setdefault("ready_to_book_at", datetime.now(timezone.utc).isoformat())
     for key in ["item_packed_by", "box_packed_by", "checked_by", "item_images", "order_images", "packed_box_images"]:
         if key in WORK_FIELD_STEP and user["role"] != "admin":
             continue                      # names come from My Work, never picked by hand
@@ -6050,11 +6058,15 @@ async def dispatch_amazon_order(order_id: str, data: dict = {}, user=Depends(get
         if not lr:
             raise HTTPException(status_code=400, detail="LR number is required for self ship orders")
         dispatch["lr_number"] = lr
+    if order.get("ship_type") == "self_ship":
+        dispatch["lr_no"] = dispatch["lr_number"]
+        dispatch.setdefault("courier_name", order.get("courier_name") or "")
     await db.amazon_orders.update_one(
         {"id": order_id},
         {"$set": {"status": "dispatched", "dispatch": dispatch, "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
-    return {"status": "dispatched"}
+    confirm = await _amz_confirm_shipment(order_id) if order.get("ship_type") == "self_ship" else None
+    return {"status": "dispatched", "amazon_confirm": confirm}
 
 
 @api_router.post("/amazon/orders/bulk-dispatch")
@@ -6464,7 +6476,7 @@ async def dtdc_bookable_orders(user=Depends(get_current_user)):
     """DTDC orders packing has weighed, with the account each would book on."""
     if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    orders = await db.orders.find({
+    orders = await ship_orders.find({
         "courier_name": {"$regex": r"^\s*dtdc", "$options": "i"},
         "status": {"$nin": ["cancelled", "dispatched"]},
         "$or": [{"packaging.weight_kg": {"$nin": ["", None]}},
@@ -6516,7 +6528,7 @@ async def dtdc_preview(req: DtdcBookRequest, user=Depends(get_current_user)):
     """Exactly what would be booked — account, service, charge. Books nothing."""
     if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     p = await _dtdc_prepare(order)
@@ -6534,7 +6546,7 @@ async def dtdc_book(req: DtdcBookRequest, user=Depends(get_current_user)):
     """BOOKS a real DTDC consignment on the routed account."""
     if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
         raise HTTPException(status_code=403, detail="Not authorized to book")
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("dtdc_shipment") or {}).get("reference_number") and not req.allow_rebook:
@@ -6595,7 +6607,7 @@ async def dtdc_book(req: DtdcBookRequest, user=Depends(get_current_user)):
         "booked_at": datetime.now(timezone.utc).isoformat(),
         "raw_response": str(data)[:1000],
     }
-    await db.orders.update_one({"id": req.order_id}, {"$set": {
+    await ship_orders.update_one({"id": req.order_id}, {"$set": {
         "dtdc_shipment": shipment,
         "courier_name": "DTDC",
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -6634,7 +6646,7 @@ async def _bulk_book(order_ids, book_one, user, label):
 
     booked, failed = [], []
     for oid in ordered:
-        order = await db.orders.find_one({"id": oid}, {"_id": 0, "order_number": 1})
+        order = await ship_orders.find_one({"id": oid}, {"_id": 0, "order_number": 1})
         num = (order or {}).get("order_number") or oid[:8]
         try:
             res = await book_one(oid)
@@ -6669,7 +6681,7 @@ class CancelLabelRequest(BaseModel):
 
 async def _dtdc_cancel_one(order_id: str, user) -> dict:
     """Cancels a booked DTDC consignment and clears it off the order."""
-    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     shp = order.get("dtdc_shipment") or {}
@@ -6696,7 +6708,7 @@ async def _dtdc_cancel_one(order_id: str, user) -> dict:
         logging.error(f"DTDC cancel failed for {awb}: {r.status_code} {str(data)[:400]}")
         raise HTTPException(status_code=400, detail=f"DTDC cancel failed: {str(data)[:300]}")
     now = datetime.now(timezone.utc).isoformat()
-    await db.orders.update_one({"id": order_id}, {
+    await ship_orders.update_one({"id": order_id}, {
         "$push": {"cancelled_shipments": {"courier": "DTDC", **shp,
                                           "cancelled_by": user["name"], "cancelled_at": now}},
         "$unset": {"dtdc_shipment": ""},
@@ -6742,7 +6754,7 @@ async def dtdc_labels_sheet(ids: str, token: str = "", user=None):
 
     images, missing = [], []
     for oid in order_ids:
-        o = await db.orders.find_one({"id": oid}, {"_id": 0})
+        o = await ship_orders.find_one({"id": oid}, {"_id": 0})
         sh = (o or {}).get("dtdc_shipment") or {}
         raw, media = await _dtdc_fetch_label_bytes(sh, order=o)
         if not raw:
@@ -6774,7 +6786,7 @@ async def dtdc_label(order_id: str, token: str = "", user=None):
         user = await get_user_from_token_param(token)
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     sh = order.get("dtdc_shipment") or {}
@@ -7162,7 +7174,7 @@ async def _dtdc_mark_dispatched(order: dict, when: str, by: str, docket: str = "
         "dispatched_by": by,
         "dispatched_at": when,
     })
-    await db.orders.update_one({"id": order["id"]}, {"$set": {
+    await ship_orders.update_one({"id": order["id"]}, {"$set": {
         "dispatch": dispatch,
         "status": "dispatched",
         "courier_name": "DTDC",
@@ -7183,7 +7195,7 @@ async def dtdc_manual_dispatch(req: DtdcDispatchRequest, user=Depends(get_curren
     """Dispatch now, without waiting for DTDC to report pickup."""
     if user["role"] not in ["admin", "dispatch", "packaging"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if order.get("status") == "dispatched":
@@ -7257,7 +7269,7 @@ def _dtdc_pickup_time(tracking: dict):
 async def _dtdc_sync_all() -> list:
     if not _dtdc_configured():
         return []
-    pending = await db.orders.find({
+    pending = await ship_orders.find({
         "dtdc_shipment.reference_number": {"$exists": True, "$ne": ""},
         "status": {"$nin": ["dispatched", "cancelled"]},
     }, {"_id": 0}).to_list(200)
@@ -8202,7 +8214,7 @@ async def shiprocket_wallet(user=Depends(get_current_user)):
 async def shiprocket_bookable(user=Depends(get_current_user)):
     """Orders assigned to Shiprocket that packing has weighed and that are not dispatched."""
     _sr_require(user)
-    orders = await db.orders.find({
+    orders = await ship_orders.find({
         "courier_name": SR_COURIER_RE, "status": {"$nin": ["cancelled", "dispatched"]},
         "$or": [{"packaging.weight_kg": {"$nin": ["", None]}}, {"shiprocket_shipment.awb": {"$nin": ["", None]}}],
     }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "shipping_address": 1,
@@ -8246,7 +8258,7 @@ def _sr_cod(order: dict, mode: Optional[str]) -> float:
 async def shiprocket_quote(req: ShiprocketBookRequest, user=Depends(get_current_user)):
     """Live courier list for one order - books nothing."""
     _sr_require(user)
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     sa = order.get("shipping_address") or {}
@@ -8270,7 +8282,7 @@ async def shiprocket_quote(req: ShiprocketBookRequest, user=Depends(get_current_
 async def shiprocket_book(req: ShiprocketBookRequest, user=Depends(get_current_user)):
     """BUYS a real Shiprocket shipment: creates the order, assigns the AWB, schedules pickup."""
     _sr_require(user)
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("shiprocket_shipment") or {}).get("awb"):
@@ -8342,7 +8354,7 @@ async def shiprocket_book(req: ShiprocketBookRequest, user=Depends(get_current_u
     if not awb_code:
         # do not leave a half-made order sitting in the Shiprocket panel
         await _sr_call("POST", "/orders/cancel", json={"ids": [sr_order_id]})
-        await db.orders.update_one({"id": req.order_id}, {"$inc": {"shiprocket_failed_attempts": 1}})
+        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shiprocket_failed_attempts": 1}})
         reason = d.get("awb_assign_error") or (awb or {}).get("message") or str(awb)[:200]
         raise HTTPException(status_code=400, detail=f"Shiprocket could not assign {chosen['name']}: {reason}")
 
@@ -8362,7 +8374,7 @@ async def shiprocket_book(req: ShiprocketBookRequest, user=Depends(get_current_u
         "weight_kg": weight, "weight_source": weight_source, "label_url": (lb or {}).get("label_url") or "",
         "booked_by": user["name"], "booked_at": datetime.now(timezone.utc).isoformat(),
     }
-    await db.orders.update_one({"id": req.order_id}, {"$set": {
+    await ship_orders.update_one({"id": req.order_id}, {"$set": {
         "shiprocket_shipment": shipment, "courier_name": "Shiprocket",
         "updated_at": datetime.now(timezone.utc).isoformat()}})
     return {"ok": True, "shipment": shipment}
@@ -8388,7 +8400,7 @@ async def shiprocket_bulk_book(req: BulkBookRequest, user=Depends(get_current_us
 
 
 async def _sr_cancel_one(order_id: str, user) -> dict:
-    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     shp = order.get("shiprocket_shipment") or {}
@@ -8400,7 +8412,7 @@ async def _sr_cancel_one(order_id: str, user) -> dict:
     if code not in (200, 201, 204):
         raise HTTPException(status_code=400, detail=f"Shiprocket cancel failed: {str(data)[:250]}")
     now = datetime.now(timezone.utc).isoformat()
-    await db.orders.update_one({"id": order_id}, {
+    await ship_orders.update_one({"id": order_id}, {
         "$push": {"cancelled_shipments": {"courier": "Shiprocket", **shp, "cancelled_by": user["name"], "cancelled_at": now}},
         "$unset": {"shiprocket_shipment": ""}, "$set": {"updated_at": now}})
     return {"ok": True, "cancelled": shp.get("awb") or shp.get("sr_order_id")}
@@ -8431,7 +8443,7 @@ async def shiprocket_labels(ids: str, token: str = "", user=None):
         raise HTTPException(status_code=401, detail="Authentication required")
     wanted = [i for i in (ids or "").split(",") if i][:50]
     shipment_ids = []
-    async for o in db.orders.find({"id": {"$in": wanted}}, {"_id": 0, "shiprocket_shipment": 1}):
+    async for o in ship_orders.find({"id": {"$in": wanted}}, {"_id": 0, "shiprocket_shipment": 1}):
         sid = (o.get("shiprocket_shipment") or {}).get("shipment_id")
         if sid:
             shipment_ids.append(sid)
@@ -8456,7 +8468,7 @@ class ShiprocketDispatchRequest(BaseModel):
 async def shiprocket_dispatch(req: ShiprocketDispatchRequest, user=Depends(get_current_user)):
     """Mark a booked Shiprocket order dispatched; the label's first page becomes the slip image."""
     _sr_require(user)
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     docket = (req.docket_no or "").strip() or (order.get("shiprocket_shipment") or {}).get("awb") or ""
@@ -8488,7 +8500,7 @@ async def _shiprocket_mark_dispatched(order: dict, when: str, by: str, docket: s
                      "transporter_name": "", "lr_no": docket, "dispatch_slip_images": slips,
                      "dispatch_type": "courier", "porter_link": "",
                      "dispatched_by": by, "dispatched_at": when})
-    await db.orders.update_one({"id": order["id"]}, {"$set": {
+    await ship_orders.update_one({"id": order["id"]}, {"$set": {
         "dispatch": dispatch, "status": "dispatched", "courier_name": "Shiprocket",
         "shiprocket_shipment.picked_up_at": when, "updated_at": datetime.now(timezone.utc).isoformat()}})
     return {"ok": True, "lr_no": docket, "slips": slips}
@@ -8503,7 +8515,7 @@ SR_SYNC_INTERVAL = int(os.environ.get("SHIPROCKET_SYNC_INTERVAL", "180"))
 async def _shiprocket_sync_all() -> int:
     """Booked Shiprocket orders that the courier has collected become dispatched."""
     n = 0
-    async for o in db.orders.find({"shiprocket_shipment.awb": {"$nin": ["", None]},
+    async for o in ship_orders.find({"shiprocket_shipment.awb": {"$nin": ["", None]},
                                    "status": {"$nin": ["dispatched", "cancelled"]}}, {"_id": 0}).limit(100):
         awb = o["shiprocket_shipment"]["awb"]
         try:
@@ -8552,6 +8564,267 @@ async def _start_shiprocket_sync():
 async def shiprocket_sync_now(user=Depends(get_current_user)):
     _sr_require(user)
     return {"count": await _shiprocket_sync_all()}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AMAZON SELF-SHIP THROUGH OUR COURIERS. Self-ship Amazon orders are shipped by
+# us, so every courier (booking, labels, cancel, dispatch, pickup pollers) sees
+# them through `ship_orders`, which reads regular orders first and then Amazon
+# self-ship orders presented in the same shape. Lists only ever see the city and
+# pincode; the buyer's name, street and phone (typed in from Seller Central,
+# stored encrypted) are read only when a label is bought. On dispatch the order
+# is confirmed to Amazon with the carrier and tracking number.
+# ═══════════════════════════════════════════════════════════════════════════
+_AMZ_PUBLIC_RE = re.compile(r"^(.*?),\s*(.*?)\s*-\s*(\d{6})$")
+
+
+def _amz_public_place(a: dict) -> tuple:
+    st = a.get("ship_to") or {}
+    m = _AMZ_PUBLIC_RE.match((a.get("address_public") or "").strip())
+    city = st.get("city") or (m.group(1).strip() if m else "")
+    state = st.get("state") or ((m.group(2).strip().title()) if m else "")
+    pin = st.get("pincode") or (m.group(3) if m else "")
+    return city, state, pin
+
+
+def _amz_as_order(a: dict, full: bool = True) -> dict:
+    st = a.get("ship_to") or {}
+    city, state, pin = _amz_public_place(a)
+    public_name = f"Amazon customer ({city or 'India'})"
+    sa = {"city": city, "state": state, "pincode": pin, "label": ""}
+    phone = ""
+    if full:
+        sa["address_name"] = _pii_dec(st.get("name") or "") or ""
+        sa["address_line"] = _pii_dec(st.get("line1") or "") or ""
+        phone = _pii_dec(st.get("phone") or "") or ""
+    o = {k: v for k, v in a.items() if k not in ("address", "phone")}
+    total = float(a.get("grand_total") or 0)
+    o.update({
+        "order_number": a.get("am_order_number"), "customer_name": public_name,
+        "customer_phone": [phone] if phone else [], "customer_id": None, "shipping_address": sa,
+        "items": [{**it, "total": it.get("amount"), "product_name": it.get("product_name") or "Item"} for it in (a.get("items") or [])],
+        "gst_applicable": True, "company": DEFAULT_COMPANY, "carrier_risk_applicable": False,
+        "amount_paid": 0.0 if a.get("is_cod") else total, "transporter_name": a.get("transporter_name") or "",
+        "shipping_method": a.get("shipping_method") or "courier", "source_collection": "amazon_orders",
+        "ship_to_ready": bool(st.get("name") and st.get("line1") and st.get("phone") and pin),
+    })
+    return o
+
+
+def _amz_translate_update(upd: dict) -> dict:
+    out = {}
+    for op, body in (upd or {}).items():
+        body = dict(body) if isinstance(body, dict) else body
+        if op == "$set" and isinstance(body, dict):
+            d = body.get("dispatch")
+            if isinstance(d, dict) and d.get("lr_no") and not d.get("lr_number"):
+                body["dispatch"] = {**d, "lr_number": d["lr_no"]}
+            if "dispatch.lr_no" in body:
+                body["dispatch.lr_number"] = body["dispatch.lr_no"]
+        out[op] = body
+    return out
+
+
+class _ShipCursor:
+    def __init__(self, flt, proj):
+        self.flt, self.proj, self._sort, self._limit = flt, proj, None, 0
+
+    def sort(self, *a, **k):
+        self._sort = (a, k)
+        return self
+
+    def limit(self, n):
+        self._limit = n
+        return self
+
+    async def to_list(self, n=None):
+        cur = db.orders.find(self.flt, self.proj) if self.proj is not None else db.orders.find(self.flt)
+        if self._sort:
+            cur = cur.sort(*self._sort[0], **self._sort[1])
+        cap = self._limit or n or 1000
+        out = await cur.to_list(cap)
+        acur = db.amazon_orders.find({**self.flt, "ship_type": "self_ship"}, {"_id": 0})
+        async for a in acur.limit(200):
+            out.append(_amz_as_order(a, full=False))
+        return out[:cap] if (self._limit or n) else out
+
+    def __aiter__(self):
+        async def gen():
+            for o in await self.to_list():
+                yield o
+        return gen()
+
+
+class _ShipOrders:
+    """db.orders for courier code, extended with Amazon self-ship orders."""
+
+    async def find_one(self, flt, proj=None, **kw):
+        doc = await (db.orders.find_one(flt, proj, **kw) if proj is not None else db.orders.find_one(flt, **kw))
+        if doc is not None:
+            return doc
+        a = await db.amazon_orders.find_one({**flt, "ship_type": "self_ship"}, {"_id": 0})
+        return _amz_as_order(a) if a else None
+
+    def find(self, flt, proj=None):
+        return _ShipCursor(flt, proj)
+
+    async def update_one(self, flt, upd, **kw):
+        r = await db.orders.update_one(flt, upd, **kw)
+        if r.matched_count:
+            return r
+        r2 = await db.amazon_orders.update_one({**flt, "ship_type": "self_ship"}, _amz_translate_update(upd), **kw)
+        if r2.matched_count and ((upd or {}).get("$set") or {}).get("status") == "dispatched" and flt.get("id"):
+            asyncio.create_task(_amz_confirm_shipment(flt["id"]))
+        return r2
+
+
+ship_orders = _ShipOrders()
+
+
+# Amazon's own carrier codes for the couriers we use; anything else goes as "Other".
+_AMZ_CARRIER_CODES = {"dtdc": "DTDC", "delhivery": "Delhivery", "blue dart": "Blue Dart", "bluedart": "Blue Dart",
+                      "xpressbees": "Xpressbees", "ekart": "Ekart", "india post": "India Post", "ecom express": "Ecom Express",
+                      "shadowfax": "Shadowfax", "amazon": "Amazon Shipping"}
+
+
+def _amz_carrier(order: dict) -> tuple:
+    d = order.get("dispatch") or {}
+    raw = (d.get("courier_partner") or d.get("courier_name") or order.get("courier_name") or "").strip()
+    if raw.lower().startswith("shiprocket"):
+        raw = (order.get("shiprocket_shipment") or {}).get("courier_name") or raw
+    name = raw.replace("(via Shiprocket)", "").replace("(LTL)", "").strip() or "Other"
+    low = name.lower()
+    code = next((v for k, v in _AMZ_CARRIER_CODES.items() if low.startswith(k)), "Other")
+    return code, name
+
+
+async def _amz_confirm_shipment(order_id: str, force: bool = False) -> dict:
+    """Tell Amazon a self-ship order has shipped (carrier + tracking number)."""
+    a = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
+    if not a or a.get("ship_type") != "self_ship" or not _spapi_configured():
+        return {"status": "skipped"}
+    prev = a.get("amazon_confirm") or {}
+    if prev.get("status") == "confirmed" and not force:
+        return prev
+    d = a.get("dispatch") or {}
+    lr = (d.get("lr_no") or d.get("lr_number") or "").strip()
+    rec = {"attempts": int(prev.get("attempts") or 0) + 1, "at": datetime.now(timezone.utc).isoformat()}
+    if not lr:
+        rec.update(status="failed", error="No tracking / LR number on the dispatch")
+    else:
+        code, name = _amz_carrier(a)
+        try:
+            when = datetime.fromisoformat(str(d.get("dispatched_at") or rec["at"]).replace("Z", "+00:00"))
+        except ValueError:
+            when = datetime.now(timezone.utc)
+        items = [{"orderItemId": it["order_item_id"], "quantity": int(it.get("quantity") or 1)}
+                 for it in (a.get("items") or []) if it.get("order_item_id")]
+        body = {"marketplaceId": SPAPI["marketplace"], "packageDetail": {
+            "packageReferenceId": "1", "carrierCode": code, "carrierName": name, "shippingMethod": "Standard",
+            "trackingNumber": lr, "shipDate": when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "orderItems": items}}
+        if code != "Other":
+            body["packageDetail"].pop("carrierName", None)
+        try:
+            token = await _spapi_token()
+            async with httpx.AsyncClient(timeout=40) as c:
+                r = await c.post(f"{SPAPI['endpoint']}/orders/v0/orders/{a['amazon_order_id']}/shipmentConfirmation",
+                                 json=body, headers={"x-amz-access-token": token, "Content-Type": "application/json"})
+            if r.status_code in (200, 204):
+                rec.update(status="confirmed", carrier=name, carrier_code=code, tracking=lr, error="")
+            else:
+                rec.update(status="failed", carrier=name, tracking=lr, error=f"{r.status_code}: {r.text[:240]}")
+        except Exception as e:
+            rec.update(status="failed", error=str(e)[:240])
+    await db.amazon_orders.update_one({"id": order_id}, {"$set": {"amazon_confirm": rec}})
+    if rec["status"] != "confirmed":
+        logging.warning(f"Amazon ship-confirm {a.get('am_order_number')}: {rec.get('error')}")
+    return rec
+
+
+async def _amz_confirm_sweep():
+    async for a in db.amazon_orders.find({"ship_type": "self_ship", "status": "dispatched",
+                                         "amazon_confirm.status": {"$ne": "confirmed"},
+                                         "$or": [{"amazon_confirm.attempts": {"$exists": False}}, {"amazon_confirm.attempts": {"$lt": 6}}],
+                                         "$and": [{"$or": [{"dispatch.lr_no": {"$nin": ["", None]}}, {"dispatch.lr_number": {"$nin": ["", None]}}]}],
+                                         "dispatch.dispatched_at": {"$gte": "2026-09-26T00:00:00"}},
+                                        {"_id": 0, "id": 1}).limit(20):
+        await _amz_confirm_shipment(a["id"])
+
+
+async def _amz_confirm_loop():
+    await asyncio.sleep(120)
+    while True:
+        try:
+            await _amz_confirm_sweep()
+        except Exception as e:
+            logging.error(f"Amazon ship-confirm sweep: {e}")
+        await asyncio.sleep(300)
+
+
+@app.on_event("startup")
+async def _start_amz_confirm():
+    if _spapi_configured():
+        asyncio.create_task(_amz_confirm_loop())
+
+
+class AmazonShipTo(BaseModel):
+    name: str
+    line1: str
+    city: str
+    state: str
+    pincode: str
+    phone: str
+
+
+@api_router.put("/amazon/orders/{order_id}/ship-to")
+async def amazon_set_ship_to(order_id: str, req: AmazonShipTo, user=Depends(get_current_user)):
+    """Buyer's delivery details copied from Seller Central, for a self-ship label."""
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    a = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0})
+    if not a:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if a.get("ship_type") != "self_ship":
+        raise HTTPException(status_code=400, detail="Only self-ship orders need a delivery address - Amazon ships Easy Ship orders")
+    pin = re.sub(r"\D", "", req.pincode or "")
+    phone = _to_local_phone(req.phone)
+    if len(pin) != 6:
+        raise HTTPException(status_code=400, detail="Pincode must be 6 digits")
+    if not phone:
+        raise HTTPException(status_code=400, detail="Enter the buyer's 10-digit phone number")
+    if len((req.name or "").strip()) < 2 or len((req.line1 or "").strip()) < 5:
+        raise HTTPException(status_code=400, detail="Enter the buyer's name and full street address")
+    ship_to = {"name": _pii_enc(req.name.strip()), "line1": _pii_enc(" ".join(req.line1.split())),
+               "city": req.city.strip(), "state": req.state.strip(), "pincode": pin, "phone": _pii_enc(phone),
+               "entered_by": user["name"], "entered_at": datetime.now(timezone.utc).isoformat()}
+    await db.amazon_orders.update_one({"id": order_id}, {"$set": {"ship_to": ship_to, "has_buyer_pii": True,
+                                                                  "updated_at": datetime.now(timezone.utc).isoformat()}})
+    await _sec_log("amazon_ship_to_entered", user=user.get("username") or user["name"], order=a.get("am_order_number"))
+    return {"ok": True}
+
+
+@api_router.get("/amazon/orders/{order_id}/ship-to")
+async def amazon_get_ship_to(order_id: str, user=Depends(get_current_user)):
+    a = await db.amazon_orders.find_one({"id": order_id}, {"_id": 0, "ship_to": 1, "am_order_number": 1, "address_public": 1, "pii_purged_at": 1})
+    if not a:
+        raise HTTPException(status_code=404, detail="Order not found")
+    st = a.get("ship_to") or {}
+    city, state, pin = _amz_public_place(a)
+    ready = bool(st.get("name") and st.get("line1") and st.get("phone") and pin)
+    out = {"ready": ready, "city": city, "state": state, "pincode": pin, "entered_by": st.get("entered_by") or "",
+           "entered_at": st.get("entered_at") or "", "purged": bool(a.get("pii_purged_at"))}
+    if user["role"] in PII_ROLES and ready:
+        out.update(name=_pii_dec(st["name"]), line1=_pii_dec(st["line1"]), phone=_pii_dec(st["phone"]), visible=True)
+        await _pii_view_logged(user, a.get("am_order_number"))
+    return out
+
+
+@api_router.post("/amazon/orders/{order_id}/confirm-shipment")
+async def amazon_confirm_shipment_now(order_id: str, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return await _amz_confirm_shipment(order_id, force=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -8657,7 +8930,7 @@ async def delhivery_check(pincode: str, weight: float = 1.0, cod: bool = False, 
 @api_router.get("/delhivery/bookable")
 async def delhivery_bookable(user=Depends(get_current_user)):
     _dlv_require(user)
-    orders = await db.orders.find({
+    orders = await ship_orders.find({
         "courier_name": DLV_COURIER_RE, "status": {"$nin": ["cancelled", "dispatched"]},
         "$or": [{"packaging.weight_kg": {"$nin": ["", None]}}, {"delhivery_shipment.awb": {"$nin": ["", None]}}],
     }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "shipping_address": 1,
@@ -8701,7 +8974,7 @@ def _dlv_cod(order: dict, mode: Optional[str]) -> float:
 @api_router.post("/delhivery/quote")
 async def delhivery_quote(req: DelhiveryBookRequest, user=Depends(get_current_user)):
     _dlv_require(user)
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     sa = order.get("shipping_address") or {}
@@ -8726,7 +8999,7 @@ async def delhivery_quote(req: DelhiveryBookRequest, user=Depends(get_current_us
 async def delhivery_book(req: DelhiveryBookRequest, user=Depends(get_current_user)):
     """BUYS a real Delhivery Express shipment (manifest + AWB) and asks for a pickup."""
     _dlv_require(user)
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("delhivery_shipment") or {}).get("awb"):
@@ -8785,7 +9058,7 @@ async def delhivery_book(req: DelhiveryBookRequest, user=Depends(get_current_use
     awb = pk.get("waybill") if str(pk.get("status", "")).lower() == "success" else ""
     if r.status_code != 200 or not awb:
         reason = "; ".join(str(x) for x in (pk.get("remarks") or [])) or data.get("rmk") or str(data)[:250]
-        await db.orders.update_one({"id": req.order_id}, {"$inc": {"delhivery_failed_attempts": 1}})
+        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"delhivery_failed_attempts": 1}})
         logging.error(f"Delhivery create failed for {ref}: {r.status_code} {str(data)[:400]}")
         raise HTTPException(status_code=400, detail=f"Delhivery refused the booking: {reason}")
 
@@ -8809,7 +9082,7 @@ async def delhivery_book(req: DelhiveryBookRequest, user=Depends(get_current_use
         "pickup_date": day.isoformat() if pickup_note and not pickup_note.startswith("pickup request failed") else "",
         "pickup_note": pickup_note[:200], "booked_by": user["name"], "booked_at": datetime.now(timezone.utc).isoformat(),
     }
-    await db.orders.update_one({"id": req.order_id}, {"$set": {
+    await ship_orders.update_one({"id": req.order_id}, {"$set": {
         "delhivery_shipment": shipment_doc, "courier_name": "Delhivery", "updated_at": datetime.now(timezone.utc).isoformat()}})
     return {"ok": True, "shipment": shipment_doc}
 
@@ -8830,7 +9103,7 @@ async def delhivery_bulk_book(req: BulkBookRequest, user=Depends(get_current_use
 
 
 async def _dlv_cancel_one(order_id: str, user) -> dict:
-    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     shp = order.get("delhivery_shipment") or {}
@@ -8848,7 +9121,7 @@ async def _dlv_cancel_one(order_id: str, user) -> dict:
     if r.status_code != 200 or not (data.get("status") is True or str(data.get("status", "")).lower() == "true"):
         raise HTTPException(status_code=400, detail=f"Delhivery cancel failed: {str(data)[:250]}")
     now = datetime.now(timezone.utc).isoformat()
-    await db.orders.update_one({"id": order_id}, {
+    await ship_orders.update_one({"id": order_id}, {
         "$push": {"cancelled_shipments": {"courier": "Delhivery", **shp, "cancelled_by": user["name"], "cancelled_at": now}},
         "$unset": {"delhivery_shipment": ""}, "$set": {"updated_at": now}})
     return {"ok": True, "cancelled": shp.get("awb")}
@@ -8890,7 +9163,7 @@ async def delhivery_labels(ids: str, token: str = "", user=None):
         raise HTTPException(status_code=401, detail="Authentication required")
     images, missing = [], []
     for oid in [i for i in (ids or "").split(",") if i][:50]:
-        o = await db.orders.find_one({"id": oid}, {"_id": 0, "order_number": 1, "delhivery_shipment": 1})
+        o = await ship_orders.find_one({"id": oid}, {"_id": 0, "order_number": 1, "delhivery_shipment": 1})
         awb = ((o or {}).get("delhivery_shipment") or {}).get("awb")
         if not awb:
             missing.append((o or {}).get("order_number") or oid[:8])
@@ -8924,7 +9197,7 @@ async def _delhivery_mark_dispatched(order: dict, when: str, by: str, docket: st
     dispatch.update({"courier_name": "Delhivery", "courier_partner": shp.get("courier_name") or "",
                      "transporter_name": "", "lr_no": docket, "dispatch_slip_images": slips,
                      "dispatch_type": "courier", "porter_link": "", "dispatched_by": by, "dispatched_at": when})
-    await db.orders.update_one({"id": order["id"]}, {"$set": {
+    await ship_orders.update_one({"id": order["id"]}, {"$set": {
         "dispatch": dispatch, "status": "dispatched", "courier_name": "Delhivery",
         "delhivery_shipment.picked_up_at": when, "updated_at": datetime.now(timezone.utc).isoformat()}})
     return {"ok": True, "lr_no": docket, "slips": slips}
@@ -8938,7 +9211,7 @@ class DelhiveryDispatchRequest(BaseModel):
 @api_router.post("/delhivery/dispatch")
 async def delhivery_dispatch(req: DelhiveryDispatchRequest, user=Depends(get_current_user)):
     _dlv_require(user)
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     docket = (req.docket_no or "").strip() or (order.get("delhivery_shipment") or {}).get("awb") or ""
@@ -8949,7 +9222,7 @@ async def delhivery_dispatch(req: DelhiveryDispatchRequest, user=Depends(get_cur
 
 async def _delhivery_sync_all() -> int:
     """Booked Delhivery orders that the courier has collected become dispatched."""
-    orders = await db.orders.find({"delhivery_shipment.awb": {"$nin": ["", None]},
+    orders = await ship_orders.find({"delhivery_shipment.awb": {"$nin": ["", None]},
                                    "status": {"$nin": ["dispatched", "cancelled"]}}, {"_id": 0}).limit(50).to_list(50)
     if not orders:
         return 0
@@ -9159,7 +9432,7 @@ async def delhivery_b2b_check(pincode: str, weight: float = 20.0, cod: bool = Fa
 @api_router.get("/delhivery-b2b/bookable")
 async def delhivery_b2b_bookable(user=Depends(get_current_user)):
     _dlvb_require(user)
-    orders = await db.orders.find({
+    orders = await ship_orders.find({
         "courier_name": DLVB_COURIER_RE, "status": {"$nin": ["cancelled", "dispatched"]},
         "$or": [{"packaging.weight_kg": {"$nin": ["", None]}}, {"delhivery_b2b_shipment.lrn": {"$nin": ["", None]}}],
     }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "shipping_address": 1,
@@ -9199,7 +9472,7 @@ class DelhiveryB2BBookRequest(BaseModel):
 @api_router.post("/delhivery-b2b/quote")
 async def delhivery_b2b_quote(req: DelhiveryB2BBookRequest, user=Depends(get_current_user)):
     _dlvb_require(user)
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     sa = order.get("shipping_address") or {}
@@ -9230,7 +9503,7 @@ async def delhivery_b2b_quote(req: DelhiveryB2BBookRequest, user=Depends(get_cur
 async def delhivery_b2b_book(req: DelhiveryB2BBookRequest, user=Depends(get_current_user)):
     """BOOKS a real Delhivery B2B LR (manifest job → LR number) and requests a pickup."""
     _dlvb_require(user)
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("delhivery_b2b_shipment") or {}).get("lrn"):
@@ -9293,7 +9566,7 @@ async def delhivery_b2b_book(req: DelhiveryB2BBookRequest, user=Depends(get_curr
         data = {"raw": r.text[:300]}
     job_id = ((data or {}).get("data") or {}).get("job_id") if isinstance((data or {}).get("data"), dict) else (data or {}).get("job_id")
     if r.status_code not in (200, 201, 202) or not job_id:
-        await db.orders.update_one({"id": req.order_id}, {"$inc": {"delhivery_b2b_failed_attempts": 1}})
+        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"delhivery_b2b_failed_attempts": 1}})
         logging.error(f"Delhivery B2B manifest failed for {ref}: {r.status_code} {str(data)[:400]}")
         raise HTTPException(status_code=400, detail=f"Delhivery B2B refused the booking: {_dlvb_err(data)}")
 
@@ -9308,7 +9581,7 @@ async def delhivery_b2b_book(req: DelhiveryB2BBookRequest, user=Depends(get_curr
         if lrn or job_status.lower() in ("failed", "error", "fail"):
             break
     if not lrn:
-        await db.orders.update_one({"id": req.order_id}, {"$set": {"delhivery_b2b_pending_job": {"job_id": job_id, "ref": ref, "at": datetime.now(timezone.utc).isoformat(), "last": str(job_raw)[:300]}}})
+        await ship_orders.update_one({"id": req.order_id}, {"$set": {"delhivery_b2b_pending_job": {"job_id": job_id, "ref": ref, "at": datetime.now(timezone.utc).isoformat(), "last": str(job_raw)[:300]}}})
         raise HTTPException(status_code=400, detail=f"Delhivery accepted the manifest (job {job_id}) but gave no LR yet: {str(job_raw)[:200]}. Press Refresh in a minute.")
 
     pickup_note, pickup_date = "", ""
@@ -9328,7 +9601,7 @@ async def delhivery_b2b_book(req: DelhiveryB2BBookRequest, user=Depends(get_curr
         "weight_kg": weight_g / 1000.0, "pickup_date": pickup_date, "pickup_note": pickup_note[:200],
         "booked_by": user["name"], "booked_at": datetime.now(timezone.utc).isoformat(),
     }
-    await db.orders.update_one({"id": req.order_id}, {"$set": {
+    await ship_orders.update_one({"id": req.order_id}, {"$set": {
         "delhivery_b2b_shipment": shipment_doc, "courier_name": "Delhivery B2B", "updated_at": datetime.now(timezone.utc).isoformat()},
         "$unset": {"delhivery_b2b_pending_job": ""}})
     return {"ok": True, "shipment": shipment_doc}
@@ -9349,7 +9622,7 @@ async def delhivery_b2b_bulk_book(req: BulkBookRequest, user=Depends(get_current
 
 
 async def _dlvb_cancel_one(order_id: str, user) -> dict:
-    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     shp = order.get("delhivery_b2b_shipment") or {}
@@ -9361,7 +9634,7 @@ async def _dlvb_cancel_one(order_id: str, user) -> dict:
     if code not in (200, 201, 204) or not (data or {}).get("success", True):
         raise HTTPException(status_code=400, detail=f"Delhivery B2B cancel failed: {_dlvb_err(data)}")
     now = datetime.now(timezone.utc).isoformat()
-    await db.orders.update_one({"id": order_id}, {
+    await ship_orders.update_one({"id": order_id}, {
         "$push": {"cancelled_shipments": {"courier": "Delhivery B2B", **shp, "cancelled_by": user["name"], "cancelled_at": now}},
         "$unset": {"delhivery_b2b_shipment": ""}, "$set": {"updated_at": now}})
     return {"ok": True, "cancelled": shp.get("lrn"), "response": data}
@@ -9413,7 +9686,7 @@ async def delhivery_b2b_labels(ids: str, token: str = "", user=None):
         raise HTTPException(status_code=401, detail="Authentication required")
     images, missing = [], []
     for oid in [i for i in (ids or "").split(",") if i][:50]:
-        o = await db.orders.find_one({"id": oid}, {"_id": 0, "order_number": 1, "delhivery_b2b_shipment": 1})
+        o = await ship_orders.find_one({"id": oid}, {"_id": 0, "order_number": 1, "delhivery_b2b_shipment": 1})
         lrn = ((o or {}).get("delhivery_b2b_shipment") or {}).get("lrn")
         if not lrn:
             missing.append((o or {}).get("order_number") or oid[:8])
@@ -9448,7 +9721,7 @@ async def _delhivery_b2b_mark_dispatched(order: dict, when: str, by: str, docket
     dispatch.update({"courier_name": "Delhivery B2B", "courier_partner": "Delhivery B2B (LTL)",
                      "transporter_name": "Delhivery B2B", "lr_no": docket, "dispatch_slip_images": slips,
                      "dispatch_type": "transport", "porter_link": "", "dispatched_by": by, "dispatched_at": when})
-    await db.orders.update_one({"id": order["id"]}, {"$set": {
+    await ship_orders.update_one({"id": order["id"]}, {"$set": {
         "dispatch": dispatch, "status": "dispatched", "courier_name": "Delhivery B2B", "shipping_method": "transport",
         "transporter_name": "Delhivery B2B", "delhivery_b2b_shipment.picked_up_at": when,
         "updated_at": datetime.now(timezone.utc).isoformat()}})
@@ -9463,7 +9736,7 @@ class DelhiveryB2BDispatchRequest(BaseModel):
 @api_router.post("/delhivery-b2b/dispatch")
 async def delhivery_b2b_dispatch(req: DelhiveryB2BDispatchRequest, user=Depends(get_current_user)):
     _dlvb_require(user)
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     docket = (req.docket_no or "").strip() or (order.get("delhivery_b2b_shipment") or {}).get("lrn") or ""
@@ -9510,7 +9783,7 @@ def _dlvb_statuses(data) -> tuple:
 
 async def _delhivery_b2b_sync_all() -> int:
     n = 0
-    async for o in db.orders.find({"delhivery_b2b_shipment.lrn": {"$nin": ["", None]},
+    async for o in ship_orders.find({"delhivery_b2b_shipment.lrn": {"$nin": ["", None]},
                                    "status": {"$nin": ["dispatched", "cancelled"]}}, {"_id": 0}).limit(50):
         lrn = o["delhivery_b2b_shipment"]["lrn"]
         try:
@@ -9566,12 +9839,12 @@ async def delhivery_b2b_attach(req: AttachLRRequest, user=Depends(get_current_us
     lrn = re.sub(r"\D", "", req.lrn or "")
     if not re.fullmatch(r"[1-9][0-9]{8}", lrn):
         raise HTTPException(status_code=400, detail="A Delhivery B2B LR number is 9 digits")
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("status") or "") in ("cancelled", "dispatched"):
         raise HTTPException(status_code=400, detail=f"Order is already {order.get('status')}")
-    other = await db.orders.find_one({"delhivery_b2b_shipment.lrn": lrn, "id": {"$ne": req.order_id}}, {"_id": 0, "order_number": 1})
+    other = await ship_orders.find_one({"delhivery_b2b_shipment.lrn": lrn, "id": {"$ne": req.order_id}}, {"_id": 0, "order_number": 1})
     if other:
         raise HTTPException(status_code=400, detail=f"LR {lrn} is already linked to {other.get('order_number')}")
     code, d = await _dlvb_call("GET", "/lrn/track", params={"lrnum": lrn})
@@ -9583,7 +9856,7 @@ async def delhivery_b2b_attach(req: AttachLRRequest, user=Depends(get_current_us
                 "attached_by": user["name"], "attached_at": now, "booked_at": now, "booked_by": "Delhivery portal",
                 "freight": (f or {}).get("data") if code2 == 200 else None,
                 "weight_kg": float(str((order.get("packaging") or {}).get("weight_kg") or 0).strip() or 0)}
-    await db.orders.update_one({"id": req.order_id}, {"$set": {
+    await ship_orders.update_one({"id": req.order_id}, {"$set": {
         "delhivery_b2b_shipment": shipment, "courier_name": "Delhivery B2B", "transporter_name": "Delhivery B2B",
         "shipping_method": "transport", "updated_at": now}})
     logging.info(f"{user['name']} attached Delhivery B2B LR {lrn} to {order.get('order_number')}")
@@ -9651,7 +9924,7 @@ async def shipments_bookable(user=Depends(get_current_user)):
 
     # Weighed courier orders nobody has given a courier yet.
     unassigned = []
-    async for o in db.orders.find({
+    async for o in ship_orders.find({
         "status": {"$nin": ["cancelled", "dispatched"]},
         "packaging.weight_kg": {"$nin": ["", None]},
         "courier_name": {"$in": ["", None]},
@@ -9690,7 +9963,7 @@ async def shipments_set_courier(req: SetCourierRequest, user=Depends(get_current
     courier = (req.courier_name or "").strip()
     if courier not in SHIP_API_COURIERS + ["Anjani"]:
         raise HTTPException(status_code=400, detail="Courier must be DTDC, Amazon, Shiprocket, Delhivery, Delhivery B2B or Anjani")
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("status") or "") in ("cancelled", "dispatched"):
@@ -9709,7 +9982,7 @@ async def shipments_set_courier(req: SetCourierRequest, user=Depends(get_current
     if isinstance(order.get("dispatch"), dict):
         update["dispatch.courier_name"] = courier
         update["dispatch.transporter_name"] = ""
-    await db.orders.update_one({"id": req.order_id}, {"$set": update})
+    await ship_orders.update_one({"id": req.order_id}, {"$set": update})
     return {"ok": True, "courier_name": courier}
 
 
@@ -9744,7 +10017,7 @@ async def shipments_labels(ids: str, token: str = "", user=None):
     import base64
     full_pages, quarter, sr_ids, missing = [], [], [], []
     for oid in order_ids:
-        o = await db.orders.find_one({"id": oid}, {"_id": 0})
+        o = await ship_orders.find_one({"id": oid}, {"_id": 0})
         num = (o or {}).get("order_number") or oid[:8]
         if not o:
             missing.append(num)
@@ -9859,6 +10132,9 @@ def _declared_value(order: dict) -> float:
 
 async def _order_phones(order: dict) -> list:
     """All valid contact numbers for the customer, primary first."""
+    if order.get("source_collection") == "amazon_orders" and not order.get("ship_to_ready"):
+        raise HTTPException(status_code=400, detail=f"{order.get('order_number')}: enter the buyer's name, address and phone "
+                                                    "(copy them from Seller Central) on the Amazon order before booking")
     out = []
     for p in (order.get("customer_phone") or []):
         v = _to_local_phone(p)
@@ -10069,7 +10345,7 @@ async def amazon_bookable_orders(user=Depends(get_current_user)):
     """Orders assigned to Amazon courier that packing has weighed and that are not booked yet."""
     if user["role"] not in ["admin", "dispatch", "packaging", "accounts"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    orders = await db.orders.find({
+    orders = await ship_orders.find({
         "courier_name": AMAZON_COURIER_RE,
         # Dispatched orders have already shipped, so there is nothing left to book.
         "status": {"$nin": ["cancelled", "dispatched"]},
@@ -10110,7 +10386,7 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
         raise HTTPException(status_code=403, detail="Not authorized")
     if not _amazon_configured():
         raise HTTPException(status_code=400, detail="Amazon Shipping API is not configured")
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     pkg = order.get("packaging") or {}
@@ -10181,7 +10457,7 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         raise HTTPException(status_code=403, detail="Not authorized to book shipments")
     if not _amazon_configured():
         raise HTTPException(status_code=400, detail="Amazon Shipping API is not configured")
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("amazon_shipment") or {}).get("shipment_id"):
@@ -10312,7 +10588,7 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         dispatch["courier_name"] = "Amazon"
         dispatch.setdefault("lr_no", tracking_id)
         update["dispatch"] = dispatch
-    await db.orders.update_one({"id": req.order_id}, {"$set": update})
+    await ship_orders.update_one({"id": req.order_id}, {"$set": update})
     safe = {k: v for k, v in shipment.items() if k != "label_base64"}
     return {"ok": True, "shipment": safe, "has_label": bool(label_b64)}
 
@@ -10345,7 +10621,7 @@ async def amazon_bulk_book(req: BulkBookRequest, user=Depends(get_current_user))
 
 async def _amazon_cancel_one(order_id: str, user) -> dict:
     """Cancels a purchased Amazon shipment and clears it off the order."""
-    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     shp = order.get("amazon_shipment") or {}
@@ -10374,7 +10650,7 @@ async def _amazon_cancel_one(order_id: str, user) -> dict:
             logging.error(f"Amazon cancel failed for {sid}: {r.status_code} {r.text[:400]}")
             raise HTTPException(status_code=400, detail=f"Amazon cancel failed: {r.text[:300]}")
     now = datetime.now(timezone.utc).isoformat()
-    await db.orders.update_one({"id": order_id}, {
+    await ship_orders.update_one({"id": order_id}, {
         "$push": {"cancelled_shipments": {"courier": "Amazon", **shp,
                                           "cancelled_by": user["name"], "cancelled_at": now}},
         "$unset": {"amazon_shipment": ""},
@@ -10469,7 +10745,7 @@ async def _amazon_mark_dispatched(order: dict, when: str, by: str, docket: str =
         "dispatched_by": by,
         "dispatched_at": when,
     })
-    await db.orders.update_one({"id": order["id"]}, {"$set": {
+    await ship_orders.update_one({"id": order["id"]}, {"$set": {
         "dispatch": dispatch,
         "status": "dispatched",
         "courier_name": "Amazon",
@@ -10497,7 +10773,7 @@ async def _amazon_sync_order(order: dict) -> Optional[str]:
 async def _amazon_sync_all() -> list:
     if not _amazon_configured():
         return []
-    pending = await db.orders.find({
+    pending = await ship_orders.find({
         "amazon_shipment.tracking_id": {"$exists": True, "$ne": ""},
         "status": {"$nin": ["dispatched", "cancelled"]},
     }, {"_id": 0}).to_list(200)
@@ -10527,7 +10803,7 @@ async def amazon_link_shipment(req: AmazonLinkRequest, user=Depends(get_current_
     these — Amazon only returns documents to the caller that purchased them."""
     if user["role"] not in ["admin", "dispatch", "packaging"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     tracking = re.sub(r"\s", "", req.tracking_id or "")
@@ -10547,7 +10823,7 @@ async def amazon_link_shipment(req: AmazonLinkRequest, user=Depends(get_current_
         "booked_by": existing.get("booked_by") or f"{user['name']} (linked)",
         "booked_at": existing.get("booked_at") or datetime.now(timezone.utc).isoformat(),
     }
-    await db.orders.update_one({"id": req.order_id}, {"$set": {
+    await ship_orders.update_one({"id": req.order_id}, {"$set": {
         "amazon_shipment": shipment,
         "courier_name": "Amazon",
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -10576,7 +10852,7 @@ async def amazon_manual_dispatch(req: AmazonDispatchRequest, user=Depends(get_cu
     """Dispatch now, without waiting for Amazon to report pickup."""
     if user["role"] not in ["admin", "dispatch", "packaging"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    order = await db.orders.find_one({"id": req.order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     if order.get("status") == "dispatched":
@@ -10790,7 +11066,8 @@ async def _pii_purge(now: datetime) -> int:
     for o in stale:
         await db.amazon_orders.update_one({"id": o["id"]}, {"$set": {
             "customer_name": "Amazon customer", "address": o.get("address_public") or "",
-            "phone": "", "pii_purged_at": now.isoformat(), "has_buyer_pii": False}})
+            "phone": "", "ship_to.name": "", "ship_to.line1": "", "ship_to.phone": "",
+            "pii_purged_at": now.isoformat(), "has_buyer_pii": False}})
     if stale:
         await _sec_log("pii_purged", count=len(stale), orders=[o["am_order_number"] for o in stale][:50])
     return len(stale)
@@ -11117,7 +11394,7 @@ async def amazon_labels_sheet(ids: str, token: str = "", user=None):
     labels = []          # (order_number, PIL-ready bytes)
     missing = []
     for oid in order_ids:
-        o = await db.orders.find_one({"id": oid}, {"_id": 0, "order_number": 1,
+        o = await ship_orders.find_one({"id": oid}, {"_id": 0, "order_number": 1,
                                                    "amazon_shipment": 1})
         sh = (o or {}).get("amazon_shipment") or {}
         if not sh.get("label_base64"):
@@ -11145,7 +11422,7 @@ async def amazon_label_pdf(order_id: str, token: str = "", user=None):
         user = await get_user_from_token_param(token)
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    order = await ship_orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     shipment = order.get("amazon_shipment") or {}

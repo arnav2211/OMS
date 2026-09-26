@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { RefreshCw, Search, Trash2 } from "lucide-react";
+import { COURIER_DROPDOWN } from "@/lib/courierTracking";
 
 
 // Ship-by urgency from Amazon's latest ship date: "overdue", "today" or "".
@@ -31,7 +32,7 @@ const STATUS_BADGE = {
   cancelled: "bg-red-100 text-red-800 border-red-200",
 };
 
-const COURIERS = ["DTDC", "Anjani", "India Post", "Others"];
+const COURIERS = COURIER_DROPDOWN;
 
 export default function AmazonOrders() {
   const { user } = useAuth();

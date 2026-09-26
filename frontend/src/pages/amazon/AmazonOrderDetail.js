@@ -15,7 +15,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { ArrowLeft, Package, Truck, X, Upload, Copy, Edit2, ExternalLink } from "lucide-react";
-import { validateLrNumber, getTrackingUrl, COURIER_LR_PATTERNS } from "@/lib/courierTracking";
+import { validateLrNumber, getTrackingUrl, COURIER_LR_PATTERNS, COURIER_DROPDOWN } from "@/lib/courierTracking";
+import { Textarea } from "@/components/ui/textarea";
 
 const STATUS_BADGE = {
   new: "bg-blue-100 text-blue-800",
@@ -43,7 +44,7 @@ export default function AmazonOrderDetail() {
   const [editingCourier, setEditingCourier] = useState(false);
   const [courierValue, setCourierValue] = useState("");
 
-  const COURIERS = ["DTDC", "Anjani", "India Post", "Others"];
+  const COURIERS = COURIER_DROPDOWN;
   const canEditCourier = ["admin", "packaging", "dispatch"].includes(user?.role) && order?.status !== "dispatched" && order?.ship_type === "self_ship";
 
   const canEditPackaging = isAdmin || (isPacking && order?.status !== "dispatched");
@@ -228,6 +229,9 @@ export default function AmazonOrderDetail() {
         </CardContent>
       </Card>
 
+      {order.ship_type === "self_ship" && <AmazonShipToCard order={order} user={user} />}
+      {order.ship_type === "self_ship" && isDispatched && <AmazonConfirmLine order={order} onChanged={loadOrder} />}
+
       {/* Packing work: one executive does the whole Amazon order, so there are no steps */}
       <OrderWorkStrip kind="amazon" orderId={order.id} status={order.status} onChanged={loadOrder} />
 
@@ -398,6 +402,9 @@ function AmazonPackagingForm({ order, staffList, onSave, onCancel, saving }) {
   const [orderImages, setOrderImages] = useState(order.packaging?.order_images || []);
   const [packedBoxImages, setPackedBoxImages] = useState(order.packaging?.packed_box_images || []);
   const [uploading, setUploading] = useState(false);
+  const [weightKg, setWeightKg] = useState(order.packaging?.weight_kg || "");
+  const [numBoxes, setNumBoxes] = useState(order.packaging?.num_boxes || "1");
+  const selfShip = order.ship_type === "self_ship";
 
   const toggleStaff = (list, setList, name) => {
     setList(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
@@ -508,13 +515,153 @@ function AmazonPackagingForm({ order, staffList, onSave, onCancel, saving }) {
           </label>
         </div>
       </div>
+      {selfShip && (
+        <div className="grid grid-cols-2 gap-3 rounded-md border border-sky-300 bg-sky-50/60 dark:bg-sky-950/20 p-3">
+          <div>
+            <Label className="text-sm">Weight (KG) <span className="text-red-500">*</span></Label>
+            <Input type="number" step="0.001" min="0" value={weightKg} onChange={e => setWeightKg(e.target.value)} placeholder="Total weight of all boxes" data-testid="am-pkg-weight" />
+          </div>
+          <div>
+            <Label className="text-sm">Boxes</Label>
+            <Input type="number" min="1" value={numBoxes} onChange={e => setNumBoxes(e.target.value)} data-testid="am-pkg-boxes" />
+          </div>
+          <p className="col-span-2 text-[11px] text-muted-foreground">Self-ship order: we ship it ourselves, so the weight sends it to Book Shipments.</p>
+        </div>
+      )}
       {uploading && <p className="text-xs text-muted-foreground">Uploading...</p>}
       <DialogFooter>
         <Button variant="outline" onClick={onCancel}>Cancel</Button>
-        <Button onClick={() => onSave({ item_packed_by: itemPackedBy, box_packed_by: boxPackedBy, checked_by: checkedBy, item_images: itemImages, order_images: orderImages, packed_box_images: packedBoxImages })} disabled={saving || uploading}>
+        <Button onClick={() => onSave({ item_packed_by: itemPackedBy, box_packed_by: boxPackedBy, checked_by: checkedBy, item_images: itemImages, order_images: orderImages, packed_box_images: packedBoxImages, ...(selfShip ? { weight_kg: String(weightKg).trim(), num_boxes: String(numBoxes).trim() || "1" } : {}) })} disabled={saving || uploading}>
           {saving ? "Saving..." : "Save Packaging"}
         </Button>
       </DialogFooter>
+    </div>
+  );
+}
+
+
+// Buyer's delivery details for a self-ship label. Amazon does not give them to
+// our app, so they are copied from Seller Central (stored encrypted, wiped 30
+// days after dispatch). Only admin / dispatch can read them back.
+function parseSellerCentral(text) {
+  const lines = String(text || "").split(/\n+/).map(l => l.trim()).filter(Boolean);
+  const out = {};
+  const phoneLine = lines.find(l => /(\+?91[\s-]?)?[6-9]\d{9}/.test(l.replace(/\s/g, "")) && /phone|mob|\d{10}/i.test(l));
+  if (phoneLine) out.phone = (phoneLine.replace(/\D/g, "").match(/[6-9]\d{9}$/) || [""])[0];
+  const pinLine = lines.find(l => /\b\d{6}\b/.test(l) && l !== phoneLine);
+  if (pinLine) {
+    out.pincode = pinLine.match(/\b(\d{6})\b/)[1];
+    const parts = pinLine.replace(out.pincode, "").split(",").map(x => x.trim()).filter(Boolean);
+    if (parts.length >= 2) { out.city = parts[0]; out.state = parts[parts.length - 1]; }
+    else if (parts.length === 1) out.city = parts[0];
+  }
+  const rest = lines.filter(l => l !== phoneLine && l !== pinLine && !/^(ship to|shipping address|address)[:]?$/i.test(l));
+  if (rest.length) out.name = rest[0];
+  if (rest.length > 1) out.line1 = rest.slice(1).join(", ");
+  return out;
+}
+
+function AmazonShipToCard({ order, user }) {
+  const [info, setInfo] = useState(null);
+  const [edit, setEdit] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [paste, setPaste] = useState("");
+  const [f, setF] = useState({ name: "", line1: "", city: "", state: "", pincode: "", phone: "" });
+  const canEdit = ["admin", "dispatch", "packaging", "accounts"].includes(user?.role) && order.status !== "dispatched";
+
+  const load = async () => {
+    try {
+      const r = await api.get(`/amazon/orders/${order.id}/ship-to`);
+      setInfo(r.data);
+      setF({ name: r.data.name || "", line1: r.data.line1 || "", city: r.data.city || "", state: r.data.state || "",
+             pincode: r.data.pincode || "", phone: r.data.phone || "" });
+    } catch { /* ignore */ }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [order.id]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.put(`/amazon/orders/${order.id}/ship-to`, f);
+      toast.success("Delivery address saved");
+      setEdit(false); setPaste("");
+      load();
+    } catch (err) { toast.error(err.response?.data?.detail || "Could not save"); }
+    finally { setSaving(false); }
+  };
+
+  if (!info) return null;
+  return (
+    <Card className={info.ready ? "" : "border-2 border-amber-400"} data-testid="am-ship-to">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base">Buyer delivery address (for our courier)</CardTitle>
+          {canEdit && !edit && <Button size="sm" variant="outline" onClick={() => setEdit(true)} data-testid="am-ship-to-edit">{info.ready ? "Edit" : "Enter address"}</Button>}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        {!edit && (info.ready ? (
+          info.visible ? (
+            <div className="space-y-0.5">
+              <div className="font-medium">{info.name}</div>
+              <div>{info.line1}</div>
+              <div>{info.city}, {info.state} - {info.pincode}</div>
+              <div className="font-mono">{info.phone}</div>
+            </div>
+          ) : (
+            <p className="text-emerald-700 dark:text-emerald-400">Address and phone entered{info.entered_by ? ` by ${info.entered_by}` : ""} - ready to book. ({info.city} - {info.pincode})</p>
+          )
+        ) : (
+          <p className="text-amber-700 dark:text-amber-300">
+            {info.purged ? "Buyer details were removed 30 days after dispatch (Amazon policy)." :
+              "Amazon does not share the buyer's name, street and phone with our app. Copy them from Seller Central (Orders → this order → Ship to) so the courier label can be booked."}
+          </p>
+        ))}
+        {edit && (
+          <div className="space-y-2">
+            <Label className="text-xs">Paste the "Ship to" block from Seller Central (optional - fills the fields)</Label>
+            <Textarea rows={4} value={paste} placeholder={"Name\nHouse / street\nArea\nCity, State 400001\nPhone: 98xxxxxxxx"}
+              onChange={e => { setPaste(e.target.value); const p = parseSellerCentral(e.target.value); setF(x => ({ ...x, ...Object.fromEntries(Object.entries(p).filter(([, v]) => v)) })); }} />
+            <div className="grid grid-cols-2 gap-2">
+              <div className="col-span-2"><Label className="text-xs">Buyer name</Label><Input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} /></div>
+              <div className="col-span-2"><Label className="text-xs">Street address</Label><Input value={f.line1} onChange={e => setF({ ...f, line1: e.target.value })} /></div>
+              <div><Label className="text-xs">City</Label><Input value={f.city} onChange={e => setF({ ...f, city: e.target.value })} /></div>
+              <div><Label className="text-xs">State</Label><Input value={f.state} onChange={e => setF({ ...f, state: e.target.value })} /></div>
+              <div><Label className="text-xs">Pincode</Label><Input value={f.pincode} inputMode="numeric" onChange={e => setF({ ...f, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })} /></div>
+              <div><Label className="text-xs">Phone</Label><Input value={f.phone} inputMode="numeric" onChange={e => setF({ ...f, phone: e.target.value })} /></div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" size="sm" onClick={() => { setEdit(false); load(); }} disabled={saving}>Cancel</Button>
+              <Button size="sm" onClick={save} disabled={saving} data-testid="am-ship-to-save">{saving ? "Saving..." : "Save address"}</Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AmazonConfirmLine({ order, onChanged }) {
+  const c = order.amazon_confirm || null;
+  const [busy, setBusy] = useState(false);
+  const retry = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post(`/amazon/orders/${order.id}/confirm-shipment`);
+      if (r.data.status === "confirmed") toast.success("Shipment confirmed on Amazon");
+      else toast.error(r.data.error || "Amazon did not accept it", { duration: 9000 });
+      onChanged?.();
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className={`flex items-center justify-between gap-2 rounded-md border p-3 text-sm ${c?.status === "confirmed" ? "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/20" : "border-amber-300 bg-amber-50 dark:bg-amber-950/20"}`} data-testid="am-confirm">
+      <span>
+        {c?.status === "confirmed"
+          ? <>Marked shipped on Amazon: <b>{c.carrier}</b> · {c.tracking}</>
+          : <>Not yet confirmed on Amazon{c?.error ? `: ${c.error}` : ""}. The OMS retries every 5 minutes.</>}
+      </span>
+      {c?.status !== "confirmed" && <Button size="sm" variant="outline" onClick={retry} disabled={busy}>{busy ? "..." : "Confirm on Amazon"}</Button>}
     </div>
   );
 }
