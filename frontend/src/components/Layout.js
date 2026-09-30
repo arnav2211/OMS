@@ -11,7 +11,7 @@ import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
   FileText, TrendingUp, Bell, ShoppingBag, Megaphone,
-  ChevronDown, Layers, Navigation, IndianRupee, Rocket, Timer, Activity, CalendarDays,
+  ChevronDown, Layers, Navigation, IndianRupee, FileCheck, Rocket, Timer, Activity, CalendarDays,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -50,6 +50,7 @@ const NAV_ITEMS = {
     { label: "Compare Couriers", icon: Layers, path: "/compare-rates" },
     { label: "Book Shipments", icon: Rocket, path: "/book-shipments" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
+    { label: "DTDC Bill Check", icon: FileCheck, path: "/dtdc-bill-check" },
   ],
   admin: [
     { label: "Dashboard", icon: Home, path: "/" },
@@ -78,6 +79,7 @@ const NAV_ITEMS = {
     { label: "Alerts", icon: Megaphone, path: "/admin-alerts" },
     { label: "Security Log", icon: Settings, path: "/security-log" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
+    { label: "DTDC Bill Check", icon: FileCheck, path: "/dtdc-bill-check" },
   ],
   accounts: [
     { label: "Dashboard", icon: Home, path: "/" },
@@ -88,6 +90,7 @@ const NAV_ITEMS = {
     { label: "Compare Couriers", icon: Layers, path: "/compare-rates" },
     { label: "Book Shipments", icon: Rocket, path: "/book-shipments" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
+    { label: "DTDC Bill Check", icon: FileCheck, path: "/dtdc-bill-check" },
   ],
 };
 

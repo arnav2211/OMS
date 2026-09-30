@@ -30,6 +30,7 @@ import AmazonChecker from "@/pages/AmazonChecker";
 import ShiprocketChecker from "@/pages/ShiprocketChecker";
 import IndiaPostCalculator from "@/pages/IndiaPostCalculator";
 import CourierExpenses from "@/pages/CourierExpenses";
+import DTDCBillCheck from "@/pages/DTDCBillCheck";
 import FieldTracking from "@/pages/admin/FieldTracking";
 import FieldHome from "@/pages/field/FieldHome";
 import MyWork from "@/pages/packaging/MyWork";
@@ -98,6 +99,7 @@ function AppRoutes() {
       <Route path="/shiprocket" element={<ProtectedRoute><ShiprocketChecker /></ProtectedRoute>} />
       <Route path="/indiapost" element={<ProtectedRoute allowedRoles={["admin"]}><IndiaPostCalculator /></ProtectedRoute>} />
       <Route path="/courier-expenses" element={<ProtectedRoute allowedRoles={["admin","dispatch","packaging","accounts"]}><CourierExpenses /></ProtectedRoute>} />
+      <Route path="/dtdc-bill-check" element={<ProtectedRoute allowedRoles={["admin","dispatch","accounts"]}><DTDCBillCheck /></ProtectedRoute>} />
       <Route path="/my-work" element={<ProtectedRoute allowedRoles={["packaging", "admin", "dispatch"]}><MyWork /></ProtectedRoute>} />
       <Route path="/packing-live" element={<ProtectedRoute allowedRoles={["admin", "dispatch", "accounts"]}><PackingLive /></ProtectedRoute>} />
       <Route path="/security-log" element={<ProtectedRoute allowedRoles={["admin"]}><SecurityLog /></ProtectedRoute>} />

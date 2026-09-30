@@ -7710,6 +7710,290 @@ async def delete_fuel_surcharge(surcharge_id: str, admin=Depends(require_admin))
     return {"message": "Deleted"}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# DTDC BILL CHECK. Upload DTDC's monthly invoice file(s) (the Excel they send,
+# even when it is named .csv) and every consignment is checked against the OMS:
+# our weight, the pincode zone, the rate card, fuel %, carrier-risk (ROV),
+# extra charges, arithmetic, parcels we never booked, and duplicates.
+# ═══════════════════════════════════════════════════════════════════════════
+BILL_ROLES = ["admin", "accounts", "dispatch"]
+_DTDC_ZONE_BY_CODE = {"01": "Within City", "02": "Within State", "03": "Within Zone", "04": "Metros",
+                      "05": "Rest of India", "06": "Rest of India", "07": "Special destination"}
+# What each finding means for the money, and whether it is a dispute or a check.
+BILL_FLAGS = {
+    "WEIGHT": ("dispute", "Charged a higher weight than we recorded"),
+    "ZONE": ("dispute", "Billed a costlier zone than DTDC's own pincode list gives"),
+    "ROV_NOT_ORDERED": ("dispute", "Carrier risk (ROV) charged on an order without carrier risk"),
+    "ROV_WRONG": ("dispute", "Carrier risk (ROV) is not 2% of the declared value"),
+    "MATH": ("dispute", "Line total / GST does not add up"),
+    "DUPLICATE": ("dispute", "Consignment billed more than once"),
+    "NOT_IN_OMS": ("check", "Not booked from the OMS"),
+    "RETURN": ("check", "Return (RTO) of one of our parcels"),
+    "EXTRA_CHARGE": ("check", "Other / COD / ODA charge"),
+    "RATE": ("note", "Freight a little above the OMS rate card (update the card if DTDC revised it)"),
+    "FUEL": ("check", "Fuel surcharge above the OMS fuel table"),
+    "NOT_INSURED": ("note", "Order has carrier risk but DTDC charged no ROV (parcel not insured)"),
+    "CHILD": ("note", "Child piece of a multi-box consignment (no charge)"),
+    "OK": ("ok", "Matches"),
+}
+
+
+def _bill_num(x) -> float:
+    try:
+        return float(str(x).replace(",", "").strip() or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _bill_rows(raw: bytes, filename: str) -> list:
+    """DTDC's invoice detail. Their '.csv' is really an .xlsx; a real CSV works too."""
+    if raw[:2] == b"PK":
+        wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True, read_only=True)
+        it = wb.worksheets[0].iter_rows(values_only=True)
+    else:
+        import csv
+        it = csv.reader(io.StringIO(raw.decode("utf-8-sig", "ignore")))
+    rows, hdr = [], None
+    for r in it:
+        if hdr is None:
+            if r and any(str(c or "").strip().upper() == "CONSIGNMENT_NO" for c in r):
+                hdr = [str(c or "").strip().upper() for c in r]
+            continue
+        if not r or not any(r):
+            continue
+        d = dict(zip(hdr, r))
+        if str(d.get("CONSIGNMENT_NO") or "").strip():
+            rows.append(d)
+    if hdr is None:
+        raise HTTPException(status_code=400, detail=f"{filename}: not a DTDC invoice detail file (no CONSIGNMENT_NO column). Upload the Excel/CSV that comes with the PDF.")
+    return rows
+
+
+def _bill_date(v) -> str:
+    if isinstance(v, datetime):
+        return v.strftime("%Y-%m-%d")
+    t = str(v or "").strip()
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(t[:len(fmt) + 4].strip(), fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return t[:10]
+
+
+async def _bill_check_lines(rows: list) -> list:
+    periods = await _fuel_surcharge_periods()
+    seen_now = {}
+    for r in rows:
+        seen_now.setdefault(str(r.get("CONSIGNMENT_NO")).strip(), 0)
+        seen_now[str(r.get("CONSIGNMENT_NO")).strip()] += 1
+    out = []
+    for r in rows:
+        cn = str(r.get("CONSIGNMENT_NO") or "").strip()
+        ref = str(r.get("ZCUST_REF") or "").strip()
+        basic, fuel, rov = _bill_num(r.get("BASIC_FREIGHT")), _bill_num(r.get("FUEL_SURCHARGE")), _bill_num(r.get("ROV_CHARGES"))
+        cod, oda, other = _bill_num(r.get("COD_FOD_CHARGE")), _bill_num(r.get("ODA_CHARGES")), _bill_num(r.get("OTHER_CHARGES"))
+        sub, gst, total = _bill_num(r.get("SUB_TOTAL")), _bill_num(r.get("GST")), _bill_num(r.get("TOTAL"))
+        declared, chg_wt = _bill_num(r.get("ZZINV_VALUE")), _bill_num(r.get("CHARGED_WEIGHT"))
+        product = "GROUND EXPRESS" if str(r.get("SUB_PRODUCT") or "").upper() in ("SFEXP", "GROUND_EXPRESS", "GEC") else "STD EXP-A"
+        zcode = str(r.get("DESTINATION_CATEGORY") or "")
+        dtdc_zone = _DTDC_ZONE_BY_CODE.get(zcode[:2], "")
+        fuel_pct = round(100 * fuel / basic, 2) if basic else 0.0
+        mult = (1 + fuel_pct / 100) * 1.18
+        line = {"invoice": str(r.get("INVOICE_NO") or ""), "account": str(r.get("CPDP_NODE") or ""), "consignment": cn,
+                "date": _bill_date(r.get("BOOKING_DATE")), "city": str(r.get("DELIVERY_CITY") or ""), "product": str(r.get("SUB_PRODUCT") or ""),
+                "dtdc_zone_code": zcode, "dtdc_zone": dtdc_zone, "ref": ref, "declared": declared, "charged_kg": chg_wt,
+                "basic": basic, "fuel": fuel, "fuel_pct": fuel_pct, "rov": rov, "cod": cod, "oda": oda, "other": other,
+                "sub_total": sub, "gst": gst, "total": total, "flags": [], "extra": 0.0, "notes": []}
+        # a multi-box consignment lists its child pieces at zero
+        if basic == 0 and total == 0 and re.match(r"^[A-Z]?\d+\d{3}$", cn) and seen_now.get(cn[:-3]):
+            line["flags"], line["level"] = ["CHILD"], "note"
+            out.append(line)
+            continue
+        o = await db.orders.find_one({"$or": [{"dtdc_shipment.awb": cn}, {"dtdc_shipment.reference_number": cn},
+                                              {"dtdc_shipment.docket_no": cn}, {"dispatch.lr_no": cn}]}, {"_id": 0})
+        if not o and ref and re.match(r"^(CS|FV)-\d+", ref):
+            o = await db.orders.find_one({"order_number": re.sub(r"-R\d+$", "", ref)}, {"_id": 0})
+        if not o and ref:
+            src = await db.orders.find_one({"$or": [{"dtdc_shipment.awb": ref}, {"dispatch.lr_no": ref}]}, {"_id": 0, "order_number": 1, "customer_name": 1})
+            if src:
+                line.update(order=src.get("order_number"), customer=src.get("customer_name"))
+                line["flags"].append("RETURN")
+                line["extra"] = total
+                line["notes"].append(f"Return of {ref} ({src.get('order_number')}, {src.get('customer_name')})")
+        if not o and "RETURN" not in line["flags"]:
+            line["flags"].append("NOT_IN_OMS")
+            line["extra"] = total
+        if o:
+            pkg, sh = o.get("packaging") or {}, o.get("dtdc_shipment") or {}
+            try:
+                our_kg = float(str(pkg.get("weight_kg") or sh.get("weight_kg") or 0).strip() or 0)
+            except ValueError:
+                our_kg = 0.0
+            pin = str((o.get("shipping_address") or {}).get("pincode") or "")
+            oms_zone = (_dtdc_pincodes.get(pin) or {}).get("category") or ""
+            risk = bool(o.get("carrier_risk_applicable"))
+            line.update(order=o.get("order_number"), order_id=o.get("id"), customer=o.get("customer_name"), our_kg=our_kg, oms_zone=oms_zone,
+                        carrier_risk=risk, pincode=pin)
+            zone = dtdc_zone or oms_zone
+            at_charged = dtdc_expense_base(zone, chg_wt, product) if zone else 0.0
+            # price the over-charge at DTDC's own rate level (their card can sit a little above ours)
+            k = (basic / at_charged) if (at_charged and basic) else 1.0
+            if our_kg > 0 and zone:
+                at_ours = dtdc_expense_base(zone, our_kg, product)
+                if at_charged > at_ours + 0.01:
+                    line["flags"].append("WEIGHT")
+                    line["extra"] += round((at_charged - at_ours) * k * mult, 2)
+                    line["notes"].append(f"Charged {chg_wt} kg, we recorded {our_kg} kg")
+            if dtdc_zone and oms_zone and dtdc_zone != oms_zone:
+                w = our_kg or chg_wt
+                if dtdc_expense_base(dtdc_zone, w, product) > dtdc_expense_base(oms_zone, w, product) + 0.01:
+                    line["flags"].append("ZONE")
+                    line["extra"] += round((dtdc_expense_base(dtdc_zone, w, product) - dtdc_expense_base(oms_zone, w, product)) * k * mult, 2)
+                    line["notes"].append(f"Billed {dtdc_zone}; pincode {pin} is {oms_zone} in DTDC's list")
+            if at_charged and basic > at_charged + 0.01:
+                line["flags"].append("RATE")
+                line["notes"].append(f"Freight {basic:.2f} vs OMS rate card {at_charged:.2f}")
+            if rov > 0 and not risk:
+                line["flags"].append("ROV_NOT_ORDERED")
+                line["extra"] += round(rov * 1.18, 2)
+            elif rov > 0 and declared and abs(rov - round(declared * 0.02, 2)) > 0.05:
+                line["flags"].append("ROV_WRONG")
+                line["extra"] += round(max(0.0, rov - declared * 0.02) * 1.18, 2)
+            elif risk and rov == 0:
+                line["flags"].append("NOT_INSURED")
+                line["notes"].append(f"Declared value on the docket: {declared:.0f}")
+            oms_fuel = _fuel_percent_on(periods, line["date"])
+            if fuel_pct > oms_fuel + 0.6:
+                line["flags"].append("FUEL")
+                line["notes"].append(f"Fuel {fuel_pct}% vs OMS {oms_fuel}%")
+        if cod or oda or other:
+            line["flags"].append("EXTRA_CHARGE")
+            if "RETURN" not in line["flags"] and "NOT_IN_OMS" not in line["flags"]:
+                line["extra"] += round((cod + oda + other) * 1.18, 2)
+            line["notes"].append(" ".join(x for x in [f"other {other:.2f}" if other else "", f"COD {cod:.2f}" if cod else "", f"ODA {oda:.2f}" if oda else ""] if x))
+        if total and (abs((basic + fuel + rov + cod + oda + other) - sub) > 0.05 or abs(sub + gst - total) > 0.05
+                      or abs(gst - sub * 0.18) > 0.05):
+            line["flags"].append("MATH")
+        if seen_now.get(cn, 0) > 1:
+            line["flags"].append("DUPLICATE")
+        prev = await db.dtdc_bill_lines.find_one({"consignment": cn, "invoice": {"$ne": line["invoice"]}}, {"_id": 0, "invoice": 1})
+        if prev and "CHILD" not in line["flags"]:
+            line["flags"].append("DUPLICATE")
+            line["notes"].append(f"Also billed on {prev['invoice']}")
+            line["extra"] = total
+        if not line["flags"]:
+            line["flags"] = ["OK"]
+        line["extra"] = round(line["extra"], 2)
+        line["level"] = min((BILL_FLAGS[f][0] for f in line["flags"]), key=["dispute", "check", "note", "ok"].index)
+        out.append(line)
+    return out
+
+
+def _bill_summary(lines: list) -> dict:
+    inv = {}
+    for l in lines:
+        i = inv.setdefault(l["invoice"], {"invoice": l["invoice"], "account": l["account"], "lines": 0, "total": 0.0,
+                                          "basic": 0.0, "fuel": 0.0, "rov": 0.0, "other": 0.0, "gst": 0.0})
+        i["lines"] += 1
+        for k in ("total", "basic", "fuel", "rov", "gst"):
+            i[k] = round(i[k] + l[k], 2)
+        i["other"] = round(i["other"] + l["other"] + l["cod"] + l["oda"], 2)
+        i["fuel_pct"] = round(100 * i["fuel"] / i["basic"], 1) if i["basic"] else 0
+    disputes = [l for l in lines if l["level"] == "dispute"]
+    checks = [l for l in lines if l["level"] == "check"]
+    return {"invoices": list(inv.values()), "billed_total": round(sum(l["total"] for l in lines), 2),
+            "lines": len(lines), "dispute_count": len(disputes), "dispute_amount": round(sum(l["extra"] for l in disputes), 2),
+            "check_count": len(checks), "check_amount": round(sum(l["extra"] for l in checks), 2),
+            "ok_count": sum(1 for l in lines if l["level"] == "ok"),
+            "flag_counts": {f: sum(1 for l in lines if f in l["flags"]) for f in BILL_FLAGS if any(f in l["flags"] for l in lines)}}
+
+
+@api_router.post("/dtdc/bill-check")
+async def dtdc_bill_check(files: List[UploadFile] = File(...), user=Depends(get_current_user)):
+    if user["role"] not in BILL_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    rows, names = [], []
+    for f in files[:10]:
+        raw = await f.read()
+        if f.filename.lower().endswith(".pdf"):
+            continue            # the PDF is only the summary; the detail file carries every consignment
+        rows += _bill_rows(raw, f.filename)
+        names.append(f.filename)
+    if not rows:
+        raise HTTPException(status_code=400, detail="Upload the Excel/CSV detail file that DTDC sends with each invoice PDF (the PDF alone has no per-parcel charges).")
+    lines = await _bill_check_lines(rows)
+    summary = _bill_summary(lines)
+    check_id = str(uuid.uuid4())
+    doc = {"id": check_id, "files": names, "invoices": sorted({l["invoice"] for l in lines}), "summary": summary,
+           "lines": lines, "uploaded_by": user["name"], "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.dtdc_bill_checks.insert_one(doc.copy())
+    # remember every billed consignment so a later bill can't charge it again unnoticed
+    for l in lines:
+        if "CHILD" not in l["flags"]:
+            await db.dtdc_bill_lines.update_one({"consignment": l["consignment"], "invoice": l["invoice"]},
+                                                {"$set": {"total": l["total"], "check_id": check_id}}, upsert=True)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/dtdc/bill-checks")
+async def dtdc_bill_checks(user=Depends(get_current_user)):
+    if user["role"] not in BILL_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return await db.dtdc_bill_checks.find({}, {"_id": 0, "lines": 0}).sort("created_at", -1).to_list(50)
+
+
+@api_router.get("/dtdc/bill-checks/{check_id}")
+async def dtdc_bill_check_get(check_id: str, user=Depends(get_current_user)):
+    if user["role"] not in BILL_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    doc = await db.dtdc_bill_checks.find_one({"id": check_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Not found")
+    return doc
+
+
+@api_router.get("/dtdc/bill-checks/{check_id}/excel")
+async def dtdc_bill_check_excel(check_id: str, token: str = ""):
+    user = await get_user_from_token_param(token) if token else None
+    if not user or user["role"] not in BILL_ROLES:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    doc = await db.dtdc_bill_checks.find_one({"id": check_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Not found")
+    from openpyxl.styles import Font, PatternFill, Alignment
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Raise with DTDC"
+    fills = {"dispute": PatternFill("solid", fgColor="FDE2E1"), "check": PatternFill("solid", fgColor="FFF4D6"),
+             "note": PatternFill("solid", fgColor="EEF2FF"), "ok": PatternFill("solid", fgColor="E3F6E8")}
+    sm = doc["summary"]
+    ws.append([f"DTDC bill check: {', '.join(doc['invoices'])}"])
+    ws["A1"].font = Font(bold=True, size=13)
+    ws.append([f"Billed Rs {sm['billed_total']:,.2f} on {sm['lines']} lines. Disputes: {sm['dispute_count']} (Rs {sm['dispute_amount']:,.2f}). To check: {sm['check_count']} (Rs {sm['check_amount']:,.2f})."])
+    ws.append([])
+    hdr = ["Level", "Issue", "Consignment", "Account", "Invoice", "Date", "City", "Our order", "Charged kg", "Our kg", "Freight", "Fuel %", "ROV", "Other", "Total", "Extra (incl fuel+GST)", "Details"]
+    ws.append(hdr)
+    for c in ws[4]:
+        c.font = Font(bold=True)
+    order = ["dispute", "check", "note", "ok"]
+    for l in sorted(doc["lines"], key=lambda x: (order.index(x["level"]), x["account"], x["date"])):
+        ws.append([l["level"].upper(), ", ".join(BILL_FLAGS[f][1] for f in l["flags"]), l["consignment"], l["account"], l["invoice"],
+                   l["date"], l["city"], l.get("order") or "", l["charged_kg"], l.get("our_kg") or "", l["basic"], l["fuel_pct"], l["rov"],
+                   round(l["other"] + l["cod"] + l["oda"], 2), l["total"], l["extra"] or "", "; ".join(l.get("notes") or [])])
+        for c in ws[ws.max_row]:
+            c.fill = fills[l["level"]]
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+    for i, w in enumerate((9, 40, 16, 8, 16, 11, 16, 9, 9, 8, 9, 7, 8, 7, 9, 12, 50), 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": f"attachment; filename=dtdc-bill-check-{'-'.join(doc['invoices'])[:80]}.xlsx"})
+
+
 @api_router.get("/courier-expenses")
 async def courier_expenses(date_from: str = "", date_to: str = "",
                            courier: str = "all", user=Depends(get_current_user)):
