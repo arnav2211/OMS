@@ -11322,6 +11322,36 @@ async def _shopify_fulfill(order: dict, by: str = "auto", force: bool = False) -
     return rec
 
 
+SHOPIFY_APPROVE_URL = ("https://admin.shopify.com/?no_redirect=true&redirect=/oauth/redirect_from_developer_dashboard"
+                       "?client_id%3D" + os.environ.get("SHOPIFY_CLIENT_ID", "").strip())
+
+
+async def _shopify_flag_waiting():
+    """Never wait silently: the orders say why, and the admins get one alert a day."""
+    msg = "Waiting for Shopify: approve the app's order permissions (Shopify admin, Apps, Image Bulk Swap, Update)"
+    now = datetime.now(timezone.utc)
+    pending = await db.orders.find({"website_order": True, "status": "dispatched", "dispatch.dispatched_at": {"$gte": SHOPIFY_FULFIL_SINCE},
+                                    "shopify_fulfillment.status": {"$ne": "fulfilled"}}, {"_id": 0, "id": 1, "order_number": 1}).to_list(50)
+    if not pending:
+        return
+    await db.orders.update_many({"id": {"$in": [o["id"] for o in pending]}},
+                                {"$set": {"shopify_fulfillment.status": "waiting", "shopify_fulfillment.error": msg,
+                                          "shopify_fulfillment.at": now.isoformat()}})
+    state = await db.settings.find_one({"_id": "shopify_scope_alert"}) or {}
+    if state.get("at", "") > (now - timedelta(hours=24)).isoformat():
+        return
+    admins = [u["id"] async for u in db.users.find({"role": "admin"}, {"_id": 0, "id": 1})]
+    await db.admin_alerts.insert_one({
+        "id": str(uuid.uuid4()), "title": f"Shopify: {len(pending)} website order(s) not marked shipped",
+        "message": f"{', '.join(o['order_number'] for o in pending)} are dispatched but Shopify still shows them unfulfilled, "
+                   f"because the store has not approved the app's order permissions. Approve here: {SHOPIFY_APPROVE_URL}",
+        "sent_by": "System", "sent_by_id": None, "order_id": "", "customer_name": "",
+        "recipient_ids": admins, "recipient_roles": ["admin"], "acknowledgements": {}, "created_at": now.isoformat(),
+        "meta": {"type": "shopify_scope"},
+    })
+    await db.settings.update_one({"_id": "shopify_scope_alert"}, {"$set": {"at": now.isoformat()}}, upsert=True)
+
+
 async def _shopify_fulfil_sweep():
     if not _shopify_configured():
         return
@@ -11332,6 +11362,7 @@ async def _shopify_fulfil_sweep():
             _shopify_token.update(token="", expires=0.0)
             await _shopify_access_token()
             if "read_orders" not in (_shopify_token.get("scope") or ""):
+                await _shopify_flag_waiting()
                 return
     q = {"website_order": True, "status": "dispatched", "dispatch.dispatched_at": {"$gte": SHOPIFY_FULFIL_SINCE},
          "shopify_fulfillment.status": {"$ne": "fulfilled"},
