@@ -1353,7 +1353,8 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "remark": req.remark,
         "status": "new",
         "payment_status": req.payment_status,
-        "is_cod": bool(req.is_cod),
+        # a "COD" mode of payment (e.g. website COD orders from the CRM) is a COD order
+        "is_cod": bool(req.is_cod) or (req.mode_of_payment or "").strip().lower() == "cod",
         "cod_amount": round(float(req.cod_amount or 0), 2),
         "amount_paid": req.amount_paid if req.payment_status != "unpaid" else 0,
         "balance_amount": round(grand_total - (req.amount_paid if req.payment_status == "partial" else (grand_total if req.payment_status == "full" else 0)), 2),
@@ -10262,6 +10263,16 @@ async def shipments_bookable(user=Depends(get_current_user)):
                            "shipping_address": {"city": sa.get("city"), "pincode": sa.get("pincode")},
                            "is_cod": bool(o.get("is_cod")), "cod_amount": _amazon_cod_amount(o),
                            "carrier_risk": bool(o.get("carrier_risk_applicable"))})
+    # What the customer still owes, so booking an unpaid order as Prepaid is never silent.
+    ids = [r["id"] for r in rows + unassigned if r.get("id")]
+    owed = {}
+    async for o in db.orders.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "grand_total": 1, "amount_paid": 1,
+                                                         "payment_status": 1, "mode_of_payment": 1, "is_cod": 1}):
+        due = 0.0 if o.get("payment_status") == "full" else             round(max(0.0, float(o.get("grand_total") or 0) - float(o.get("amount_paid") or 0)), 2)
+        owed[o["id"]] = {"balance_due": due,
+                         "cod_expected": bool(o.get("is_cod")) or (o.get("mode_of_payment") or "").strip().lower() == "cod"}
+    for r in rows + unassigned:
+        r.update(owed.get(r.get("id")) or {"balance_due": 0.0, "cod_expected": bool(r.get("is_cod"))})
     return {"orders": rows, "unassigned": unassigned, "errors": errors}
 
 

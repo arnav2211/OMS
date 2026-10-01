@@ -116,7 +116,7 @@ export default function BookShipments() {
 
   // ── single booking: each courier keeps its own confirmation step ──
   const startBooking = async (o, mode, insureOverride) => {
-    const useMode = mode || (o.is_cod ? "cod" : "prepaid");
+    const useMode = mode || (o.is_cod || o.cod_expected ? "cod" : "prepaid");
     setBusy(p => ({ ...p, [o.id]: true }));
     try {
       if (o.courier === "DTDC") {
@@ -232,7 +232,7 @@ export default function BookShipments() {
   const bulkBook = async () => {
     if (!toBook.length) return;
     const init = {};
-    for (const o of toBook) init[o.id] = { courier: o.courier, mode: o.is_cod ? "cod" : "prepaid", loading: true, options: [], insure: false };
+    for (const o of toBook) init[o.id] = { courier: o.courier, mode: o.is_cod || o.cod_expected ? "cod" : "prepaid", loading: true, options: [], insure: false };
     setReview(init);
     await Promise.all(toBook.map(async (o) => {
       const row = await quoteRow(o, init[o.id].mode);
@@ -661,6 +661,11 @@ export default function BookShipments() {
                           </div>
                         )}
                         {r.mode === "cod" && r.codAmount > 0 && <div className="text-[10px] text-amber-700 mt-0.5">collect {inr(r.codAmount)}</div>}
+                        {r.courier !== "DTDC" && r.mode === "prepaid" && o.balance_due > 0 && (
+                          <div className="text-[11px] font-semibold text-red-600 mt-0.5" data-testid={`ship-unpaid-${o.id}`}>
+                            {o.cod_expected ? "COD order! " : ""}Unpaid {inr(o.balance_due)} — nothing will be collected
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell className="align-top">
                         {r.loading ? <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
@@ -762,6 +767,12 @@ export default function BookShipments() {
                 {payMode === "cod"
                   ? <p className="text-sm">The courier will collect <b>{inr(confirm.codAmount)}</b> from the customer. Rates below include the COD fee.</p>
                   : <p className="text-sm text-muted-foreground">Nothing will be collected on delivery.</p>}
+                {payMode === "prepaid" && confirm.order?.balance_due > 0 && (
+                  <div className="rounded-md bg-red-50 dark:bg-red-950/30 border border-red-400 px-3 py-2 text-sm text-red-700 dark:text-red-300" data-testid="ship-unpaid-warning">
+                    <b>{confirm.order.cod_expected ? "This is a COD order. " : ""}The customer has not paid {inr(confirm.order.balance_due)}.</b>{" "}
+                    Booking as Prepaid means the courier collects nothing. Choose Cash on delivery unless the money is already received.
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2">
