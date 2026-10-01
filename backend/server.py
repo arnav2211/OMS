@@ -8545,7 +8545,9 @@ def _sr_cod(order: dict, mode: Optional[str]) -> float:
     mode = (mode or "").strip().lower()
     if mode == "cod":
         return _amazon_cod_amount({**order, "is_cod": True})
-    return 0.0          # prepaid unless COD is stated - never inferred
+    if mode == "prepaid":
+        return 0.0
+    return _amazon_cod_amount(order)     # not stated: follow the order's COD flag, like Amazon
 
 
 @api_router.post("/shiprocket/quote")
@@ -9259,10 +9261,7 @@ class DelhiveryBookRequest(BaseModel):
 
 
 def _dlv_cod(order: dict, mode: Optional[str]) -> float:
-    mode = (mode or "").strip().lower()
-    if mode == "cod":
-        return _amazon_cod_amount({**order, "is_cod": True})
-    return 0.0
+    return _sr_cod(order, mode)
 
 
 @api_router.post("/delhivery/quote")
