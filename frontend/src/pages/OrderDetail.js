@@ -859,7 +859,10 @@ export default function OrderDetail() {
           <div className="mt-4 space-y-2 text-sm">
             <Separator />
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">{"\u20B9"}{order.subtotal?.toFixed(2)}</span></div>
-            {order.gst_applicable && <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-mono">{"\u20B9"}{order.total_gst?.toFixed(2)}</span></div>}
+            {/* total_gst already includes shipping and charge GST, which have their own lines
+                below, so this line is the items' GST (net of any discount) and the column adds up. */}
+            {order.gst_applicable && <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-mono">{"\u20B9"}{((order.total_gst || 0) - (order.shipping_gst || 0)
+              - (order.additional_charges || []).filter(c => c.amount > 0).reduce((t, c) => t + (c.gst_amount || 0), 0)).toFixed(2)}</span></div>}
             {order.shipping_charge > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping</span><span className="font-mono">{"\u20B9"}{order.shipping_charge?.toFixed(2)}</span></div>}
             {order.shipping_gst > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Shipping GST</span><span className="font-mono">{"\u20B9"}{order.shipping_gst?.toFixed(2)}</span></div>}
             {order.additional_charges?.filter(c => c.amount).map((c, i) => (

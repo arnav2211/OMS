@@ -2972,7 +2972,7 @@ async def print_bulk_packaging_sheets(body: dict, user=Depends(get_current_user)
         totals = []
         totals.append([Paragraph("Subtotal:", tot_sty), Paragraph(f"₹ {order.get('subtotal', 0):.2f}", tot_sty)])
         if order.get("total_gst", 0) > 0:
-            totals.append([Paragraph("GST:", tot_sty), Paragraph(f"₹ {order['total_gst']:.2f}", tot_sty)])
+            totals.append([Paragraph("GST (incl. shipping & charges):", tot_sty), Paragraph(f"₹ {order['total_gst']:.2f}", tot_sty)])
         if order.get("shipping_charge", 0) > 0:
             totals.append([Paragraph("Shipping:", tot_sty), Paragraph(f"₹ {order['shipping_charge']:.2f}", tot_sty)])
         # Additional charges
@@ -2982,8 +2982,6 @@ async def print_bulk_packaging_sheets(body: dict, user=Depends(get_current_user)
             charge_gst = charge.get("gst_amount", 0)
             if charge_amt > 0:
                 totals.append([Paragraph(f"{charge_label}:", tot_sty), Paragraph(f"₹ {charge_amt:.2f}", tot_sty)])
-            if charge_gst > 0:
-                totals.append([Paragraph(f"{charge_label} GST ({charge.get('gst_percent', 0)}%):", tot_sty), Paragraph(f"₹ {charge_gst:.2f}", tot_sty)])
         totals.append([Paragraph("Grand Total:", totb_sty), Paragraph(f"<b>₹ {order.get('grand_total', 0):.0f}</b>", totb_sty)])
         tt = Table(totals, colWidths=[pw - 55*mm, 55*mm])
         tt.setStyle(TableStyle([
@@ -4814,7 +4812,7 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
     totals = []
     totals.append([Paragraph("Subtotal:", tot_sty), Paragraph(f"₹ {order.get('subtotal', 0):.2f}", tot_sty)])
     if order.get("total_gst", 0) > 0:
-        totals.append([Paragraph("GST:", tot_sty), Paragraph(f"₹ {order['total_gst']:.2f}", tot_sty)])
+        totals.append([Paragraph("GST (incl. shipping & charges):", tot_sty), Paragraph(f"₹ {order['total_gst']:.2f}", tot_sty)])
     if order.get("shipping_charge", 0) > 0:
         totals.append([Paragraph("Shipping:", tot_sty), Paragraph(f"₹ {order['shipping_charge']:.2f}", tot_sty)])
     # Additional charges
@@ -4824,8 +4822,6 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
         charge_gst = charge.get("gst_amount", 0)
         if charge_amt > 0:
             totals.append([Paragraph(f"{charge_label}:", tot_sty), Paragraph(f"₹ {charge_amt:.2f}", tot_sty)])
-        if charge_gst > 0:
-            totals.append([Paragraph(f"{charge_label} GST ({charge.get('gst_percent', 0)}%):", tot_sty), Paragraph(f"₹ {charge_gst:.2f}", tot_sty)])
     totals.append([Paragraph("Grand Total:", totb_sty), Paragraph(f"<b>₹ {order.get('grand_total', 0):.0f}</b>", totb_sty)])
     tt = Table(totals, colWidths=[pw - 55*mm, 55*mm])
     tt.setStyle(TableStyle([
@@ -5658,7 +5654,10 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
     # reversal) -> Grand Total. Every line is pre-GST so the column adds up.
     totals = []
     totals.append([Paragraph("Subtotal", tr), Paragraph(f"{pi.get('subtotal', 0):.2f}", tr)])
-    combined_gst = round(float(pi.get("total_gst", 0) or 0) + float(pi.get("shipping_gst", 0) or 0), 2)
+    # Built from its parts. The stored total_gst already includes shipping and
+    # charge GST, so adding those on top of it double-counted them (PI-0509).
+    combined_gst = round(sum(float(i.get("gst_amount", 0) or 0) for i in pi.get("items", []))
+                         + float(pi.get("shipping_gst", 0) or 0), 2)
     for charge in pi.get("additional_charges", []):
         charge_amt = float(charge.get("amount", 0) or 0)
         combined_gst = round(combined_gst + float(charge.get("gst_amount", 0) or 0), 2)
