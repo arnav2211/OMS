@@ -4982,11 +4982,12 @@ async def list_pis(search: Optional[str] = None, page: int = 1, page_size: int =
     query = {}
     if user["role"] == "telecaller":
         query["created_by"] = user["id"]
-    if search:
-        query["$or"] = [
-            {"pi_number": {"$regex": search, "$options": "i"}},
-            {"customer_name": {"$regex": search, "$options": "i"}},
-        ]
+    if search and search.strip():
+        rx = {"$regex": re.escape(search.strip()), "$options": "i"}
+        # phone / GST / alias live on the customer, so search those too
+        cust_ids = [c["id"] async for c in db.customers.find(
+            {"$or": [{"name": rx}, {"alias": rx}, {"gst_no": rx}, {"phone_numbers": rx}]}, {"_id": 0, "id": 1}).limit(500)]
+        query["$or"] = [{"pi_number": rx}, {"customer_name": rx}] + ([{"customer_id": {"$in": cust_ids}}] if cust_ids else [])
     # Lean projection
     list_projection = {
         "_id": 0, "items": 0, "free_samples": 0,

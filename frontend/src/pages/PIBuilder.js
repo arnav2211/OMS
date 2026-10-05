@@ -138,10 +138,25 @@ export default function PIBuilder() {
   const [showEditCustomer, setShowEditCustomer] = useState(false);
   const [editCustData, setEditCustData] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
   const [piSearch, setPiSearch] = useState("");
+  const [piResults, setPiResults] = useState(null);   // server-side search over every PI, not just the latest 200
 
   const canShare = ["admin", "telecaller"].includes(user?.role);
 
   useEffect(() => { loadPIs(); }, []);
+
+  useEffect(() => {
+    const q = piSearch.trim();
+    if (!q) { setPiResults(null); return; }
+    setPiResults(null);
+    let stale = false;
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.get("/proforma-invoices", { params: { search: q, page_size: 200 } });
+        if (!stale) setPiResults(res.data.pis || []);
+      } catch { if (!stale) setPiResults([]); }
+    }, 300);
+    return () => { stale = true; clearTimeout(t); };
+  }, [piSearch]);
 
   const loadPIs = async () => {
     try { const res = await api.get("/proforma-invoices?page_size=200"); setPiList(res.data.pis || res.data); }
@@ -435,14 +450,9 @@ export default function PIBuilder() {
             )}
             {loading ? <p className="text-center py-8 text-muted-foreground">Loading...</p> :
              piList.length === 0 ? <p className="text-center py-8 text-muted-foreground">No proforma invoices yet.</p> : (() => {
-              const q = piSearch.toLowerCase();
-              const filtered = q ? piList.filter(pi =>
-                pi.pi_number?.toLowerCase().includes(q) ||
-                pi.customer_name?.toLowerCase().includes(q) ||
-                pi.customer_phone?.some?.(p => p.includes(q)) ||
-                pi.customer_gst?.toLowerCase().includes(q) ||
-                pi.customer_alias?.toLowerCase().includes(q)
-              ) : piList;
+              const searching = !!piSearch.trim();
+              const filtered = searching ? (piResults || []) : piList;
+              if (searching && piResults === null) return <p className="text-center py-8 text-muted-foreground">Searching...</p>;
               return filtered.length === 0 ? <p className="text-center py-8 text-muted-foreground">No results for "{piSearch}"</p> : (
               <Table className="min-w-[600px]">
                 <TableHeader>
