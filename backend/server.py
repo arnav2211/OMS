@@ -5680,6 +5680,13 @@ async def generate_pi_pdf(pi_id: str, token: str = ""):
             totals.append([Paragraph("SGST", tr), Paragraph(f"{combined_gst - cgst:.2f}", tr)])
         else:
             totals.append([Paragraph("IGST", tr), Paragraph(f"{combined_gst:.2f}", tr)])
+    # The grand total is rounded up to the rupee; show that step so the column adds up.
+    pre_round = (float(pi.get("subtotal", 0) or 0) + float(pi.get("shipping_charge", 0) or 0)
+                 + sum(float(c.get("amount", 0) or 0) for c in pi.get("additional_charges", []))
+                 + (combined_gst if is_gst else 0))
+    round_off = round(float(pi.get("grand_total", 0) or 0) - pre_round, 2)
+    if abs(round_off) >= 0.01:
+        totals.append([Paragraph("Round Off", tr), Paragraph(f"{'+' if round_off > 0 else '-'} {abs(round_off):.2f}", tr)])
     totals.append([Paragraph("<b>GRAND TOTAL</b>", trb), Paragraph(f"<b>INR {pi.get('grand_total', 0):.0f}</b>", trb)])
 
     tt = Table(totals, colWidths=[pw - 62*mm, 62*mm])
