@@ -4360,24 +4360,27 @@ def _lb_fallback(me: dict, board: list, label: str) -> str:
 async def _lb_message(me: dict, board: list, period: str, label: str, days_left: int) -> str:
     today = datetime.now(IST).strftime("%Y-%m-%d")
     bucket = int(me["sales"] // 5000)                  # refresh the note as sales move, not on every rupee
-    key = f"{me['id']}|{period}|{today}|{me['rank']}|{bucket}"
+    key = f"v2|{me['id']}|{period}|{today}|{me['rank']}|{bucket}"
     cached = await db.leaderboard_messages.find_one({"key": key}, {"_id": 0, "text": 1})
     if cached:
         return cached["text"]
     text = ""
     if GEMINI_KEYS:
         others = ", ".join(f"#{b['rank']} {b['name'].split()[0]} ₹{b['sales']:,.0f} ({b['orders']} orders)" for b in board[:6])
+        avg = f" Their average order is ₹{me['avg_order']:,.0f}." if me.get("avg_order") else ""
         situation = ("is #1 and leading by ₹{:,.0f}".format(me.get("lead") or 0) if me["rank"] == 1 and me["sales"] > 0
                      else "has no sales yet in this period" if me["sales"] <= 0
                      else "is #{} and needs ₹{:,.0f} more to overtake {}".format(me["rank"], me["gap"], board[me["rank"] - 2]["name"].split()[0]))
         prompt = (
             "You are the warm, energetic sales coach of an Indian aroma-chemicals and essential-oils company (CitSpray). "
             f"Write a short personal note (max 2 sentences, under 45 words) for telecaller sales executive {me['name'].split()[0]}, "
-            f"shown on their sales leaderboard for {label}. This executive {situation}, with ₹{me['sales']:,.0f} from {me['orders']} orders. "
+            f"shown on their sales leaderboard for {label}. This executive {situation}, with ₹{me['sales']:,.0f} from {me['orders']} orders.{avg} "
             f"Leaderboard: {others}. Address them directly as you (second person). "
             + (f"{days_left} days are left in the month. " if period == "month" else "")
             + ("Celebrate them loudly and push them to keep the lead. " if me["rank"] == 1 and me["sales"] > 0 else
                "Encourage them, make the next step feel very achievable, never shame or compare harshly. ")
+            + "Facts are exact: use only the rupee amounts and counts given above, never invent, round differently or "
+              "re-calculate a number, and never say a target is reachable with one order unless the gap is smaller than the average order. "
             + "Use plain simple English a little Hinglish is fine, one emoji at most, no hashtags, no quotes, no markdown."
         )
         text = (await _gemini_text(prompt)).replace("**", "").strip().strip('"')
