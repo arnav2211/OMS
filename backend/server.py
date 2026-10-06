@@ -4360,7 +4360,7 @@ def _lb_fallback(me: dict, board: list, label: str) -> str:
 async def _lb_message(me: dict, board: list, period: str, label: str, days_left: int) -> str:
     today = datetime.now(IST).strftime("%Y-%m-%d")
     bucket = int(me["sales"] // 5000)                  # refresh the note as sales move, not on every rupee
-    key = f"v2|{me['id']}|{period}|{today}|{me['rank']}|{bucket}"
+    key = f"v3|{me['id']}|{period}|{today}|{me['rank']}|{bucket}"
     cached = await db.leaderboard_messages.find_one({"key": key}, {"_id": 0, "text": 1})
     if cached:
         return cached["text"]
@@ -4379,8 +4379,9 @@ async def _lb_message(me: dict, board: list, period: str, label: str, days_left:
             + (f"{days_left} days are left in the month. " if period == "month" else "")
             + ("Celebrate them loudly and push them to keep the lead. " if me["rank"] == 1 and me["sales"] > 0 else
                "Encourage them, make the next step feel very achievable, never shame or compare harshly. ")
-            + "Facts are exact: use only the rupee amounts and counts given above, never invent, round differently or "
-              "re-calculate a number, and never say a target is reachable with one order unless the gap is smaller than the average order. "
+            + "The card already shows every figure, so do NOT write any rupee amount, number of orders or other number "
+              "(the rank like #2 and the days left are the only numbers allowed). Never say a target is reachable with one order "
+              "unless the gap is smaller than their average order. "
             + "Use plain simple English a little Hinglish is fine, one emoji at most, no hashtags, no quotes, no markdown."
         )
         text = (await _gemini_text(prompt)).replace("**", "").strip().strip('"')
