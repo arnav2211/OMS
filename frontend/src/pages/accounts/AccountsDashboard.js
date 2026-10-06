@@ -11,9 +11,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Upload, Trash2, FileText, CheckCircle, Clock, RefreshCw, AlertTriangle, BanknoteIcon, Eye, X } from "lucide-react";
+import { Upload, Trash2, FileText, CheckCircle, Clock, RefreshCw, AlertTriangle, BanknoteIcon, Eye, X, Download } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import TallyFetchDialog from "@/components/TallyFetchDialog";
 
 const PERIODS = [
   { value: "today", label: "Today" },
@@ -141,6 +142,32 @@ export default function AccountsDashboard() {
     finally { setUploading(p => ({ ...p, [orderId]: false })); }
   };
 
+  // Fetch from Tally (Bahi): per order, or every pending GST order whose bill is already in Tally.
+  // Only fills orders that have no invoice yet — an uploaded invoice is never replaced.
+  const [tallyOrder, setTallyOrder] = useState(null);
+  const [tallyBulk, setTallyBulk] = useState(false);
+  const fetchPendingFromTally = async () => {
+    setTallyBulk(true);
+    const attached = [], failed = [], skip = [];
+    let noBill = 0;
+    try {
+      for (let round = 0; round < 25; round++) {
+        const res = await api.post(`/orders/tally-bills/attach-pending`, { skip });
+        attached.push(...res.data.attached);
+        res.data.failed.forEach((f) => { failed.push(f); skip.push(f.order_number); });
+        noBill = res.data.no_bill.length;
+        if (!res.data.remaining || (!res.data.attached.length && !res.data.failed.length)) break;
+        toast.message(`Attached ${attached.length} so far…`);
+      }
+      if (attached.length) toast.success(`Attached from Tally: ${attached.map((a) => a.order_number).join(", ")}`);
+      else toast.message("No pending order has its bill in Tally yet");
+      if (failed.length) toast.error(`Could not attach: ${failed.map((f) => `${f.order_number} (${f.error})`).join("; ")}`);
+      if (noBill) toast.message(`${noBill} pending order(s) have no Tally bill with their order number as Reference No.`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Fetch from Tally failed");
+    } finally { setTallyBulk(false); loadGstOrders(); }
+  };
+
   const handleInvoiceDelete = async (orderId) => {
     try {
       await api.delete(`/orders/${orderId}/invoice`);
@@ -264,6 +291,10 @@ export default function AccountsDashboard() {
                     <SelectItem value="pending">Pending Upload</SelectItem>
                   </SelectContent>
                 </Select>
+                <Button variant="outline" size="sm" onClick={fetchPendingFromTally} disabled={tallyBulk} data-testid="tally-fetch-pending"
+                  title="Attach invoices from Tally to every GST order that has none yet (never replaces an uploaded invoice)">
+                  <Download className="w-4 h-4 mr-1" />{tallyBulk ? "Fetching from Tally…" : "Fetch pending from Tally"}
+                </Button>
                 <Button variant="outline" size="sm" onClick={loadGstOrders}><RefreshCw className="w-4 h-4 mr-1" />Refresh</Button>
               </div>
             </CardHeader>
@@ -337,6 +368,11 @@ export default function AccountsDashboard() {
                                 <Upload className="w-3 h-3 mr-1" />
                                 {uploading[o.id] ? "Uploading..." : o.tax_invoice_url ? "Replace" : "Upload PDF"}
                               </Button>
+                              {!o.tax_invoice_url && (
+                                <Button variant="outline" size="sm" onClick={() => setTallyOrder(o)} data-testid={`tally-fetch-${o.id}`}>
+                                  <Download className="w-3 h-3 mr-1" />From Tally
+                                </Button>
+                              )}
                               {o.tax_invoice_url && (
                                 <Button variant="ghost" size="icon" onClick={() => handleInvoiceDelete(o.id)} data-testid={`delete-invoice-${o.id}`}>
                                   <Trash2 className="w-3 h-3 text-destructive" />
@@ -525,6 +561,8 @@ export default function AccountsDashboard() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <TallyFetchDialog order={tallyOrder} open={!!tallyOrder} onOpenChange={(v) => { if (!v) setTallyOrder(null); }} onAttached={loadGstOrders} />
 
       {/* Invoice Upload Modal */}
       <Dialog open={uploadModal.open} onOpenChange={open => { if (!open) setUploadModal({ open: false, orderId: null, orderNumber: "" }); }}>

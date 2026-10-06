@@ -24,6 +24,7 @@ import { SlipScanner } from "@/components/SlipScanner";
 import { validateLrNumber, getTrackingUrl, extractPorterLink, isLrMandatory, COURIER_LR_PATTERNS, isOtherCourier, supportsLiveTracking } from "@/lib/courierTracking";
 import CourierSelect from "@/components/CourierSelect";
 import CourierStatusDialog from "@/components/CourierStatusDialog";
+import TallyFetchDialog from "@/components/TallyFetchDialog";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 
@@ -32,6 +33,7 @@ export default function OrderDetail() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [order, setOrder] = useState(null);
+  const [tallyOpen, setTallyOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   // These are kept for backwards compatibility but no longer used (edit now navigates to /orders/:id/edit)
   // eslint-disable-next-line
@@ -951,11 +953,32 @@ export default function OrderDetail() {
       )}
 
       {/* Tax Invoice */}
+      {!order.tax_invoice_url && order.gst_applicable && ["admin", "accounts"].includes(user?.role) && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Tax Invoice</CardTitle>
+                <p className="text-xs text-muted-foreground mt-1">Not uploaded yet</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setTallyOpen(true)} data-testid="tally-fetch-btn">
+                <FileText className="w-4 h-4 mr-1" /> Fetch from Tally
+              </Button>
+            </div>
+          </CardHeader>
+        </Card>
+      )}
+      <TallyFetchDialog order={order} open={tallyOpen} onOpenChange={setTallyOpen} onAttached={() => window.location.reload()} />
       {order.tax_invoice_url && (
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Tax Invoice</CardTitle>
+              <div>
+                <CardTitle className="text-base">Tax Invoice</CardTitle>
+                {order.tally_bills?.length > 0 && (
+                  <p className="text-xs text-muted-foreground mt-1">From Tally: {order.tally_bills.map((b) => b.number).join(", ")}</p>
+                )}
+              </div>
               <div className="flex gap-2">
                 <a href={`${process.env.REACT_APP_BACKEND_URL}${order.tax_invoice_url}`} target="_blank" rel="noopener noreferrer">
                   <Button variant="outline" size="sm" data-testid="view-invoice-btn"><FileText className="w-4 h-4 mr-1" /> View</Button>

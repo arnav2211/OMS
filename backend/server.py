@@ -2559,6 +2559,145 @@ async def delete_order_invoice(order_id: str, user=Depends(get_current_user)):
     await db.orders.update_one({"id": order_id}, {"$set": {"tax_invoice_url": "", "updated_at": datetime.now(timezone.utc).isoformat()}})
     return {"message": "Invoice removed"}
 
+# ── Tax Invoice from Tally (Bahi) ────────────────────────────────────────────
+# Bahi (tally.mangalamagro.in) mirrors Tally. "Fetch from Tally" finds the order's sales bills by their
+# Reference No. (CS-1749; one bill can name several orders, "CS-1749, CS-1750" or "CS-1749/50"; one order can
+# have several bills) and attaches one PDF: each bill in Tally's invoice format followed by its e-way bill.
+# It only ever fills an EMPTY invoice slot — an invoice that is already uploaded is never replaced or removed.
+BAHI_URL = os.environ.get("BAHI_URL", "https://tally.mangalamagro.in").rstrip("/")
+BAHI_KEY = os.environ.get("BAHI_KEY", "")
+NO_INVOICE = {"$or": [{"tax_invoice_url": ""}, {"tax_invoice_url": None}, {"tax_invoice_url": {"$exists": False}}]}
+
+
+async def _bahi(method: str, path: str, timeout: float = 60, **kw):
+    import httpx
+    if not BAHI_KEY:
+        raise HTTPException(status_code=503, detail="Tally link is not set up (BAHI_KEY missing)")
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.request(method, BAHI_URL + path, headers={"X-Bahi-Key": BAHI_KEY}, **kw)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach Bahi: {e}")
+    if r.status_code >= 400:
+        try:
+            msg = r.json().get("detail") or r.text
+        except ValueError:
+            msg = r.text
+        raise HTTPException(status_code=502, detail=f"Bahi: {str(msg)[:200]}")
+    return r
+
+
+def _bill_key(b):
+    return f"{b['cid']}:{b['mid']}"
+
+
+async def _attach_tally_bills(order: dict, bills: list, include_eway: bool, user: dict):
+    """Render the bills in Bahi and attach them — only if the order still has no invoice."""
+    if not order.get("gst_applicable"):
+        raise HTTPException(status_code=400, detail="Tax invoice only for GST-applicable orders")
+    if order.get("tax_invoice_url"):
+        raise HTTPException(status_code=409, detail="This order already has an invoice. Fetch from Tally never replaces an uploaded invoice.")
+    if not bills:
+        raise HTTPException(status_code=400, detail="Choose at least one Tally bill")
+    r = await _bahi("POST", "/api/ext/render", timeout=170,
+                    json={"items": [{"cid": b["cid"], "mid": b["mid"]} for b in bills], "ewb": include_eway})
+    filename = f"{uuid.uuid4()}.pdf"
+    filepath = UPLOAD_DIR / filename
+    async with aiofiles.open(filepath, 'wb') as f:
+        await f.write(r.content)
+    now = datetime.now(timezone.utc).isoformat()
+    res = await db.orders.update_one({"id": order["id"], **NO_INVOICE}, {"$set": {
+        "tax_invoice_url": f"/api/uploads/{filename}",
+        "tally_bills": [{k: b.get(k) for k in ("cid", "mid", "company", "number", "date", "amount", "alter_id", "ewb_no")} for b in bills],
+        "tally_fetched_at": now, "tally_fetched_by": user.get("name") or user.get("username"),
+        "updated_at": now,
+    }})
+    if res.modified_count == 0:  # someone uploaded meanwhile: keep theirs
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        raise HTTPException(status_code=409, detail="An invoice was uploaded for this order meanwhile — kept it, nothing replaced.")
+    return await db.orders.find_one({"id": order["id"]}, {"_id": 0})
+
+
+@api_router.get("/orders/{order_id}/tally-bills")
+async def order_tally_bills(order_id: str, q: str = "", user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "accounts"]:
+        raise HTTPException(status_code=403, detail="Accounts or admin only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0, "id": 1, "order_number": 1, "tax_invoice_url": 1,
+                                                         "gst_applicable": 1, "tally_bills": 1, "tally_fetched_at": 1, "tally_fetched_by": 1})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    num = order.get("order_number") or ""
+    attached = {_bill_key(b): b for b in order.get("tally_bills") or []}
+    r = await _bahi("GET", "/api/ext/invoices", params={"orders": num, "q": q, "ids": ",".join(attached)})
+    data = r.json()
+    matched = set((data.get("by_order") or {}).get(num.upper(), []))
+    bills = []
+    for b in data.get("bills") or []:
+        k = _bill_key(b)
+        b.update(key=k, matches_order=k in matched, attached=k in attached,
+                 changed=k in attached and attached[k].get("alter_id") != b.get("alter_id"),
+                 other_orders=[o for o in b.get("orders") or [] if o != num.upper()])
+        bills.append(b)
+    bills.sort(key=lambda b: (not b["matches_order"], not b["attached"]))
+    return {"order_number": num, "gst_applicable": bool(order.get("gst_applicable")),
+            "has_invoice": bool(order.get("tax_invoice_url")), "from_tally": bool(attached),
+            "fetched_at": order.get("tally_fetched_at"), "fetched_by": order.get("tally_fetched_by"), "bills": bills}
+
+
+@api_router.post("/orders/{order_id}/tally-bills/attach")
+async def order_tally_attach(order_id: str, body: dict, user=Depends(get_current_user)):
+    if user["role"] not in ["admin", "accounts"]:
+        raise HTTPException(status_code=403, detail="Accounts or admin only")
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    bills = [b for b in (body.get("bills") or []) if b.get("cid") is not None and b.get("mid") is not None][:10]
+    return await _attach_tally_bills(order, bills, bool(body.get("include_eway", True)), user)
+
+
+@api_router.post("/orders/tally-bills/attach-pending")
+async def tally_attach_pending(body: dict = None, user=Depends(get_current_user)):
+    """'Fetch pending from Tally': GST orders with no invoice yet whose bills are in Tally get them attached.
+    Works through a few orders per call (the PDFs take a few seconds each); call again while `remaining` > 0."""
+    if user["role"] not in ["admin", "accounts"]:
+        raise HTTPException(status_code=403, detail="Accounts or admin only")
+    body = body or {}
+    skip = set(body.get("skip") or [])
+    since = (datetime.now(timezone.utc) - timedelta(days=int(body.get("days") or 120))).isoformat()
+    pending = await db.orders.find({"gst_applicable": True, "status": {"$ne": "cancelled"}, "created_at": {"$gte": since},
+                                    "order_number": {"$nin": list(skip)}, **NO_INVOICE},
+                                   {"_id": 0}).sort("created_at", -1).to_list(300)
+    if not pending:
+        return {"attached": [], "no_bill": [], "failed": [], "remaining": 0}
+    found = {}
+    for i in range(0, len(pending), 40):
+        chunk = pending[i:i + 40]
+        r = await _bahi("GET", "/api/ext/invoices", params={"orders": ",".join(o["order_number"] for o in chunk)})
+        d = r.json()
+        bills = {_bill_key(b): b for b in d.get("bills") or []}
+        for num, keys in (d.get("by_order") or {}).items():
+            found[num] = [bills[k] for k in keys if k in bills and not bills[k].get("cancelled")]
+    attached, no_bill, failed, done = [], [], [], 0
+    for o in pending:
+        bills = found.get((o.get("order_number") or "").upper()) or []
+        if not bills:
+            no_bill.append(o["order_number"])
+            continue
+        if done >= 4:
+            continue
+        done += 1
+        try:
+            await _attach_tally_bills(o, bills, True, user)
+            attached.append({"order_number": o["order_number"], "bills": [b["number"] for b in bills]})
+        except HTTPException as e:
+            failed.append({"order_number": o["order_number"], "error": e.detail})
+    remaining = sum(1 for o in pending if found.get((o.get("order_number") or "").upper())) - len(attached) - len(failed)
+    return {"attached": attached, "no_bill": no_bill, "failed": failed, "remaining": max(0, remaining)}
+
+
 # ── Payment Check ─────────────────────────────────────────────────────────────
 @api_router.put("/orders/{order_id}/payment-check")
 async def update_payment_check(order_id: str, body: dict, user=Depends(get_current_user)):
