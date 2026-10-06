@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import SalesLeaderboard from "@/components/SalesLeaderboard";
 
 const STATUS_STYLES = {
   new: "status-new",
@@ -122,6 +123,8 @@ export default function TelecallerDashboard() {
           </Button>
         </Link>
       </div>
+
+      <SalesLeaderboard />
 
       {/* Notification Box */}
       {notifications.length > 0 && (

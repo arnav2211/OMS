@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
+import SalesLeaderboard from "@/components/SalesLeaderboard";
 import {
   BarChart3, Users, Settings, ShoppingCart, IndianRupee, Package, TrendingUp,
   Eye, EyeOff, UserPlus, UserX, Trash2, RefreshCw, ChevronDown, CheckCircle, ShieldCheck,
@@ -283,6 +284,8 @@ export default function AdminDashboard() {
   return (
     <div className="space-y-6" data-testid="admin-dashboard">
       <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Admin Dashboard</h1>
+
+      <SalesLeaderboard />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="overflow-x-auto pb-1">

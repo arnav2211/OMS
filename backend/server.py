@@ -4297,6 +4297,136 @@ def _calc_product_sales(order, exclude_gst: bool, exclude_shipping: bool) -> flo
     return order.get("grand_total", 0)
 
 # Telecaller Sales Report
+# ═══════════════════════════════════════════════════════════════════════════
+# SALES LEADERBOARD for telecallers. Ranked on product sales (items before GST,
+# shipping and charges) of orders that are not cancelled. Each executive gets a
+# short personal note from Gemini (cached per day and rank), with a built-in
+# fallback so the board never waits on the AI.
+# ═══════════════════════════════════════════════════════════════════════════
+# Accounts that take orders but are not sales executives (admin / website).
+LEADERBOARD_EXCLUDE = {u.strip().lower() for u in os.environ.get("LEADERBOARD_EXCLUDE", "Harshali,website").split(",") if u.strip()}
+GEMINI_KEYS = [k.strip() for k in (os.environ.get("GEMINI_API_KEYS") or os.environ.get("GEMINI_API_KEY") or "").split(",") if k.strip()]
+GEMINI_MODELS = [m.strip() for m in os.environ.get("GEMINI_MODELS", "gemini-flash-lite-latest,gemini-flash-latest,gemini-2.5-flash").split(",") if m.strip()]
+
+
+async def _gemini_text(prompt: str, timeout: float = 8.0) -> str:
+    for model in GEMINI_MODELS:
+        for key in GEMINI_KEYS:
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as c:
+                    r = await c.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                                     headers={"x-goog-api-key": key},
+                                     json={"contents": [{"parts": [{"text": prompt}]}],
+                                           "generationConfig": {"temperature": 0.9, "maxOutputTokens": 160}})
+            except Exception:
+                break                      # network/timeout: try the next model
+            if r.status_code == 200:
+                try:
+                    return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                except Exception:
+                    continue
+            if r.status_code in (404, 503):
+                break
+    return ""
+
+
+def _lb_period_start(period: str):
+    now_ist = datetime.now(IST)
+    if period == "today":
+        start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        label = "today"
+    elif period == "week":
+        start = (now_ist - timedelta(days=now_ist.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        label = "this week"
+    else:
+        start = now_ist.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        label = now_ist.strftime("%B")
+    return start, label, now_ist
+
+
+def _lb_fallback(me: dict, board: list, label: str) -> str:
+    first = (me["name"] or "").split()[0]
+    if me["sales"] <= 0:
+        return f"{first}, a fresh board is waiting for your name. One good call can put you on it. Start strong!"
+    if me["rank"] == 1:
+        lead = me.get("lead") or 0
+        return (f"Champion {first}! You are leading {label} with a ₹{lead:,.0f} lead. "
+                "Keep the calls going and make this crown yours to keep.")
+    above = board[me["rank"] - 2]
+    return (f"{first}, you are #{me['rank']}, just ₹{me['gap']:,.0f} behind {above['name'].split()[0]}. "
+            "One more good order and you move up. You've got this!")
+
+
+async def _lb_message(me: dict, board: list, period: str, label: str, days_left: int) -> str:
+    today = datetime.now(IST).strftime("%Y-%m-%d")
+    bucket = int(me["sales"] // 5000)                  # refresh the note as sales move, not on every rupee
+    key = f"{me['id']}|{period}|{today}|{me['rank']}|{bucket}"
+    cached = await db.leaderboard_messages.find_one({"key": key}, {"_id": 0, "text": 1})
+    if cached:
+        return cached["text"]
+    text = ""
+    if GEMINI_KEYS:
+        others = ", ".join(f"#{b['rank']} {b['name'].split()[0]} ₹{b['sales']:,.0f} ({b['orders']} orders)" for b in board[:6])
+        situation = ("is #1 and leading by ₹{:,.0f}".format(me.get("lead") or 0) if me["rank"] == 1 and me["sales"] > 0
+                     else "has no sales yet in this period" if me["sales"] <= 0
+                     else "is #{} and needs ₹{:,.0f} more to overtake {}".format(me["rank"], me["gap"], board[me["rank"] - 2]["name"].split()[0]))
+        prompt = (
+            "You are the warm, energetic sales coach of an Indian aroma-chemicals and essential-oils company (CitSpray). "
+            f"Write a short personal note (max 2 sentences, under 45 words) for telecaller sales executive {me['name'].split()[0]}, "
+            f"shown on their sales leaderboard for {label}. This executive {situation}, with ₹{me['sales']:,.0f} from {me['orders']} orders. "
+            f"Leaderboard: {others}. Address them directly as you (second person). "
+            + (f"{days_left} days are left in the month. " if period == "month" else "")
+            + ("Celebrate them loudly and push them to keep the lead. " if me["rank"] == 1 and me["sales"] > 0 else
+               "Encourage them, make the next step feel very achievable, never shame or compare harshly. ")
+            + "Use plain simple English a little Hinglish is fine, one emoji at most, no hashtags, no quotes, no markdown."
+        )
+        text = (await _gemini_text(prompt)).replace("**", "").strip().strip('"')
+    if not text:
+        text = _lb_fallback(me, board, label)
+    await db.leaderboard_messages.update_one({"key": key}, {"$set": {"key": key, "text": text, "at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    return text
+
+
+@api_router.get("/leaderboard")
+async def sales_leaderboard(period: str = "month", user=Depends(get_current_user)):
+    if user["role"] not in ("telecaller", "admin"):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    period = period if period in ("today", "week", "month") else "month"
+    start, label, now_ist = _lb_period_start(period)
+    people = [u async for u in db.users.find({"role": "telecaller", "active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1, "username": 1})
+              if (u.get("username") or "").lower() not in LEADERBOARD_EXCLUDE]
+    ids = [u["id"] for u in people]
+    stats = {i: {"sales": 0.0, "orders": 0, "customers": set()} for i in ids}
+    async for o in db.orders.find({"telecaller_id": {"$in": ids}, "status": {"$ne": "cancelled"},
+                                   "created_at": {"$gte": start.astimezone(timezone.utc).isoformat()}},
+                                  {"_id": 0, "telecaller_id": 1, "subtotal": 1, "customer_id": 1}):
+        st = stats[o["telecaller_id"]]
+        st["sales"] += float(o.get("subtotal") or 0)
+        st["orders"] += 1
+        if o.get("customer_id"):
+            st["customers"].add(o["customer_id"])
+    board = sorted(({"id": u["id"], "name": u["name"], "sales": round(stats[u["id"]]["sales"], 2), "orders": stats[u["id"]]["orders"],
+                     "customers": len(stats[u["id"]]["customers"])} for u in people),
+                   key=lambda b: (-b["sales"], -b["orders"], b["name"].lower()))
+    for i, b in enumerate(board):
+        b["rank"] = i + 1
+        b["gap"] = round(board[i - 1]["sales"] - b["sales"] + 1, 0) if i > 0 else 0
+        b["avg_order"] = round(b["sales"] / b["orders"], 0) if b["orders"] else 0
+    if len(board) > 1:
+        board[0]["lead"] = round(board[0]["sales"] - board[1]["sales"], 0)
+    leader = board[0]["sales"] if board else 0
+    for b in board:
+        b["pct_of_leader"] = round(100 * b["sales"] / leader, 1) if leader else 0
+        b["is_me"] = b["id"] == user["id"]
+    end_of_month = (now_ist.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    days_left = (end_of_month.date() - now_ist.date()).days
+    me = next((b for b in board if b["is_me"]), None)
+    message = await _lb_message(me, board, period, label, days_left) if me else ""
+    return {"period": period, "label": label, "days_left_in_month": days_left, "board": board,
+            "me": me, "message": message, "team_sales": round(sum(b["sales"] for b in board), 2),
+            "team_orders": sum(b["orders"] for b in board)}
+
+
 @api_router.get("/reports/telecaller-sales")
 async def telecaller_sales(
     period: Optional[str] = "all",
