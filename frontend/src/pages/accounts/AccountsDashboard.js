@@ -146,23 +146,17 @@ export default function AccountsDashboard() {
   // Only fills orders that have no invoice yet — an uploaded invoice is never replaced.
   const [tallyOrder, setTallyOrder] = useState(null);
   const [tallyBulk, setTallyBulk] = useState(false);
+  const refreshSoon = () => [2500, 6000, 15000].forEach((ms) => setTimeout(loadGstOrders, ms));
   const fetchPendingFromTally = async () => {
     setTallyBulk(true);
-    const attached = [], failed = [], skip = [];
-    let noBill = 0;
     try {
-      for (let round = 0; round < 25; round++) {
-        const res = await api.post(`/orders/tally-bills/attach-pending`, { skip });
-        attached.push(...res.data.attached);
-        res.data.failed.forEach((f) => { failed.push(f); skip.push(f.order_number); });
-        noBill = res.data.no_bill.length;
-        if (!res.data.remaining || (!res.data.attached.length && !res.data.failed.length)) break;
-        toast.message(`Attached ${attached.length} so far…`);
-      }
-      if (attached.length) toast.success(`Attached from Tally: ${attached.map((a) => a.order_number).join(", ")}`);
+      const res = await api.post(`/orders/tally-bills/attach-pending`, {});
+      const { queued, no_bill: noBill, failed } = res.data;
+      if (queued.length) toast.success(`Attaching ${queued.length} invoice(s) from Tally in the background: ${queued.map((a) => a.order_number).join(", ")}`);
       else toast.message("No pending order has its bill in Tally yet");
-      if (failed.length) toast.error(`Could not attach: ${failed.map((f) => `${f.order_number} (${f.error})`).join("; ")}`);
-      if (noBill) toast.message(`${noBill} pending order(s) have no Tally bill with their order number as Reference No.`);
+      if (failed.length) toast.error(`Skipped: ${failed.map((f) => `${f.order_number} (${f.error})`).join("; ")}`);
+      if (noBill.length) toast.message(`${noBill.length} pending order(s) have no Tally bill with their order number as Reference No.`);
+      refreshSoon();
     } catch (err) {
       toast.error(err.response?.data?.detail || "Fetch from Tally failed");
     } finally { setTallyBulk(false); loadGstOrders(); }
@@ -337,7 +331,13 @@ export default function AccountsDashboard() {
                                 <FileText className="w-3 h-3" /> View Invoice
                               </a>
                             ) : (
-                              <span className="text-xs text-muted-foreground">Not uploaded</span>
+                              o.tally_attach?.status === "working" ? (
+                                <span className="text-xs text-blue-700 flex items-center gap-1"><RefreshCw className="w-3 h-3 animate-spin" /> Attaching from Tally…</span>
+                              ) : o.tally_attach?.status === "failed" ? (
+                                <span className="text-xs text-destructive" title={o.tally_attach.message}>Tally: {o.tally_attach.message}</span>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">Not uploaded</span>
+                              )
                             )}
                           </TableCell>
                           <TableCell data-testid={`inv-slip-cell-${o.id}`}>
@@ -562,7 +562,7 @@ export default function AccountsDashboard() {
         </DialogContent>
       </Dialog>
 
-      <TallyFetchDialog order={tallyOrder} open={!!tallyOrder} onOpenChange={(v) => { if (!v) setTallyOrder(null); }} onAttached={loadGstOrders} />
+      <TallyFetchDialog order={tallyOrder} open={!!tallyOrder} onOpenChange={(v) => { if (!v) setTallyOrder(null); }} onAttached={() => { loadGstOrders(); refreshSoon(); }} />
 
       {/* Invoice Upload Modal */}
       <Dialog open={uploadModal.open} onOpenChange={open => { if (!open) setUploadModal({ open: false, orderId: null, orderNumber: "" }); }}>

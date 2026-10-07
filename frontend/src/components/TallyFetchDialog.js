@@ -45,7 +45,7 @@ export default function TallyFetchDialog({ order, open, onOpenChange, onAttached
     setSaving(true);
     try {
       await api.post(`/orders/${order.id}/tally-bills/attach`, { bills: chosen, include_eway: eway });
-      toast.success(`Invoice attached from Tally (${chosen.map((b) => b.number).join(", ")})`);
+      toast.success(`Attaching ${chosen.map((b) => b.number).join(", ")} in the background — carry on with your work`);
       onOpenChange(false);
       onAttached && onAttached();
     } catch (err) {
@@ -117,7 +117,7 @@ export default function TallyFetchDialog({ order, open, onOpenChange, onAttached
             <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
             <Button onClick={attach} disabled={locked || saving || chosen.length === 0} data-testid="tally-fetch-attach">
               <Download className="w-4 h-4 mr-1.5" />
-              {saving ? "Making PDF…" : `Attach ${chosen.length || ""} bill${chosen.length === 1 ? "" : "s"}`}
+              {saving ? "Sending…" : `Attach ${chosen.length || ""} bill${chosen.length === 1 ? "" : "s"}`}
             </Button>
           </div>
         </div>

@@ -2621,6 +2621,48 @@ async def _attach_tally_bills(order: dict, bills: list, include_eway: bool, user
     return await db.orders.find_one({"id": order["id"]}, {"_id": 0})
 
 
+# Attaching runs in the background so nobody waits on it: the order carries `tally_attach`
+# {status: working|done|failed, message, bills, by, started_at} for the screens to show.
+_TALLY_TASKS = set()
+
+
+async def _tally_attach_task(order_id: str, bills: list, include_eway: bool, user: dict):
+    nums = [b.get("number") for b in bills]
+    try:
+        order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+        await _attach_tally_bills(order, bills, include_eway, user)
+        status, msg = "done", f"Attached from Tally: {', '.join(n for n in nums if n)}"
+    except HTTPException as e:
+        status, msg = "failed", str(e.detail)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("tally attach failed")
+        status, msg = "failed", str(e)[:200]
+    await db.orders.update_one({"id": order_id}, {"$set": {"tally_attach.status": status, "tally_attach.message": msg,
+                                                           "tally_attach.finished_at": datetime.now(timezone.utc).isoformat()}})
+
+
+def _start_tally_task(coro):
+    t = asyncio.create_task(coro)
+    _TALLY_TASKS.add(t)
+    t.add_done_callback(_TALLY_TASKS.discard)
+
+
+async def _queue_tally_attach(order: dict, bills: list, include_eway: bool, user: dict):
+    """Quick checks now, the PDF + attach in the background. Returns False if the order can't take it."""
+    if not order.get("gst_applicable"):
+        raise HTTPException(status_code=400, detail="Tax invoice only for GST-applicable orders")
+    if order.get("tax_invoice_url"):
+        raise HTTPException(status_code=409, detail="This order already has an invoice. Fetch from Tally never replaces an uploaded invoice.")
+    if not bills:
+        raise HTTPException(status_code=400, detail="Choose at least one Tally bill")
+    ta = order.get("tally_attach") or {}
+    if ta.get("status") == "working" and ta.get("started_at", "") > (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat():
+        raise HTTPException(status_code=409, detail="Already attaching this order's invoice from Tally")
+    await db.orders.update_one({"id": order["id"]}, {"$set": {"tally_attach": {
+        "status": "working", "message": "Attaching from Tally…", "bills": [b.get("number") for b in bills],
+        "by": user.get("name") or user.get("username"), "started_at": datetime.now(timezone.utc).isoformat()}}})
+
+
 @api_router.get("/orders/{order_id}/tally-bills")
 async def order_tally_bills(order_id: str, q: str = "", user=Depends(get_current_user)):
     if user["role"] not in ["admin", "accounts"]:
@@ -2655,7 +2697,10 @@ async def order_tally_attach(order_id: str, body: dict, user=Depends(get_current
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     bills = [b for b in (body.get("bills") or []) if b.get("cid") is not None and b.get("mid") is not None][:10]
-    return await _attach_tally_bills(order, bills, bool(body.get("include_eway", True)), user)
+    include_eway = bool(body.get("include_eway", True))
+    await _queue_tally_attach(order, bills, include_eway, user)
+    _start_tally_task(_tally_attach_task(order_id, bills, include_eway, user))
+    return {"status": "working", "message": "Attaching in the background"}
 
 
 @api_router.post("/orders/tally-bills/attach-pending")
@@ -2680,22 +2725,27 @@ async def tally_attach_pending(body: dict = None, user=Depends(get_current_user)
         bills = {_bill_key(b): b for b in d.get("bills") or []}
         for num, keys in (d.get("by_order") or {}).items():
             found[num] = [bills[k] for k in keys if k in bills and not bills[k].get("cancelled")]
-    attached, no_bill, failed, done = [], [], [], 0
+    queued, no_bill, failed, jobs = [], [], [], []
     for o in pending:
         bills = found.get((o.get("order_number") or "").upper()) or []
         if not bills:
             no_bill.append(o["order_number"])
             continue
-        if done >= 4:
-            continue
-        done += 1
         try:
-            await _attach_tally_bills(o, bills, True, user)
-            attached.append({"order_number": o["order_number"], "bills": [b["number"] for b in bills]})
+            await _queue_tally_attach(o, bills, True, user)
         except HTTPException as e:
             failed.append({"order_number": o["order_number"], "error": e.detail})
-    remaining = sum(1 for o in pending if found.get((o.get("order_number") or "").upper())) - len(attached) - len(failed)
-    return {"attached": attached, "no_bill": no_bill, "failed": failed, "remaining": max(0, remaining)}
+            continue
+        queued.append({"order_number": o["order_number"], "bills": [b["number"] for b in bills]})
+        jobs.append((o["id"], bills))
+
+    async def run_all():
+        for oid, bills in jobs:  # one after another: Bahi makes the PDFs in order anyway
+            await _tally_attach_task(oid, bills, True, user)
+
+    if jobs:
+        _start_tally_task(run_all())
+    return {"queued": queued, "no_bill": no_bill, "failed": failed}
 
 
 # ── Payment Check ─────────────────────────────────────────────────────────────

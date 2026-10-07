@@ -959,7 +959,9 @@ export default function OrderDetail() {
             <div className="flex items-center justify-between">
               <div>
                 <CardTitle className="text-base">Tax Invoice</CardTitle>
-                <p className="text-xs text-muted-foreground mt-1">Not uploaded yet</p>
+                <p className={`text-xs mt-1 ${order.tally_attach?.status === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
+                  {order.tally_attach?.status === "working" ? "Attaching from Tally…" : order.tally_attach?.status === "failed" ? `Tally: ${order.tally_attach.message}` : "Not uploaded yet"}
+                </p>
               </div>
               <Button variant="outline" size="sm" onClick={() => setTallyOpen(true)} data-testid="tally-fetch-btn">
                 <FileText className="w-4 h-4 mr-1" /> Fetch from Tally
@@ -968,7 +970,7 @@ export default function OrderDetail() {
           </CardHeader>
         </Card>
       )}
-      <TallyFetchDialog order={order} open={tallyOpen} onOpenChange={setTallyOpen} onAttached={() => window.location.reload()} />
+      <TallyFetchDialog order={order} open={tallyOpen} onOpenChange={setTallyOpen} onAttached={() => [800, 3000, 7000, 15000].forEach((ms) => setTimeout(loadOrder, ms))} />
       {order.tax_invoice_url && (
         <Card>
           <CardHeader className="pb-3">
