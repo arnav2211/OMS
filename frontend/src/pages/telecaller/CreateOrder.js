@@ -5,7 +5,7 @@ import { compressImage } from "@/lib/compressImage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import ItemNameInput from "@/components/ItemNameInput";
+import ItemNameInput, { reviewItemSpelling } from "@/components/ItemNameInput";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -474,12 +474,15 @@ export default function CreateOrder() {
     if (shippingMethod === "courier" && !courierName) return toast.error("Select a courier");
     if (modeOfPayment === "Other" && !paymentModeDetails) return toast.error("Please specify payment details for 'Other'");
 
+    const spelt = await reviewItemSpelling(items);
+    if (!spelt) return;
+    setItems(spelt);
     setSubmitting(true);
     try {
       const payload = {
         customer_id: selectedCustomer.id,
         purpose,
-        items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description, discount, discount_is_percent }) => ({
+        items: spelt.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description, discount, discount_is_percent }) => ({
           product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description,
           discount: parseFloat(discount) || 0, discount_is_percent: !!discount_is_percent,
         })),

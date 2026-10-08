@@ -4653,6 +4653,9 @@ _spell_cache = {"at": 0.0, "index": None}
 
 def _spell_plausible(w: str, v: str, dist: int) -> bool:
     """Is v a believable correction of w, not just a different real word?"""
+    if len(w) <= 3:
+        # 3-letter words: only two swapped letters of a core word ("oli" -> "oil")
+        return dist == 1 and len(v) == 3 and sorted(w) == sorted(v) and v in SPELL_CORE_WORDS
     if w.startswith(v) or v.startswith(w):
         # only a dropped last letter of a core word (jasmin) or a doubled last letter (oill)
         return (len(v) == len(w) + 1 and v in SPELL_CORE_WORDS) or (len(w) == len(v) + 1 and w[-1] == w[-2])
@@ -4686,6 +4689,20 @@ def _dl_distance(a: str, b: str) -> int:
 
 def _spell_norm(name: str) -> str:
     return re.sub(r"\s+", " ", (name or "")).strip().lower()
+
+
+def _spell_is_sure(w: str, v: str, dist: int, words) -> bool:
+    """Confident enough to correct without asking: a long word, a classic typo
+    (one letter missing, extra, doubled or swapped) of a known core word, or of a
+    word used far more often."""
+    if len(w) <= 3:
+        return True                               # only swaps of core words get this far
+    if w.startswith(v) or v.startswith(w):
+        return len(w) >= 6                        # jasmin -> jasmine
+    dominant = v in SPELL_CORE_WORDS or words[v] >= 10 * max(1, words[w])
+    if len(w) >= 6 and dist == 1 and dominant:
+        return True
+    return len(w) >= 8 and dist == 2 and v in SPELL_CORE_WORDS
 
 
 def _spell_fix_text(text: str, fixes: dict) -> str:
@@ -4726,41 +4743,65 @@ async def _spell_index() -> dict:
         return index
 
 
+def _spell_candidate(w: str, words, by_len):
+    """(correct word, sure?) for a word that looks misspelt, else None. Works for words
+    never seen before too, so a brand-new typo is still caught."""
+    if len(w) < 3 or w in SPELL_CORE_WORDS or w in SPELL_PROTECT:
+        return None
+    n = words.get(w, 0)
+    limit = 1 if len(w) <= 7 else 2
+    best, best_score, best_dist = None, 0, 0
+    for L in range(len(w) - limit, len(w) + limit + 1):
+        for v in by_len.get(L, ()):
+            if v == w or v[:1] != w[:1] and _dl_distance(w[:2], v[:2]) > 1:
+                continue
+            core = v in SPELL_CORE_WORDS
+            nv = words[v]
+            if not core and nv < max(5, 4 * n):
+                continue                      # only a much more common word can be the right spelling
+            dist = _dl_distance(w, v)
+            if dist > limit or not _spell_plausible(w, v, dist):
+                continue
+            score = (100000 if core else 0) + nv - dist * 1000
+            if score > best_score:
+                best, best_score, best_dist = v, score, dist
+    if not best or best == w:
+        return None
+    return best, _spell_is_sure(w, best, best_dist, words)
+
+
+def _spell_lookup(w: str, idx: dict):
+    """Fix for one word: from the index, or worked out now for a word not seen before."""
+    if w in idx["fixes"]:
+        return idx["fixes"][w], w in idx["sure"]
+    if w in idx["words"]:
+        return None                           # known word, already judged fine
+    memo = idx.setdefault("adhoc", {})
+    if w not in memo:
+        memo[w] = _spell_candidate(w, idx["words"], idx["by_len"])
+    return memo[w]
+
+
 def _spell_build(names: collections.Counter, words: collections.Counter) -> dict:
     for w in SPELL_CORE_WORDS:
         words[w] += 0
-    fixes = {}
+    fixes, sure = {}, set()
     by_len = collections.defaultdict(list)
     for w, n in words.items():
         by_len[len(w)].append(w)
     for w, n in words.items():
-        if len(w) < 4 or w in SPELL_CORE_WORDS or w in SPELL_PROTECT:
-            continue
-        limit = 1 if len(w) <= 7 else 2
-        best, best_score = None, 0
-        for L in range(len(w) - limit, len(w) + limit + 1):
-            for v in by_len.get(L, ()):
-                if v == w or v[:1] != w[:1] and _dl_distance(w[:2], v[:2]) > 1:
-                    continue
-                core = v in SPELL_CORE_WORDS
-                nv = words[v]
-                if not core and nv < max(5, 4 * n):
-                    continue                      # only a much more common word can be the right spelling
-                dist = _dl_distance(w, v)
-                if dist > limit or not _spell_plausible(w, v, dist):
-                    continue
-                score = (100000 if core else 0) + nv - dist * 1000
-                if score > best_score:
-                    best, best_score = v, score
-        if best and best != w:
-            fixes[w] = best
+        hit = _spell_candidate(w, words, by_len)
+        if hit:
+            fixes[w] = hit[0]
+            if hit[1]:
+                sure.add(w)
     # Clean names: popular names whose every word is correctly spelt, shown title-cased.
     clean = collections.Counter()
     for k, n in names.items():
         fixed = _spell_fix_text(k, fixes)
         clean[fixed] += n
     suggest = [(_spell_title(k), n) for k, n in clean.most_common() if len(k) >= 3 and not re.match(r"^\d", k)]
-    return {"fixes": fixes, "words": words, "suggest": suggest, "clean": clean}
+    return {"fixes": fixes, "sure": sure, "words": words, "by_len": by_len, "suggest": suggest, "clean": clean}
 
 
 @app.on_event("startup")
@@ -4777,7 +4818,12 @@ async def _spell_prewarm():
 @api_router.get("/items/suggest")
 async def item_suggest(q: str = "", limit: int = 8, user=Depends(get_current_user)):
     idx = await _spell_index()
-    qn = _spell_fix_text(q, idx["fixes"])
+    qfix = {}
+    for w in re.findall(r"[a-z]+", (q or "").lower()):
+        hit = _spell_lookup(w, idx)
+        if hit:
+            qfix[w] = hit[0]
+    qn = _spell_fix_text(q, qfix)
     if len(qn) < 2:
         return {"suggestions": []}
     qwords = qn.split()
@@ -4806,18 +4852,25 @@ async def item_spellcheck(name: str = "", user=Depends(get_current_user)):
     low = " " + raw.lower() + " "
     for a, b in SPELL_PHRASE_FIXES.items():
         if f" {a} " in low:
-            issues.append({"word": a, "suggestion": b})
+            issues.append({"word": a, "suggestion": b, "sure": True})
+    local, local_sure = {}, {}
     for w in re.findall(r"[A-Za-z]+", raw):
-        fix = idx["fixes"].get(w.lower())
-        if fix and not any(i["word"] == w.lower() for i in issues):
-            issues.append({"word": w.lower(), "suggestion": fix})
+        hit = _spell_lookup(w.lower(), idx)
+        if hit and not any(i["word"] == w.lower() for i in issues):
+            issues.append({"word": w.lower(), "suggestion": hit[0], "sure": hit[1]})
+            local[w.lower()] = hit[0]
+            if hit[1]:
+                local_sure[w.lower()] = hit[0]
     if not issues:
-        return {"issues": [], "corrected": raw}
-    fixed = _spell_fix_text(raw, idx["fixes"])
-    # keep the user's own casing style: title-case if they typed it that way, else as fixed
-    corrected = _spell_title(fixed) if raw[:1].isupper() else fixed
-    # keep numbers / symbols exactly as typed
-    return {"issues": issues, "corrected": corrected}
+        return {"issues": [], "corrected": raw, "auto_corrected": raw}
+
+    def styled(fixed: str) -> str:
+        # keep the user's casing style: title-case if they typed it that way
+        return _spell_title(fixed) if raw[:1].isupper() else fixed
+    corrected = styled(_spell_fix_text(raw, local))
+    # only the sure fixes, for correcting without asking
+    auto = styled(_spell_fix_text(raw, local_sure)) if any(i["sure"] for i in issues) else raw
+    return {"issues": issues, "corrected": corrected, "auto_corrected": auto}
 
 
 @api_router.get("/reports/telecaller-sales")

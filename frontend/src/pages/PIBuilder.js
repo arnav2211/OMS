@@ -3,7 +3,7 @@ import api from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import ItemNameInput from "@/components/ItemNameInput";
+import ItemNameInput, { reviewItemSpelling } from "@/components/ItemNameInput";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -347,6 +347,9 @@ export default function PIBuilder() {
     if (items.some(i => !i.product_name)) return toast.error("All items need a product name");
     if (!billingAddress) return toast.error("Select a billing address");
     if (!sameAsBilling && !shippingAddress) return toast.error("Select a shipping address");
+    const spelt = await reviewItemSpelling(items);
+    if (!spelt) return;
+    setItems(spelt);
     setSubmitting(true);
     try {
       const payload = {
@@ -356,7 +359,7 @@ export default function PIBuilder() {
         discount_mode: discountMode,
         discount_value: parseFloat(discountValue) || 0,
         discount_is_percent: discountIsPercent,
-        items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description, discount, discount_is_percent }) => ({
+        items: spelt.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description, discount, discount_is_percent }) => ({
           product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description,
           discount: parseFloat(discount) || 0, discount_is_percent: !!discount_is_percent
         })),

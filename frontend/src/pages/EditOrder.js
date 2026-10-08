@@ -6,7 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import ItemNameInput from "@/components/ItemNameInput";
+import ItemNameInput, { reviewItemSpelling } from "@/components/ItemNameInput";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -654,11 +654,14 @@ export default function EditOrder() {
     if (!billingAddress) return toast.error("Select a billing address");
     if (!sameAsBilling && !shippingAddress) return toast.error("Select a shipping address");
     if (modeOfPayment === "Other" && !paymentModeDetails) return toast.error("Specify payment details for 'Other'");
+    const spelt = await reviewItemSpelling(items);
+    if (!spelt) return;
+    setItems(spelt);
     setSaving(true);
     try {
       const payload = {
         purpose,
-        items: items.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description, formulation, discount, discount_is_percent }) => ({
+        items: spelt.map(({ product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description, formulation, discount, discount_is_percent }) => ({
           product_name, qty, unit, rate, amount, gst_rate, gst_amount, total, description, formulation: formulation || "",
           discount: parseFloat(discount) || 0, discount_is_percent: !!discount_is_percent,
         })),
