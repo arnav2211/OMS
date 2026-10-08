@@ -14,6 +14,8 @@ import uuid
 import jwt
 import io
 import math
+import time
+import collections
 import aiofiles
 import requests
 import phonenumbers
@@ -4618,6 +4620,204 @@ async def sales_leaderboard(period: str = "month", user=Depends(get_current_user
     return {"period": period, "label": label, "days_left_in_month": days_left, "board": board,
             "me": me, "message": message, "team_sales": round(sum(b["sales"] for b in board), 2),
             "team_orders": sum(b["orders"] for b in board)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ITEM NAME SPELLING. Learnt from every item name ever typed in orders and PIs:
+# a word that is one or two letters off a much more common word (or off a word in
+# the core list below) is treated as a misspelling of it. Used for suggestions
+# while typing and a "did you mean" hint. It only suggests; nothing is changed
+# without the user clicking Fix.
+# ═══════════════════════════════════════════════════════════════════════════
+SPELL_CORE_WORDS = set("""
+fragrance oil essential carrier absolute attar hydrosol water extract butter wax gel powder blend custom compound emulsifier
+lavender rosemary peppermint spearmint eucalyptus citronella lemongrass jasmine sandalwood sandal bergamot cedarwood cinnamon
+clove camphor geranium patchouli vetiver frankincense myrrh ylang chamomile cypress juniper palmarosa marjoram oregano thyme
+basil tulsi ginger turmeric fennel cardamom nutmeg pepper wintergreen menthol mint lemon orange grapefruit lime mandarin
+tangerine citrus neroli rose mogra rajnigandha champa nagchampa khus kewda kesar saffron chandan oud agarwood musk amber vanilla
+coffee chocolate strawberry blackcurrant mango pineapple apple watermelon guava coconut almond jojoba argan avocado castor sesame
+mustard olive sunflower apricot rosehip flaxseed neem tea tree aloe vera vitamin glycerin alcohol fractionated polysorbate
+phenyl pine terpineol dipropylene glycol ethyl isopropyl diethyl phthalate solubiliser solubilizer hair skin face body soap
+candle diffuser freshener room floral fresh aqua marine ocean breeze herbal spice sweet natural pure organic
+""".split())
+SPELL_PHRASE_FIXES = {"lemon grass": "lemongrass", "sandal wood": "sandalwood", "winter green": "wintergreen",
+                      "rose mary": "rosemary", "cedar wood": "cedarwood", "aloevera": "aloe vera", "tree tree": "tea tree",
+                      "black current": "blackcurrant", "black currant": "blackcurrant", "pepper mint": "peppermint",
+                      "spear mint": "spearmint", "palma rosa": "palmarosa"}
+# Real words that look like misspellings of a commoner word; never "corrected".
+SPELL_PROTECT = {"bitter", "citral", "citronellal", "thymol", "champaca", "rooh", "rosa", "rosy", "khas", "kewra", "oudh",
+                 "methyl", "canola", "cyprus", "kernel", "hari", "blended", "terpine", "minty", "musky", "wine", "vine", "mist", "flora", "citronelal"}
+_VOWELS = set("aeiou")
+_spell_cache = {"at": 0.0, "index": None}
+
+
+def _spell_plausible(w: str, v: str, dist: int) -> bool:
+    """Is v a believable correction of w, not just a different real word?"""
+    if w.startswith(v) or v.startswith(w):
+        # only a dropped last letter of a core word (jasmin) or a doubled last letter (oill)
+        return (len(v) == len(w) + 1 and v in SPELL_CORE_WORDS) or (len(w) == len(v) + 1 and w[-1] == w[-2])
+    if len(w) == len(v) and dist == 1 and sorted(w) != sorted(v):
+        # a changed letter: risky on short words (fine/pine); allow a vowel swap on mid-length words
+        if len(w) <= 5:
+            return False
+        if len(w) <= 7:
+            diff = [(a, b) for a, b in zip(w, v) if a != b]
+            return len(diff) == 1 and diff[0][0] in _VOWELS and diff[0][1] in _VOWELS
+    return True
+
+
+def _dl_distance(a: str, b: str) -> int:
+    """Damerau-Levenshtein (adjacent swaps count as one edit, so 'fragarnce' is 1 off)."""
+    if abs(len(a) - len(b)) > 2:
+        return 3
+    d = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
+    for i in range(len(a) + 1):
+        d[i][0] = i
+    for j in range(len(b) + 1):
+        d[0][j] = j
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost)
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
+    return d[-1][-1]
+
+
+def _spell_norm(name: str) -> str:
+    return re.sub(r"\s+", " ", (name or "")).strip().lower()
+
+
+def _spell_fix_text(text: str, fixes: dict) -> str:
+    t = " " + _spell_norm(text) + " "
+    for a, b in SPELL_PHRASE_FIXES.items():
+        t = t.replace(f" {a} ", f" {b} ")
+    words = [fixes.get(w, w) for w in t.split()]
+    return " ".join(words)
+
+
+def _spell_title(name: str) -> str:
+    # Title-case words, but keep codes / numbers / % as typed ("Pine Oil 42%", "Alphox 200")
+    return " ".join(w[:1].upper() + w[1:] if w.isalpha() else w for w in name.split())
+
+
+_spell_lock = asyncio.Lock()
+
+
+async def _spell_index() -> dict:
+    now = time.time()
+    if _spell_cache["index"] and now - _spell_cache["at"] < 3 * 3600:
+        return _spell_cache["index"]
+    async with _spell_lock:
+        if _spell_cache["index"] and time.time() - _spell_cache["at"] < 3 * 3600:
+            return _spell_cache["index"]
+        names, words = collections.Counter(), collections.Counter()
+        for coll in (db.orders, db.proforma_invoices):
+            async for o in coll.find({}, {"_id": 0, "items.product_name": 1}):
+                for it in o.get("items") or []:
+                    k = _spell_norm(it.get("product_name"))
+                    if k:
+                        names[k] += 1
+                        for w in re.findall(r"[a-z]+", k):
+                            words[w] += 1
+        # the word comparison is a few seconds of CPU: keep it off the event loop
+        index = await asyncio.to_thread(_spell_build, names, words)
+        _spell_cache.update(at=time.time(), index=index)
+        return index
+
+
+def _spell_build(names: collections.Counter, words: collections.Counter) -> dict:
+    for w in SPELL_CORE_WORDS:
+        words[w] += 0
+    fixes = {}
+    by_len = collections.defaultdict(list)
+    for w, n in words.items():
+        by_len[len(w)].append(w)
+    for w, n in words.items():
+        if len(w) < 4 or w in SPELL_CORE_WORDS or w in SPELL_PROTECT:
+            continue
+        limit = 1 if len(w) <= 7 else 2
+        best, best_score = None, 0
+        for L in range(len(w) - limit, len(w) + limit + 1):
+            for v in by_len.get(L, ()):
+                if v == w or v[:1] != w[:1] and _dl_distance(w[:2], v[:2]) > 1:
+                    continue
+                core = v in SPELL_CORE_WORDS
+                nv = words[v]
+                if not core and nv < max(5, 4 * n):
+                    continue                      # only a much more common word can be the right spelling
+                dist = _dl_distance(w, v)
+                if dist > limit or not _spell_plausible(w, v, dist):
+                    continue
+                score = (100000 if core else 0) + nv - dist * 1000
+                if score > best_score:
+                    best, best_score = v, score
+        if best and best != w:
+            fixes[w] = best
+    # Clean names: popular names whose every word is correctly spelt, shown title-cased.
+    clean = collections.Counter()
+    for k, n in names.items():
+        fixed = _spell_fix_text(k, fixes)
+        clean[fixed] += n
+    suggest = [(_spell_title(k), n) for k, n in clean.most_common() if len(k) >= 3 and not re.match(r"^\d", k)]
+    return {"fixes": fixes, "words": words, "suggest": suggest, "clean": clean}
+
+
+@app.on_event("startup")
+async def _spell_prewarm():
+    async def warm():
+        await asyncio.sleep(20)
+        try:
+            await _spell_index()
+        except Exception as e:
+            logging.warning(f"spelling index prewarm failed: {e}")
+    asyncio.create_task(warm())
+
+
+@api_router.get("/items/suggest")
+async def item_suggest(q: str = "", limit: int = 8, user=Depends(get_current_user)):
+    idx = await _spell_index()
+    qn = _spell_fix_text(q, idx["fixes"])
+    if len(qn) < 2:
+        return {"suggestions": []}
+    qwords = qn.split()
+    qc = qn.replace(" ", "")
+    out = []
+    for name, n in idx["suggest"]:
+        low = name.lower()
+        lw = low.split()
+        # every typed word starts one of the name's words, or the typing matches with spaces ignored ("teatr", "lemon g")
+        if all(any(x.startswith(t) for x in lw) for t in qwords) or (len(qc) >= 4 and qc in low.replace(" ", "")):
+            out.append({"name": name, "count": n, "starts": low.startswith(qn)})
+        if len(out) >= 200:
+            break
+    out.sort(key=lambda x: (not x["starts"], -x["count"]))
+    return {"suggestions": [{"name": o["name"], "count": o["count"]} for o in out[:max(1, min(limit, 15))]]}
+
+
+@api_router.get("/items/spellcheck")
+async def item_spellcheck(name: str = "", user=Depends(get_current_user)):
+    """Words that look misspelt in an item name, and the corrected name."""
+    idx = await _spell_index()
+    raw = re.sub(r"\s+", " ", name or "").strip()
+    if not raw:
+        return {"issues": [], "corrected": ""}
+    issues = []
+    low = " " + raw.lower() + " "
+    for a, b in SPELL_PHRASE_FIXES.items():
+        if f" {a} " in low:
+            issues.append({"word": a, "suggestion": b})
+    for w in re.findall(r"[A-Za-z]+", raw):
+        fix = idx["fixes"].get(w.lower())
+        if fix and not any(i["word"] == w.lower() for i in issues):
+            issues.append({"word": w.lower(), "suggestion": fix})
+    if not issues:
+        return {"issues": [], "corrected": raw}
+    fixed = _spell_fix_text(raw, idx["fixes"])
+    # keep the user's own casing style: title-case if they typed it that way, else as fixed
+    corrected = _spell_title(fixed) if raw[:1].isupper() else fixed
+    # keep numbers / symbols exactly as typed
+    return {"issues": issues, "corrected": corrected}
 
 
 @api_router.get("/reports/telecaller-sales")

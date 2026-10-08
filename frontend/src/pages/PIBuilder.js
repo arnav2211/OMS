@@ -3,6 +3,7 @@ import api from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import ItemNameInput from "@/components/ItemNameInput";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -723,7 +724,7 @@ export default function PIBuilder() {
                     {items.length > 1 && <Button variant="ghost" size="icon" onClick={() => setItems(p => p.filter((_, i) => i !== idx))}><Trash2 className="w-4 h-4 text-destructive" /></Button>}
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
-                    <div className="col-span-2"><Label className="text-xs">Product</Label><Input value={item.product_name} onChange={e => updateItem(idx, "product_name", e.target.value)} data-testid={`pi-item-name-${idx}`} /></div>
+                    <div className="col-span-2"><Label className="text-xs">Product</Label><ItemNameInput value={item.product_name} onChange={v => updateItem(idx, "product_name", v)} testId={`pi-item-name-${idx}`} /></div>
                     <div><Label className="text-xs">Qty</Label><Input type="number" value={item.qty || ""} onChange={e => updateItem(idx, "qty", +e.target.value)} /></div>
                     <div><Label className="text-xs">Unit</Label>
                       <Select value={item.unit} onValueChange={v => updateItem(idx, "unit", v)}>
