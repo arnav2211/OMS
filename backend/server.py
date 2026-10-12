@@ -547,6 +547,43 @@ def compute_manual_discount(req, items: list, subtotal: float, total_gst: float)
     return disc, gst_rev
 
 
+def order_discount_for_pi(order: dict, items: list, subtotal: float, total_gst: float, gst_applicable: bool):
+    """(discount, discount_gst) an order carries into a PI made from it.
+
+    An order stores its discount as a negative "Discount" charge row, which
+    build_additional_charges clamps to zero, so callers strip that row and
+    re-attach the figure returned here. A manual discount is recomputed from
+    its config so the GST reversal follows the PI's own gst_applicable choice;
+    a website discount keeps its stored ex-GST amount (what the customer paid)
+    with GST reversed pro rata. Legacy orders with only the row fall back to it.
+    """
+    if subtotal <= 0:
+        return 0.0, 0.0
+    if order.get("discount_enabled"):
+        import types as _t
+        shim = _t.SimpleNamespace(
+            discount_enabled=True,
+            discount_mode=str(order.get("discount_mode") or "total"),
+            discount_value=float(order.get("discount_value") or 0),
+            discount_is_percent=bool(order.get("discount_is_percent")),
+            gst_applicable=bool(gst_applicable),
+            items=[_t.SimpleNamespace(
+                discount=float(i.get("discount") or 0),
+                discount_is_percent=bool(i.get("discount_is_percent")))
+                for i in items])
+        return compute_manual_discount(shim, items, subtotal, total_gst)
+    stored = round(float(order.get("discount") or 0), 2)
+    if stored <= 0:
+        stored = round(sum(-float(c.get("amount") or 0)
+                           for c in (order.get("additional_charges") or [])
+                           if float(c.get("amount") or 0) < 0), 2)
+    if stored <= 0:
+        return 0.0, 0.0
+    disc = min(stored, round(subtotal, 2))
+    gst_rev = round(total_gst * (disc / subtotal), 2) if (gst_applicable and total_gst > 0) else 0.0
+    return disc, gst_rev
+
+
 def build_additional_charges(raw_charges, gst_applicable: bool, carrier_risk_applicable: bool, base_value: float):
     """Normalise additional charges, appending the derived carrier risk row when applicable.
 
@@ -5809,12 +5846,37 @@ async def make_pi_from_order(order_id: str, req: MakePIRequest, user=Depends(get
         any(str(c.get("name", "")).strip().lower() == CARRIER_RISK_LABEL.lower()
             for c in order.get("additional_charges", [])),
     )
+    # The order's discount row is negative and build_additional_charges would
+    # clamp it to zero (CS-1437 produced a PI with no discount). Strip it here
+    # and re-attach the discount, re-derived against the PI's GST choice.
     additional_charges, total_additional, total_additional_gst = build_additional_charges(
-        order.get("additional_charges", []),
+        [c for c in order.get("additional_charges", []) if float(c.get("amount") or 0) >= 0],
         req.gst_applicable,
         carrier_risk_applicable,
         subtotal + total_gst + shipping_charge + shipping_gst,
     )
+
+    discount, discount_gst = order_discount_for_pi(order, items, subtotal, total_gst, req.gst_applicable)
+    if discount > 0:
+        additional_charges.append({"name": order.get("discount_label") or "Discount", "amount": -discount,
+                                   "gst_percent": 0, "gst_amount": -discount_gst})
+        total_additional -= discount
+        total_additional_gst -= discount_gst
+    # Discount config travels too, so editing the PI later keeps the discount.
+    # A website (fixed-amount) discount becomes an editable total-mode amount.
+    if discount > 0 and order.get("discount_enabled"):
+        discount_config = {
+            "discount_enabled": True,
+            "discount_mode": str(order.get("discount_mode") or "total"),
+            "discount_value": float(order.get("discount_value") or 0),
+            "discount_is_percent": bool(order.get("discount_is_percent")),
+        }
+    elif discount > 0:
+        discount_config = {"discount_enabled": True, "discount_mode": "total",
+                           "discount_value": discount, "discount_is_percent": False}
+    else:
+        discount_config = {"discount_enabled": False, "discount_mode": "total",
+                           "discount_value": 0.0, "discount_is_percent": False}
 
     grand_total = math.ceil(subtotal + total_gst + shipping_charge + shipping_gst + total_additional + total_additional_gst)
 
@@ -5841,10 +5903,7 @@ async def make_pi_from_order(order_id: str, req: MakePIRequest, user=Depends(get
         "pi_number": pi_number,
         "company": company["key"],
         "bank_account": req.bank_account if req.bank_account else "",
-        "discount_enabled": bool(getattr(req, "discount_enabled", False)),
-        "discount_mode": getattr(req, "discount_mode", "total") or "total",
-        "discount_value": float(getattr(req, "discount_value", 0) or 0),
-        "discount_is_percent": bool(getattr(req, "discount_is_percent", False)),
+        **discount_config,
         "customer_id": order.get("customer_id", ""),
         "customer_name": order.get("customer_name", ""),
         "items": items,
