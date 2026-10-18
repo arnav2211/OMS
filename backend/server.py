@@ -11889,6 +11889,15 @@ async def _spapi_build_order(o: dict) -> dict:
     }
 
 
+def _amz_own_booking(order: dict) -> bool:
+    """A self-ship Amazon order booked on one of our couriers (not Amazon Shipping, whose own tracker dispatches it)."""
+    return order.get("ship_type") == "self_ship" and any((
+        (order.get("shiprocket_shipment") or {}).get("awb"),
+        (order.get("dtdc_shipment") or {}).get("reference_number"),
+        (order.get("delhivery_shipment") or {}).get("awb"),
+        (order.get("delhivery_b2b_shipment") or {}).get("lrn")))
+
+
 async def _spapi_sync(lookback_hours: Optional[int] = None) -> dict:
     """One pass: new orders in, Amazon status refreshed, shipped -> dispatched, cancelled -> cancelled."""
     if not _spapi_configured():
@@ -11941,6 +11950,11 @@ async def _spapi_sync(lookback_hours: Optional[int] = None) -> dict:
                 upd["status"] = "cancelled"
                 upd["cancelled_at"] = now.isoformat()
                 res["cancelled"].append(existing.get("am_order_number"))
+            elif gone and existing.get("status") not in ("dispatched", "cancelled") and _amz_own_booking(existing):
+                # We ship this one with our own courier, and confirming the shipment to Amazon flips it
+                # to "Shipped" at booking time. The courier's pickup tracking marks it dispatched, with
+                # the AWB, tracking link and slip, once the parcel is actually collected.
+                res["updated"] += 1
             elif gone and existing.get("status") not in ("dispatched", "cancelled"):
                 upd["status"] = "dispatched"
                 upd["dispatch"] = {**(existing.get("dispatch") or {}), "dispatched_at": now.isoformat(),
