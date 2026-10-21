@@ -992,9 +992,9 @@ export default function OrderDetail() {
                 )}
               </div>
               <div className="flex gap-2">
-                {order.tally_bills?.length > 0 && order.tally_invoice_url !== "manual" && ["admin", "accounts"].includes(user?.role) && (
+                {order.gst_applicable && ["admin", "accounts"].includes(user?.role) && (
                   <Button variant="outline" size="sm" onClick={() => setTallyOpen(true)} data-testid="tally-update-btn"
-                    title="Rebuild the invoice if Tally has more bills for this order">
+                    title="Rebuild the invoice from Tally, e.g. when Tally has another bill for this order">
                     <RefreshCw className="w-4 h-4 mr-1" /> Update from Tally
                   </Button>
                 )}

@@ -44,7 +44,8 @@ export default function TallyFetchDialog({ order, open, onOpenChange, onAttached
   const attach = async () => {
     setSaving(true);
     try {
-      await api.post(`/orders/${order.id}/tally-bills/attach`, { bills: chosen, include_eway: eway });
+      if (replacing && !window.confirm("This order already has an uploaded invoice. Replace it with the Tally bill(s)? The uploaded file is kept on record.")) { setSaving(false); return; }
+      await api.post(`/orders/${order.id}/tally-bills/attach`, { bills: chosen, include_eway: eway, replace: !!replacing });
       toast.success(`Attaching ${chosen.map((b) => b.number).join(", ")} in the background — carry on with your work`);
       onOpenChange(false);
       onAttached && onAttached();
@@ -53,10 +54,11 @@ export default function TallyFetchDialog({ order, open, onOpenChange, onAttached
     } finally { setSaving(false); }
   };
 
-  // An invoice Fetch from Tally made can be rebuilt (e.g. a second bill added in Tally later);
-  // one uploaded by hand is never touched.
-  const locked = data?.has_invoice && !data?.from_tally;
+  // An invoice Fetch from Tally made can be rebuilt (e.g. a second bill added in Tally later).
+  // One uploaded by hand is replaced only when the user confirms it here; it stays on record.
+  const replacing = data?.has_invoice && !data?.from_tally;
   const updating = data?.has_invoice && data?.from_tally;
+  const locked = false;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl" data-testid="tally-fetch-modal">
@@ -79,11 +81,14 @@ export default function TallyFetchDialog({ order, open, onOpenChange, onAttached
             </span>
           </div>
         )}
-        {locked && (
-          <div className="flex items-start gap-2 text-sm rounded-md bg-amber-50 text-amber-800 px-3 py-2" data-testid="tally-fetch-locked">
+        {replacing && (
+          <div className="flex items-start gap-2 text-sm rounded-md bg-amber-50 text-amber-800 px-3 py-2" data-testid="tally-fetch-replace">
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-            <span>This order already has an invoice uploaded{data?.from_tally ? ` (from Tally${data.fetched_by ? " by " + data.fetched_by : ""})` : ""}.
-              Fetch from Tally never replaces it.</span>
+            <span>
+              {data.missing?.length ? <>Tally has <b>{data.missing.length} bill{data.missing.length > 1 ? "s" : ""}</b> for this order ({data.missing.join(", ")}). </> : null}
+              This order has an <b>uploaded</b> invoice. Tick the bills and click Replace to swap it for the Tally bills
+              (the uploaded file is kept on record).
+            </span>
           </div>
         )}
 
@@ -131,7 +136,7 @@ export default function TallyFetchDialog({ order, open, onOpenChange, onAttached
             <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
             <Button onClick={attach} disabled={locked || saving || chosen.length === 0} data-testid="tally-fetch-attach">
               <Download className="w-4 h-4 mr-1.5" />
-              {saving ? "Sending…" : `${updating ? "Update invoice with" : "Attach"} ${chosen.length || ""} bill${chosen.length === 1 ? "" : "s"}`}
+              {saving ? "Sending…" : `${updating ? "Update invoice with" : replacing ? "Replace invoice with" : "Attach"} ${chosen.length || ""} bill${chosen.length === 1 ? "" : "s"}`}
             </Button>
           </div>
         </div>

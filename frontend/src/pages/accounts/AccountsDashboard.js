@@ -368,11 +368,9 @@ export default function AccountsDashboard() {
                                 <Upload className="w-3 h-3 mr-1" />
                                 {uploading[o.id] ? "Uploading..." : o.tax_invoice_url ? "Replace" : "Upload PDF"}
                               </Button>
-                              {!o.tax_invoice_url && (
-                                <Button variant="outline" size="sm" onClick={() => setTallyOrder(o)} data-testid={`tally-fetch-${o.id}`}>
-                                  <Download className="w-3 h-3 mr-1" />From Tally
-                                </Button>
-                              )}
+                              <Button variant="outline" size="sm" onClick={() => setTallyOrder(o)} data-testid={`tally-fetch-${o.id}`}>
+                                <Download className="w-3 h-3 mr-1" />{o.tax_invoice_url ? "Update from Tally" : "From Tally"}
+                              </Button>
                               {o.tax_invoice_url && (
                                 <Button variant="ghost" size="icon" onClick={() => handleInvoiceDelete(o.id)} data-testid={`delete-invoice-${o.id}`}>
                                   <Trash2 className="w-3 h-3 text-destructive" />

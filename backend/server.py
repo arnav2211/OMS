@@ -2705,14 +2705,15 @@ def _tally_owned(order: dict) -> bool:
     return bool(order.get("tally_bills"))            # attached before tally_invoice_url was recorded
 
 
-async def _attach_tally_bills(order: dict, bills: list, include_eway: bool, user: dict):
+async def _attach_tally_bills(order: dict, bills: list, include_eway: bool, user: dict, allow_replace: bool = False):
     """Render the bills in Bahi and attach them: to an order with no invoice, or rebuilding an invoice
     that Fetch from Tally made earlier (e.g. a second bill was added in Tally later)."""
     if not order.get("gst_applicable"):
         raise HTTPException(status_code=400, detail="Tax invoice only for GST-applicable orders")
-    owned = _tally_owned(order)
+    # an uploaded invoice is replaced only when accounts asks for it on that order (allow_replace)
+    owned = _tally_owned(order) or (allow_replace and bool(order.get("tax_invoice_url")))
     if order.get("tax_invoice_url") and not owned:
-        raise HTTPException(status_code=409, detail="This order already has an invoice. Fetch from Tally never replaces an uploaded invoice.")
+        raise HTTPException(status_code=409, detail="This order already has an uploaded invoice. Use Update from Tally on the order to replace it.")
     if not bills:
         raise HTTPException(status_code=400, detail="Choose at least one Tally bill")
     r = await _bahi("POST", "/api/ext/render", timeout=170,
@@ -2732,6 +2733,7 @@ async def _attach_tally_bills(order: dict, bills: list, include_eway: bool, user
     }}
     if owned:   # keep the earlier PDF on record
         upd["$push"] = {"tally_invoice_history": {"url": order["tax_invoice_url"], "bills": [b.get("number") for b in order.get("tally_bills") or []],
+                                                  "was_uploaded": not _tally_owned(order),
                                                   "replaced_at": now, "by": user.get("name") or user.get("username")}}
     res = await db.orders.update_one({"id": order["id"], **guard}, upd)
     if res.modified_count == 0:  # someone uploaded meanwhile: keep theirs
@@ -2748,11 +2750,11 @@ async def _attach_tally_bills(order: dict, bills: list, include_eway: bool, user
 _TALLY_TASKS = set()
 
 
-async def _tally_attach_task(order_id: str, bills: list, include_eway: bool, user: dict):
+async def _tally_attach_task(order_id: str, bills: list, include_eway: bool, user: dict, allow_replace: bool = False):
     nums = [b.get("number") for b in bills]
     try:
         order = await db.orders.find_one({"id": order_id}, {"_id": 0})
-        await _attach_tally_bills(order, bills, include_eway, user)
+        await _attach_tally_bills(order, bills, include_eway, user, allow_replace)
         status, msg = "done", f"Attached from Tally: {', '.join(n for n in nums if n)}"
     except HTTPException as e:
         status, msg = "failed", str(e.detail)
@@ -2769,12 +2771,12 @@ def _start_tally_task(coro):
     t.add_done_callback(_TALLY_TASKS.discard)
 
 
-async def _queue_tally_attach(order: dict, bills: list, include_eway: bool, user: dict):
+async def _queue_tally_attach(order: dict, bills: list, include_eway: bool, user: dict, allow_replace: bool = False):
     """Quick checks now, the PDF + attach in the background. Returns False if the order can't take it."""
     if not order.get("gst_applicable"):
         raise HTTPException(status_code=400, detail="Tax invoice only for GST-applicable orders")
-    if order.get("tax_invoice_url") and not _tally_owned(order):
-        raise HTTPException(status_code=409, detail="This order already has an invoice. Fetch from Tally never replaces an uploaded invoice.")
+    if order.get("tax_invoice_url") and not _tally_owned(order) and not allow_replace:
+        raise HTTPException(status_code=409, detail="This order already has an uploaded invoice. Use Update from Tally on the order to replace it.")
     if not bills:
         raise HTTPException(status_code=400, detail="Choose at least one Tally bill")
     ta = order.get("tally_attach") or {}
@@ -2821,8 +2823,9 @@ async def order_tally_attach(order_id: str, body: dict, user=Depends(get_current
         raise HTTPException(status_code=404, detail="Order not found")
     bills = [b for b in (body.get("bills") or []) if b.get("cid") is not None and b.get("mid") is not None][:10]
     include_eway = bool(body.get("include_eway", True))
-    await _queue_tally_attach(order, bills, include_eway, user)
-    _start_tally_task(_tally_attach_task(order_id, bills, include_eway, user))
+    allow_replace = bool(body.get("replace"))          # explicit "replace the uploaded invoice" from the dialog
+    await _queue_tally_attach(order, bills, include_eway, user, allow_replace)
+    _start_tally_task(_tally_attach_task(order_id, bills, include_eway, user, allow_replace))
     return {"status": "working", "message": "Attaching in the background"}
 
 
