@@ -53,7 +53,10 @@ export default function TallyFetchDialog({ order, open, onOpenChange, onAttached
     } finally { setSaving(false); }
   };
 
-  const locked = data?.has_invoice;
+  // An invoice Fetch from Tally made can be rebuilt (e.g. a second bill added in Tally later);
+  // one uploaded by hand is never touched.
+  const locked = data?.has_invoice && !data?.from_tally;
+  const updating = data?.has_invoice && data?.from_tally;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl" data-testid="tally-fetch-modal">
@@ -65,6 +68,17 @@ export default function TallyFetchDialog({ order, open, onOpenChange, onAttached
           </DialogDescription>
         </DialogHeader>
 
+        {updating && (
+          <div className="flex items-start gap-2 text-sm rounded-md bg-blue-50 text-blue-800 px-3 py-2" data-testid="tally-fetch-update">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>
+              {data.missing?.length
+                ? <>Tally has <b>{data.missing.length} more bill{data.missing.length > 1 ? "s" : ""}</b> for this order ({data.missing.join(", ")}). </>
+                : <>This invoice was made from Tally. </>}
+              Tick every bill for this order and click Update: the invoice PDF is rebuilt with all of them (the old one is kept on record).
+            </span>
+          </div>
+        )}
         {locked && (
           <div className="flex items-start gap-2 text-sm rounded-md bg-amber-50 text-amber-800 px-3 py-2" data-testid="tally-fetch-locked">
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
@@ -117,7 +131,7 @@ export default function TallyFetchDialog({ order, open, onOpenChange, onAttached
             <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
             <Button onClick={attach} disabled={locked || saving || chosen.length === 0} data-testid="tally-fetch-attach">
               <Download className="w-4 h-4 mr-1.5" />
-              {saving ? "Sending…" : `Attach ${chosen.length || ""} bill${chosen.length === 1 ? "" : "s"}`}
+              {saving ? "Sending…" : `${updating ? "Update invoice with" : "Attach"} ${chosen.length || ""} bill${chosen.length === 1 ? "" : "s"}`}
             </Button>
           </div>
         </div>

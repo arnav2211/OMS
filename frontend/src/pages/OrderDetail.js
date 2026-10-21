@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2, Copy, ClipboardCopy, History, Upload, Lock, ExternalLink } from "lucide-react";
+import { ArrowLeft, Package, Truck, Edit, Printer, Trash2, FileText, X, Share2, Copy, ClipboardCopy, History, Upload, Lock, ExternalLink, RefreshCw } from "lucide-react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import api from "@/lib/api";
 import { compressImage } from "@/lib/compressImage";
@@ -25,6 +25,7 @@ import { validateLrNumber, getTrackingUrl, extractPorterLink, isLrMandatory, COU
 import CourierSelect from "@/components/CourierSelect";
 import CourierStatusDialog from "@/components/CourierStatusDialog";
 import TallyFetchDialog from "@/components/TallyFetchDialog";
+import ExtraShipments from "@/components/ExtraShipments";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 
@@ -816,6 +817,9 @@ export default function OrderDetail() {
         </Card>
       )}
 
+      {/* Items of this order sent by a different mode (e.g. some by bus) */}
+      <ExtraShipments order={order} onChanged={loadOrder} />
+
       {/* Packing work: start / continue / finish by PIN, and who is on it right now */}
       <OrderWorkStrip kind="order" orderId={order.id} status={order.status} onChanged={loadOrder} />
 
@@ -982,6 +986,12 @@ export default function OrderDetail() {
                 )}
               </div>
               <div className="flex gap-2">
+                {order.tally_bills?.length > 0 && order.tally_invoice_url !== "manual" && ["admin", "accounts"].includes(user?.role) && (
+                  <Button variant="outline" size="sm" onClick={() => setTallyOpen(true)} data-testid="tally-update-btn"
+                    title="Rebuild the invoice if Tally has more bills for this order">
+                    <RefreshCw className="w-4 h-4 mr-1" /> Update from Tally
+                  </Button>
+                )}
                 <a href={`${process.env.REACT_APP_BACKEND_URL}${order.tax_invoice_url}`} target="_blank" rel="noopener noreferrer">
                   <Button variant="outline" size="sm" data-testid="view-invoice-btn"><FileText className="w-4 h-4 mr-1" /> View</Button>
                 </a>
