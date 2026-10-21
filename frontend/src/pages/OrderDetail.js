@@ -713,6 +713,12 @@ export default function OrderDetail() {
                 <span className="text-sm">{order.shiprocket_shipment.courier_name} · AWB {order.shiprocket_shipment.awb}</span>
               </div>
             )}
+            {order.shipmozo_shipment?.awb && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Shipmozo carrier (booked)</span>
+                <span className="text-sm">{order.shipmozo_shipment.courier_name} · AWB {order.shipmozo_shipment.awb}{order.shipmozo_shipment.last_status ? ` · ${order.shipmozo_shipment.last_status}` : ""}</span>
+              </div>
+            )}
             {order.delhivery_b2b_shipment?.lrn && (
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Delhivery B2B LR</span>

@@ -301,7 +301,7 @@ async def next_document_number(company: dict, kind: str) -> str:
     return f"{prefix}-{counter['seq']:04d}"
 
 
-COURIER_OPTIONS = ["DTDC", "Anjani", "Amazon", "Shiprocket", "Delhivery", "Delhivery B2B", "India Post", "Others"]
+COURIER_OPTIONS = ["DTDC", "Anjani", "Amazon", "Shiprocket", "Shipmozo", "Delhivery", "Delhivery B2B", "India Post", "Others"]
 
 # Bank details for PI PDFs
 BANK_GST = {
@@ -9605,6 +9605,510 @@ async def shiprocket_sync_now(user=Depends(get_current_user)):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# SHIPMOZO. An aggregator like Shiprocket: push the order, assign one of the
+# quoted couriers (Xpressbees, Delhivery, Ekart...), most pick up automatically.
+# Keys come from the server .env. The pickup warehouse is the default/active
+# one in the Shipmozo panel, or SHIPMOZO_WAREHOUSE_ID.
+# ═══════════════════════════════════════════════════════════════════════════
+SHIPMOZO = {
+    "public_key": os.environ.get("SHIPMOZO_PUBLIC_KEY", "").strip(),
+    "private_key": os.environ.get("SHIPMOZO_PRIVATE_KEY", "").strip(),
+    "warehouse_id": os.environ.get("SHIPMOZO_WAREHOUSE_ID", "").strip(),
+    "pickup_pincode": os.environ.get("SHIPMOZO_PICKUP_PINCODE", os.environ.get("AMAZON_SHIP_ORIGIN_PINCODE", "440025")).strip(),
+}
+SM_BASE = "https://shipping-api.com/app/api/v1"
+SM_ROLES = ["admin", "dispatch", "packaging", "accounts"]
+SM_COURIER_RE = {"$regex": r"^\s*shipmozo", "$options": "i"}
+SM_SYNC_INTERVAL = int(os.environ.get("SHIPMOZO_SYNC_INTERVAL", "300"))
+
+
+def _sm_configured() -> bool:
+    return bool(SHIPMOZO["public_key"] and SHIPMOZO["private_key"])
+
+
+async def _sm_call(method: str, path: str, **kw) -> tuple:
+    """(ok, data, message). Shipmozo answers {"result": "1"|"0", "message", "data"}."""
+    headers = {"public-key": SHIPMOZO["public_key"], "private-key": SHIPMOZO["private_key"],
+               "Accept": "application/json", "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=60) as c:
+        r = await c.request(method, SM_BASE + path, headers=headers, **kw)
+    try:
+        j = r.json()
+    except Exception:
+        return False, None, f"HTTP {r.status_code}: {r.text[:200]}"
+    ok = r.status_code < 400 and str(j.get("result")) == "1"
+    data = j.get("data")
+    msg = j.get("message") or ""
+    if not ok and isinstance(data, dict) and data.get("error"):
+        msg = f"{msg}: {data['error']}" if msg else str(data["error"])
+    return ok, data, msg
+
+
+def _sm_require(user):
+    if user["role"] not in SM_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not _sm_configured():
+        raise HTTPException(status_code=400, detail="Shipmozo is not configured on the server")
+
+
+def courier_name_is_sm(order: dict) -> bool:
+    return (order.get("courier_name") or "").strip().lower().startswith("shipmozo")
+
+
+async def _sm_warehouse_id() -> str:
+    if SHIPMOZO["warehouse_id"]:
+        return SHIPMOZO["warehouse_id"]
+    ok, data, msg = await _sm_call("GET", "/get-warehouses")
+    rows = [w for w in (data or []) if isinstance(w, dict) and str(w.get("status") or "ACTIVE").upper() == "ACTIVE"]
+    rows.sort(key=lambda w: str(w.get("default") or "").upper() != "YES")
+    if not rows:
+        raise HTTPException(status_code=400, detail="No pickup warehouse in Shipmozo yet. Add our pickup address in the "
+                                                    "Shipmozo panel (Settings > Warehouses) first.")
+    return str(rows[0]["id"])
+
+
+async def _sm_rates(pincode: str, weight_kg: float, cod_amount: float, value: float, box: Optional[dict] = None,
+                    order_ref: str = "") -> list:
+    box = box or {"length": 15, "width": 15, "height": 15}
+    body = {"order_id": order_ref, "pickup_pincode": SHIPMOZO["pickup_pincode"], "delivery_pincode": str(pincode),
+            "payment_type": "COD" if cod_amount > 0 else "PREPAID", "shipment_type": "FORWARD",
+            "order_amount": str(round(max(1.0, value), 2)), "type_of_package": "SPS", "rov_type": "ROV_OWNER",
+            "cod_amount": str(round(cod_amount, 2)) if cod_amount > 0 else "",
+            "weight": str(max(1, int(round(weight_kg * 1000)))),
+            "dimensions": [{"no_of_box": "1", "length": str(box["length"]), "width": str(box["width"]), "height": str(box["height"])}]}
+    ok, data, msg = await _sm_call("POST", "/rate-calculator", json=body)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"Shipmozo rates: {msg or 'not available'}")
+    out = []
+    for x in data or []:
+        try:
+            total = round(float(x.get("total_charges") or 0), 2)
+        except (TypeError, ValueError):
+            continue
+        if total <= 0:
+            continue
+        out.append({"courier_id": x.get("id"), "name": (x.get("name") or "").strip().rstrip("."), "rate": total,
+                    "freight": x.get("before_tax_total_charges"), "gst": x.get("gst"),
+                    "etd": x.get("estimated_delivery") or "", "days": x.get("estimated_delivery"),
+                    "auto_pickup": str(x.get("pickups_automatically_scheduled") or "").upper() == "YES",
+                    "min_weight": x.get("minimum_chargeable_weight") or "", "zone": x.get("from_zone") or ""})
+    out.sort(key=lambda c: c["rate"])
+    return out
+
+
+def _sm_find(obj, *keys):
+    """First non-empty value of any of these keys anywhere in a nested reply (Shipmozo's
+    order-detail shape is not documented)."""
+    if isinstance(obj, dict):
+        for k in keys:
+            if obj.get(k) not in (None, "", [], {}):
+                return obj[k]
+        for v in obj.values():
+            hit = _sm_find(v, *keys)
+            if hit not in (None, ""):
+                return hit
+    elif isinstance(obj, list):
+        for v in obj:
+            hit = _sm_find(v, *keys)
+            if hit not in (None, ""):
+                return hit
+    return None
+
+
+async def _sm_label_png(awb: str) -> bytes:
+    import base64
+    ok, data, msg = await _sm_call("GET", f"/get-order-label/{awb}")
+    lab = _sm_find(data, "label")
+    if not ok or not lab:
+        raise HTTPException(status_code=400, detail=f"Shipmozo label not ready: {msg or 'no label'}")
+    return base64.b64decode(str(lab).split(",", 1)[-1])
+
+
+@api_router.get("/shipmozo/check/{pincode}")
+async def shipmozo_check(pincode: str, weight: float = 1.0, cod: bool = False, user=Depends(get_current_user)):
+    pincode = pincode.strip()
+    if not pincode.isdigit() or len(pincode) != 6:
+        return {"serviceable": False, "configured": True, "message": "Invalid pincode format."}
+    if not _sm_configured():
+        return {"serviceable": None, "configured": False, "message": "Shipmozo is not configured on the server."}
+    try:
+        city, state = await _resolve_pincode_geo(pincode)
+        couriers = await _sm_rates(pincode, max(0.05, float(weight or 1)), 1000.0 if cod else 0.0, 1000.0)
+        if not couriers:
+            return {"serviceable": False, "configured": True, "city": city, "state": state,
+                    "message": "No Shipmozo courier serves this pincode" + (" for COD." if cod else ".")}
+        return {"serviceable": True, "configured": True, "city": city, "state": state, "couriers": couriers, "count": len(couriers)}
+    except HTTPException as e:
+        return {"serviceable": False, "configured": True, "message": str(e.detail)}
+    except Exception as e:
+        logging.error(f"shipmozo check: {e}")
+        return {"serviceable": False, "configured": True, "message": "Unable to reach Shipmozo right now."}
+
+
+@api_router.get("/shipmozo/bookable")
+async def shipmozo_bookable(user=Depends(get_current_user)):
+    """Orders assigned to Shipmozo that packing has weighed and that are not dispatched."""
+    _sm_require(user)
+    orders = await ship_orders.find({
+        "courier_name": SM_COURIER_RE, "status": {"$nin": ["cancelled", "dispatched"]},
+        "$or": [{"packaging.weight_kg": {"$nin": ["", None]}}, {"shipmozo_shipment.awb": {"$nin": ["", None]}}],
+    }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "shipping_address": 1,
+        "packaging": 1, "shipmozo_shipment": 1, "status": 1, "is_cod": 1, "amount_paid": 1, "cod_amount": 1}).sort("created_at", -1).to_list(300)
+    out = []
+    for o in orders:
+        pkg = o.get("packaging") or {}
+        sh = o.get("shipmozo_shipment") or None
+        weight, source = _sr_weight(o)
+        if weight <= 0 and sh and sh.get("awb"):
+            weight, source = float(sh.get("weight_kg") or 0), "booked"
+        if weight <= 0:
+            continue
+        out.append({"id": o["id"], "order_number": o.get("order_number"), "customer_name": o.get("customer_name"),
+                    "grand_total": o.get("grand_total"), "status": o.get("status"),
+                    "weight_kg": weight, "weight_source": source, "num_boxes": pkg.get("num_boxes") or "1",
+                    "shipping_address": o.get("shipping_address") or {},
+                    "is_cod": bool(o.get("is_cod")), "cod_amount": _amazon_cod_amount(o),
+                    "shipmozo_shipment": ({k: v for k, v in sh.items() if k != "raw"} if sh else None)})
+    return out
+
+
+class ShipmozoBookRequest(BaseModel):
+    order_id: str
+    courier_id: Optional[int] = None        # which quoted courier to use; cheapest if omitted
+    payment_mode: Optional[str] = None      # "prepaid" | "cod"
+    declared_value: Optional[float] = None  # required when the order total is 0
+    insure: Optional[bool] = False          # not offered by Shipmozo's API; kept for the shared screen
+
+
+@api_router.post("/shipmozo/quote")
+async def shipmozo_quote(req: ShipmozoBookRequest, user=Depends(get_current_user)):
+    """Live courier list for one order - books nothing."""
+    _sm_require(user)
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    sa = order.get("shipping_address") or {}
+    weight, weight_source = _sr_weight(order)
+    if weight <= 0:
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+    cod = _sr_cod(order, req.payment_mode)
+    if (req.payment_mode or "").lower() == "cod" and cod <= 0:
+        raise HTTPException(status_code=400, detail="Nothing left to collect - this order is fully paid.")
+    couriers = await _sm_rates(str(sa.get("pincode") or ""), weight, cod, cod if cod > 0 else _declared_value(order), _amazon_box(order))
+    if not couriers:
+        return {"ok": False, "message": "No Shipmozo courier serves this address" + (" for COD" if cod > 0 else "")}
+    return {"ok": True, "couriers": couriers, "is_cod": cod > 0, "cod_amount": cod, "weight_kg": weight, "weight_source": weight_source}
+
+
+@api_router.post("/shipmozo/book")
+async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)):
+    """BUYS a real Shipmozo shipment: pushes the order, assigns the courier, gets the AWB and label."""
+    _sm_require(user)
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if (order.get("shipmozo_shipment") or {}).get("awb"):
+        raise HTTPException(status_code=400, detail="This order is already booked with Shipmozo")
+    if req.declared_value and float(req.declared_value) > 0:
+        order["declared_value_override"] = float(req.declared_value)
+    elif float(order.get("grand_total") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Order total is \u20b90 - enter a declared value for the shipment before booking")
+    weight, weight_source = _sr_weight(order)
+    if weight <= 0:
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+    phone = await _order_recipient_phone(order)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Customer has no valid phone number. Add one before booking.")
+    sa = order.get("shipping_address") or {}
+    line1, line2 = _address_lines(sa, cap=160)
+    if len((line1 or "").strip()) < 3:
+        raise HTTPException(status_code=400, detail="Shipping address is too short for the courier")
+    cod = _sr_cod(order, req.payment_mode)
+    if (req.payment_mode or "").lower() == "cod" and cod <= 0:
+        raise HTTPException(status_code=400, detail="Nothing left to collect - this order is fully paid.")
+    declared = _declared_value(order)
+    value = cod if cod > 0 else declared
+    box = _amazon_box(order)
+    warehouse_id = await _sm_warehouse_id()
+
+    # Shipmozo keys orders by our order_id, so a cancelled or failed attempt gets a fresh reference.
+    rebooks = sum(1 for c in (order.get("cancelled_shipments") or []) if (c.get("courier") or "") == "Shipmozo")
+    rebooks += int(order.get("shipmozo_failed_attempts") or 0)
+    ref = (order.get("order_number") or order["id"][:20]) + (f"-R{rebooks}" if rebooks else "")
+    items = []
+    for it in order.get("items") or []:
+        amt = float(it.get("total") or it.get("amount") or 0)
+        if amt > 0:
+            items.append({"name": (it.get("product_name") or "Item")[:100],
+                          "sku_number": re.sub(r"[^A-Za-z0-9]+", "-", (it.get("product_name") or "item"))[:40] or "item",
+                          "quantity": 1, "discount": "", "hsn": "", "unit_price": round(amt, 2), "product_category": "Other"})
+    if not items:
+        items = [{"name": "Aroma products", "sku_number": "AROMA", "quantity": 1, "discount": "", "hsn": "",
+                  "unit_price": round(value, 2), "product_category": "Other"}]
+    push = {
+        "order_id": ref, "order_date": datetime.now(IST).strftime("%Y-%m-%d"), "order_type": "NON ESSENTIALS",
+        "consignee_name": (sa.get("address_name") or order.get("customer_name") or "Customer").strip()[:60],
+        "consignee_phone": phone, "consignee_alternate_phone": "", "consignee_email": await _amazon_recipient_email(order),
+        "consignee_address_line_one": line1, "consignee_address_line_two": line2 or "",
+        "consignee_pin_code": str(sa.get("pincode") or ""), "consignee_city": sa.get("city") or "", "consignee_state": sa.get("state") or "",
+        "product_detail": items, "payment_type": "COD" if cod > 0 else "PREPAID",
+        "cod_amount": str(round(cod, 2)) if cod > 0 else "", "shipping_charges": "",
+        "weight_unit": "gm", "weight": str(max(1, int(round(weight * 1000)))),
+        "length": str(box["length"]), "width": str(box["width"]), "height": str(box["height"]),
+        "warehouse_id": warehouse_id, "gst_ewaybill_number": "", "gstin_number": "",
+    }
+    ok, data, msg = await _sm_call("POST", "/push-order", json=push)
+    if not ok:
+        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})
+        raise HTTPException(status_code=400, detail=f"Shipmozo refused the order: {msg}")
+
+    # rates for this pushed order, then the chosen (or cheapest) courier
+    couriers = await _sm_rates(str(sa.get("pincode") or ""), weight, cod, value, box, order_ref=ref)
+    if not couriers:
+        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})
+        raise HTTPException(status_code=400, detail="No Shipmozo courier serves this address")
+    chosen = next((c for c in couriers if req.courier_id and int(c["courier_id"]) == int(req.courier_id)), None) or couriers[0]
+    ok, data, msg = await _sm_call("POST", "/assign-courier", json={"order_id": ref, "courier_id": chosen["courier_id"]})
+    if not ok:
+        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})
+        raise HTTPException(status_code=400, detail=f"Shipmozo could not assign {chosen['name']}: {msg}")
+    courier_label = (data or {}).get("courier") or chosen["name"]
+    awb, lr, pickup_note = _sm_find(data, "awb_number", "awb"), "", ""
+    if not chosen.get("auto_pickup"):
+        ok, pd, msg = await _sm_call("POST", "/schedule-pickup", json={"order_id": ref})
+        awb = awb or _sm_find(pd, "awb_number", "awb")
+        lr = _sm_find(pd, "lr_number") or ""
+        pickup_note = "Pickup scheduled" if ok else f"Pickup not scheduled: {msg}"
+    if not awb:
+        for _ in range(4):           # the AWB can take a moment to appear
+            ok, od, msg = await _sm_call("GET", f"/get-order-detail/{ref}")
+            awb = _sm_find(od, "awb_number", "awb")
+            if awb:
+                break
+            await asyncio.sleep(3)
+    if not awb:
+        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})
+        raise HTTPException(status_code=400, detail=f"Shipmozo assigned {courier_label} but returned no AWB yet. "
+                                                    f"Check order {ref} in the Shipmozo panel before booking again.")
+    awb = str(awb)
+    label_url = ""
+    try:
+        png = await _sm_label_png(awb)
+        fname = f"{uuid.uuid4()}.png"
+        async with aiofiles.open(UPLOAD_DIR / fname, "wb") as f:
+            await f.write(png)
+        label_url = f"/api/uploads/{fname}"
+    except Exception as e:
+        logging.warning(f"shipmozo label {awb}: {e}")
+    shipment = {
+        "reference": ref, "awb": awb, "tracking_id": awb, "lr_number": lr, "warehouse_id": warehouse_id,
+        "courier_id": chosen["courier_id"], "courier_name": courier_label, "rate": chosen["rate"],
+        "etd": chosen.get("etd") or "", "auto_pickup": chosen.get("auto_pickup"), "pickup_note": pickup_note,
+        "is_cod": cod > 0, "cod_amount": cod, "declared_value": round(value, 2),
+        "weight_kg": weight, "weight_source": weight_source, "label_url": label_url,
+        "booked_by": user["name"], "booked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await ship_orders.update_one({"id": req.order_id}, {"$set": {
+        "shipmozo_shipment": shipment, "courier_name": "Shipmozo", "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"ok": True, "shipment": shipment}
+
+
+@api_router.post("/shipmozo/bulk-book")
+async def shipmozo_bulk_book(req: BulkBookRequest, user=Depends(get_current_user)):
+    _sm_require(user)
+    mode = (req.payment_mode or "prepaid").strip().lower()
+    if mode not in ("prepaid", "cod"):
+        raise HTTPException(status_code=400, detail="payment_mode must be prepaid or cod")
+
+    async def one(oid):
+        ch = (req.choices or {}).get(oid) or {}
+        return await shipmozo_book(ShipmozoBookRequest(
+            order_id=oid, payment_mode=(ch.get("payment_mode") or mode),
+            courier_id=int(ch["courier_id"]) if ch.get("courier_id") else None,
+            declared_value=(req.declared_values or {}).get(oid)), user=user)
+
+    return await _bulk_book(req.order_ids, one, user, "Shipmozo")
+
+
+async def _sm_cancel_one(order_id: str, user) -> dict:
+    order = await ship_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    shp = order.get("shipmozo_shipment") or {}
+    if not shp.get("reference"):
+        raise HTTPException(status_code=400, detail="No Shipmozo booking on this order")
+    if (order.get("status") or "") == "dispatched":
+        raise HTTPException(status_code=400, detail="Order is already dispatched - undo the dispatch before cancelling the label")
+    ok, data, msg = await _sm_call("POST", "/cancel-order", json={"order_id": shp["reference"], "awb_number": shp.get("awb") or ""})
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"Shipmozo cancel failed: {msg}")
+    now = datetime.now(timezone.utc).isoformat()
+    await ship_orders.update_one({"id": order_id}, {
+        "$push": {"cancelled_shipments": {"courier": "Shipmozo", **shp, "cancelled_by": user["name"], "cancelled_at": now}},
+        "$unset": {"shipmozo_shipment": ""}, "$set": {"updated_at": now}})
+    return {"ok": True, "cancelled": shp.get("awb") or shp.get("reference")}
+
+
+@api_router.post("/shipmozo/cancel")
+async def shipmozo_cancel(req: CancelLabelRequest, user=Depends(get_current_user)):
+    _sm_require(user)
+    return await _sm_cancel_one(req.order_id, user)
+
+
+@api_router.post("/shipmozo/bulk-cancel")
+async def shipmozo_bulk_cancel(req: BulkBookRequest, user=Depends(get_current_user)):
+    _sm_require(user)
+
+    async def one(oid):
+        return await _sm_cancel_one(oid, user)
+
+    return await _bulk_book(req.order_ids, one, user, "Shipmozo cancel")
+
+
+async def _sm_label_bytes(shp: dict) -> bytes:
+    """The saved label image, or a fresh one from Shipmozo."""
+    url = shp.get("label_url") or ""
+    if url.startswith("/api/uploads/"):
+        try:
+            async with aiofiles.open(UPLOAD_DIR / url.rsplit("/", 1)[-1], "rb") as f:
+                return await f.read()
+        except OSError:
+            pass
+    return await _sm_label_png(shp["awb"])
+
+
+async def _shipmozo_mark_dispatched(order: dict, when: str, by: str, docket: str = "") -> dict:
+    """Shared dispatch write for the manual button and the pickup poller."""
+    shp = order.get("shipmozo_shipment") or {}
+    docket = docket or shp.get("awb") or ""
+    dispatch = order.get("dispatch") or {}
+    slips = list(dispatch.get("dispatch_slip_images") or [])
+    if not slips and shp.get("awb"):
+        try:
+            png = await _sm_label_bytes(shp)
+            from PIL import Image
+            im = Image.open(io.BytesIO(png)).convert("RGB")
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=88)
+            fname = f"{uuid.uuid4()}.jpg"
+            async with aiofiles.open(UPLOAD_DIR / fname, "wb") as f:
+                await f.write(buf.getvalue())
+            slips.append(f"/api/uploads/{fname}")
+        except Exception as e:
+            logging.warning(f"shipmozo slip image failed: {e}")
+    dispatch.update({"courier_name": "Shipmozo", "courier_partner": shp.get("courier_name") or "",
+                     "transporter_name": "", "lr_no": docket, "dispatch_slip_images": slips,
+                     "dispatch_type": "courier", "porter_link": "", "dispatched_by": by, "dispatched_at": when})
+    await ship_orders.update_one({"id": order["id"]}, {"$set": {
+        "dispatch": dispatch, "status": "dispatched", "courier_name": "Shipmozo",
+        "shipmozo_shipment.picked_up_at": when, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"ok": True, "lr_no": docket, "slips": slips}
+
+
+class ShipmozoDispatchRequest(BaseModel):
+    order_id: str
+    docket_no: Optional[str] = ""
+
+
+@api_router.post("/shipmozo/dispatch")
+async def shipmozo_dispatch(req: ShipmozoDispatchRequest, user=Depends(get_current_user)):
+    _sm_require(user)
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    docket = (req.docket_no or "").strip() or (order.get("shipmozo_shipment") or {}).get("awb") or ""
+    if not docket:
+        raise HTTPException(status_code=400, detail="Tracking / AWB number is required")
+    return await _shipmozo_mark_dispatched(order, datetime.now(timezone.utc).isoformat(), user["name"], docket)
+
+
+# Shipmozo's current_status is free text; "Pickup Pending" / "Not Picked" mean still with us.
+SM_GONE_WORDS = ("picked up", "pickup done", "picked", "in transit", "intransit", "shipped", "out for delivery",
+                 "delivered", "reached", "dispatched")
+SM_WAITING_WORDS = ("pending", "not picked", "cancel", "manifest", "booked", "ready", "scheduled", "failed pickup", "pickup failed")
+
+
+def _sm_gone(status: str) -> bool:
+    s = (status or "").lower()
+    return bool(s) and not any(w in s for w in SM_WAITING_WORDS) and any(w in s for w in SM_GONE_WORDS)
+
+
+async def _shipmozo_sync_all() -> int:
+    """Booked Shipmozo orders that the courier has collected become dispatched."""
+    n = 0
+    async for o in ship_orders.find({"shipmozo_shipment.awb": {"$nin": ["", None]},
+                                   "status": {"$nin": ["dispatched", "cancelled"]}}, {"_id": 0}).limit(100):
+        awb = o["shipmozo_shipment"]["awb"]
+        try:
+            ok, d, msg = await _sm_call("GET", "/track-order", params={"awb_number": awb})
+        except Exception as e:
+            logging.warning(f"shipmozo track {awb}: {e}")
+            continue
+        status = str((d or {}).get("current_status") or "") if isinstance(d, dict) else ""
+        await ship_orders.update_one({"id": o["id"]}, {"$set": {"shipmozo_shipment.last_status": status}})
+        if not _sm_gone(status):
+            continue
+        when = datetime.now(timezone.utc).isoformat()
+        st = (d or {}).get("status_time")
+        if st:
+            try:
+                when = datetime.strptime(str(st)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST).astimezone(timezone.utc).isoformat()
+            except ValueError:
+                pass
+        await _shipmozo_mark_dispatched(o, when, "Shipmozo (auto)", awb)
+        n += 1
+        logging.info(f"Shipmozo pickup: {o.get('order_number')} dispatched ({status})")
+    return n
+
+
+async def _shipmozo_sync_loop():
+    await asyncio.sleep(90)
+    while True:
+        try:
+            await _shipmozo_sync_all()
+        except Exception as e:
+            logging.error(f"Shipmozo sync loop error: {e}")
+        await asyncio.sleep(SM_SYNC_INTERVAL)
+
+
+@app.on_event("startup")
+async def _start_shipmozo_sync():
+    if _sm_configured():
+        asyncio.create_task(_shipmozo_sync_loop())
+
+
+@api_router.post("/shipmozo/sync-tracking")
+async def shipmozo_sync_now(user=Depends(get_current_user)):
+    _sm_require(user)
+    return {"count": await _shipmozo_sync_all()}
+
+
+@api_router.get("/shipmozo/warehouses")
+async def shipmozo_warehouses(user=Depends(get_current_user)):
+    _sm_require(user)
+    ok, data, msg = await _sm_call("GET", "/get-warehouses")
+    return {"ok": ok, "warehouses": data or [], "message": msg, "configured_id": SHIPMOZO["warehouse_id"]}
+
+
+async def _compare_shipmozo(pincode: str, weight: float, cod: bool) -> list:
+    if not _sm_configured():
+        return [{"carrier": "Shipmozo", "service": "", "serviceable": None, "note": "Not configured on the server"}]
+    try:
+        rows = await _sm_rates(pincode, weight, 1000.0 if cod else 0.0, 1000.0)
+        if not rows:
+            return [{"carrier": "Shipmozo", "service": "", "serviceable": False, "note": "No Shipmozo courier serves this pincode"}]
+        return [{"carrier": "Shipmozo", "service": x["name"], "serviceable": True, "total": x["rate"],
+                 "gst_note": "GST included", "eta": x.get("etd") or "",
+                 "pickup": "auto pickup" if x.get("auto_pickup") else "pickup to be scheduled",
+                 "note": f"min {x['min_weight']}" if x.get("min_weight") else ""} for x in rows[:6]]
+    except HTTPException as e:
+        return [{"carrier": "Shipmozo", "service": "", "serviceable": None, "note": str(e.detail)[:100]}]
+    except Exception as e:
+        logging.error(f"compare/shipmozo: {e}")
+        return [{"carrier": "Shipmozo", "service": "", "serviceable": None, "note": "Could not reach Shipmozo right now"}]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # AMAZON SELF-SHIP THROUGH OUR COURIERS. Self-ship Amazon orders are shipped by
 # us, so every courier (booking, labels, cancel, dispatch, pickup pollers) sees
 # them through `ship_orders`, which reads regular orders first and then Amazon
@@ -10954,7 +11458,7 @@ async def _compare_delhivery_b2b(pincode: str, weight: float, cod: bool) -> list
 # prints their labels as one PDF, and lets a weighed order be given a courier.
 # ═══════════════════════════════════════════════════════════════════════════
 SHIP_ROLES = ["admin", "dispatch", "packaging", "accounts"]
-SHIP_API_COURIERS = ["DTDC", "Amazon", "Shiprocket", "Delhivery", "Delhivery B2B"]
+SHIP_API_COURIERS = ["DTDC", "Amazon", "Shiprocket", "Shipmozo", "Delhivery", "Delhivery B2B"]
 
 
 @api_router.get("/shipments/bookable")
@@ -10966,7 +11470,8 @@ async def shipments_bookable(user=Depends(get_current_user)):
                              ("Amazon", amazon_bookable_orders, "amazon_shipment"),
                              ("Shiprocket", shiprocket_bookable, "shiprocket_shipment"),
                              ("Delhivery", delhivery_bookable, "delhivery_shipment"),
-                             ("Delhivery B2B", delhivery_b2b_bookable, "delhivery_b2b_shipment")):
+                             ("Delhivery B2B", delhivery_b2b_bookable, "delhivery_b2b_shipment"),
+                             ("Shipmozo", shipmozo_bookable, "shipmozo_shipment")):
         try:
             for o in await fn(user=user):
                 sh = o.get(key) or {}
@@ -11029,7 +11534,7 @@ async def shipments_set_courier(req: SetCourierRequest, user=Depends(get_current
         raise HTTPException(status_code=403, detail="Not authorized")
     courier = (req.courier_name or "").strip()
     if courier not in SHIP_API_COURIERS + ["Anjani"]:
-        raise HTTPException(status_code=400, detail="Courier must be DTDC, Amazon, Shiprocket, Delhivery, Delhivery B2B or Anjani")
+        raise HTTPException(status_code=400, detail="Courier must be DTDC, Amazon, Shiprocket, Shipmozo, Delhivery, Delhivery B2B or Anjani")
     order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -11039,7 +11544,8 @@ async def shipments_set_courier(req: SetCourierRequest, user=Depends(get_current
             or (order.get("amazon_shipment") or {}).get("shipment_id")
             or (order.get("shiprocket_shipment") or {}).get("awb")
             or (order.get("delhivery_shipment") or {}).get("awb")
-            or (order.get("delhivery_b2b_shipment") or {}).get("lrn")):
+            or (order.get("delhivery_b2b_shipment") or {}).get("lrn")
+            or (order.get("shipmozo_shipment") or {}).get("awb")):
         raise HTTPException(status_code=400, detail="This order already has a booked label. Cancel the label before changing the courier.")
     # Carrier risk is a DTDC charge the customer has been billed for.
     if order.get("carrier_risk_applicable") and courier != "DTDC":
@@ -11105,6 +11611,12 @@ async def shipments_labels(ids: str, token: str = "", user=None):
             except Exception as e:
                 logging.warning(f"delhivery b2b label: {e}")
                 missing.append(num)
+        elif (o.get("shipmozo_shipment") or {}).get("awb"):
+            try:
+                quarter.append(await _sm_label_bytes(o["shipmozo_shipment"]))
+            except Exception as e:
+                logging.warning(f"shipmozo label: {e}")
+                missing.append(num)
         elif (o.get("delhivery_shipment") or {}).get("awb"):
             try:
                 quarter.extend(_pdf_pages_jpg(await _dlv_label_pdf(o["delhivery_shipment"]["awb"])) or [])
@@ -11151,9 +11663,10 @@ async def rates_compare(pincode: str, weight: float = 1.0, cod: bool = False, us
         _compare_dtdc(pincode, weight), _compare_anjani(pincode, weight, state),
         _compare_amazon(pincode, weight, cod), _compare_shiprocket(pincode, weight, cod),
         _compare_delhivery(pincode, weight, cod), _compare_delhivery_b2b(pincode, weight, cod),
+        _compare_shipmozo(pincode, weight, cod),
         return_exceptions=True)
     options = []
-    for name, g in zip(("DTDC", "Anjani", "Amazon Shipping", "Shiprocket", "Delhivery", "Delhivery B2B"), groups):
+    for name, g in zip(("DTDC", "Anjani", "Amazon Shipping", "Shiprocket", "Delhivery", "Delhivery B2B", "Shipmozo"), groups):
         if isinstance(g, Exception):
             logging.error(f"compare/{name}: {g}")
             options.append({"carrier": name, "service": "", "serviceable": None, "note": "Could not check right now"})
@@ -12054,7 +12567,8 @@ def _amz_own_booking(order: dict) -> bool:
         (order.get("shiprocket_shipment") or {}).get("awb"),
         (order.get("dtdc_shipment") or {}).get("reference_number"),
         (order.get("delhivery_shipment") or {}).get("awb"),
-        (order.get("delhivery_b2b_shipment") or {}).get("lrn")))
+        (order.get("delhivery_b2b_shipment") or {}).get("lrn"),
+        (order.get("shipmozo_shipment") or {}).get("awb")))
 
 
 async def _spapi_sync(lookback_hours: Optional[int] = None) -> dict:

@@ -21,11 +21,12 @@ const COURIERS = {
   DTDC: { api: "dtdc", badge: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200", noun: "consignment" },
   Amazon: { api: "amazon", badge: "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200", noun: "shipment" },
   Shiprocket: { api: "shiprocket", badge: "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200", noun: "shipment" },
+  Shipmozo: { api: "shipmozo", badge: "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-900/40 dark:text-fuchsia-200", noun: "shipment" },
   Delhivery: { api: "delhivery", badge: "bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-200", noun: "shipment" },
   "Delhivery B2B": { api: "delhivery-b2b", badge: "bg-cyan-100 text-cyan-900 dark:bg-cyan-900/40 dark:text-cyan-200", noun: "LR" },
   Anjani: { badge: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200" },
 };
-const FILTERS = ["All", "DTDC", "Amazon", "Shiprocket", "Delhivery", "Delhivery B2B", "Unassigned"];
+const FILTERS = ["All", "DTDC", "Amazon", "Shiprocket", "Shipmozo", "Delhivery", "Delhivery B2B", "Unassigned"];
 // Neither courier has a recharge API - money is added on their own sites.
 const RECHARGE_URL = { Shiprocket: "https://app.shiprocket.in/" };
 const LOW_WALLET = 500;
@@ -180,7 +181,7 @@ export default function BookShipments() {
   // ── bulk: the selection may span couriers; each group goes to its own endpoint ──
   const runBulk = async (rows, action, declaredValues = {}, choices = {}) => {
     const merged = { booked: [], failed: [], booked_count: 0, failed_count: 0, action };
-    for (const courier of ["DTDC", "Amazon", "Shiprocket", "Delhivery", "Delhivery B2B"]) {
+    for (const courier of ["DTDC", "Amazon", "Shiprocket", "Shipmozo", "Delhivery", "Delhivery B2B"]) {
       const group = rows.filter(o => o.courier === courier);
       if (!group.length) continue;
       const body = { order_ids: group.map(o => o.id) };
@@ -269,7 +270,7 @@ export default function BookShipments() {
       if (r.declared !== undefined) declaredValues[o.id] = parseFloat(r.declared);
       choices[o.id] = { payment_mode: r.mode, insure: !!r.insure,
                         service_id: r.courier === "Amazon" ? (r.choice.service_id || r.choice.rate_id) : undefined,
-                        courier_id: r.courier === "Shiprocket" ? r.choice.courier_id : undefined };
+                        courier_id: ["Shiprocket", "Shipmozo"].includes(r.courier) ? r.choice.courier_id : undefined };
     }
     setBulkBusy("book");
     const res = await runBulk(reviewRows, "book", declaredValues, choices);
@@ -323,10 +324,11 @@ export default function BookShipments() {
 
   const syncDtdc = async () => {
     try {
-      const [d, s, v, b] = await Promise.all([api.post("/dtdc/sync-tracking"), api.post("/shiprocket/sync-tracking").catch(() => ({ data: { count: 0 } })),
+      const [d, s, v, b, m] = await Promise.all([api.post("/dtdc/sync-tracking"), api.post("/shiprocket/sync-tracking").catch(() => ({ data: { count: 0 } })),
                                               api.post("/delhivery/sync-tracking").catch(() => ({ data: { count: 0 } })),
-                                              api.post("/delhivery-b2b/sync-tracking").catch(() => ({ data: { count: 0 } }))]);
-      const n = (d.data.count || 0) + (s.data.count || 0) + (v.data.count || 0) + (b.data.count || 0);
+                                              api.post("/delhivery-b2b/sync-tracking").catch(() => ({ data: { count: 0 } })),
+                                              api.post("/shipmozo/sync-tracking").catch(() => ({ data: { count: 0 } }))]);
+      const n = (d.data.count || 0) + (s.data.count || 0) + (v.data.count || 0) + (b.data.count || 0) + (m.data.count || 0);
       toast.success(n ? `${n} order(s) picked up and marked dispatched` : "No new pickups reported yet");
       if (n) load();
     } catch (err) {
@@ -534,7 +536,7 @@ export default function BookShipments() {
                     </TableCell></TableRow>
                   )}
                   {visible.map(o => {
-                    const sh = o.dtdc_shipment || o.amazon_shipment || o.shiprocket_shipment || {};
+                    const sh = o.dtdc_shipment || o.amazon_shipment || o.shiprocket_shipment || o.shipmozo_shipment || {};
                     const sa = o.shipping_address || {};
                     const blocked = o.courier === "DTDC" && o.serviceable === false;
                     return (
@@ -548,7 +550,7 @@ export default function BookShipments() {
                               {o.risk_surcharge && <span className="text-red-600"> · <ShieldCheck className="w-2.5 h-2.5 inline" /> risk</span>}
                             </div>
                           )}
-                          {["Shiprocket", "Delhivery", "Delhivery B2B"].includes(o.courier) && sh.courier_name && <div className="text-[10px] text-muted-foreground mt-0.5">{sh.courier_name}</div>}
+                          {["Shiprocket", "Shipmozo", "Delhivery", "Delhivery B2B"].includes(o.courier) && sh.courier_name && <div className="text-[10px] text-muted-foreground mt-0.5">{sh.courier_name}</div>}
                           {o.courier === "Shiprocket" && !o.booked && o.shiprocket_courier?.name && <div className="text-[10px] text-violet-700 dark:text-violet-300 mt-0.5">wants {o.shiprocket_courier.name}</div>}
                         </TableCell>
                         <TableCell className="font-mono text-sm">{o.order_number}</TableCell>
@@ -687,6 +689,11 @@ export default function BookShipments() {
                               ))}
                             </select>
                             {r.preferredMissing && <div className="text-[10px] text-amber-600">{r.preferred} (chosen on order) is not offered now</div>}
+                            {r.courier === "Shipmozo" && r.choice && (
+                              <div className="text-[10px] text-muted-foreground mt-0.5">
+                                {r.choice.etd ? `delivery in ${r.choice.etd}` : ""}{r.choice.auto_pickup === false ? " · pickup is scheduled after booking" : ""}
+                              </div>
+                            )}
                             {r.courier === "Shiprocket" && r.choice && (
                               <div className="text-[10px] text-muted-foreground mt-0.5">
                                 {r.choice.etd ? `delivery by ${r.choice.etd}` : ""}{r.choice.cutoff_time ? ` · pickup today if before ${r.choice.cutoff_time}` : ""}
