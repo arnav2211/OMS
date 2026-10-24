@@ -12564,6 +12564,150 @@ async def _spapi_build_order(o: dict) -> dict:
     }
 
 
+# ── Easy Ship pickup watch (Telegram) ──────────────────────────────────────────
+# Amazon's pickup person sometimes collects the parcel without scanning it; the order then
+# stays "PendingPickUp" and Amazon cancels it the night after the ship-by date (AM-0318/20/21,
+# 24 Oct 2026) - the order is lost and the parcel with it. So on the ship-by day we alert at
+# 7, 8, 9 and 10 pm, and on the next day (the day it gets cancelled) every hour 11 am - 7 pm,
+# until Amazon shows it picked up. Telegram bot token and chat id(s) come from the .env.
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_IDS = [c.strip() for c in os.environ.get("TELEGRAM_CHAT_IDS", os.environ.get("TELEGRAM_CHAT_ID", "")).split(",") if c.strip()]
+PICKUP_ALERT_HOURS_DUE = [19, 20, 21, 22]                 # ship-by day
+PICKUP_ALERT_HOURS_LAST = list(range(11, 20))             # the next day, 11 am - 7 pm
+
+
+async def _telegram_send(text: str) -> bool:
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS):
+        return False
+    ok = True
+    async with httpx.AsyncClient(timeout=20) as c:
+        for chat in TELEGRAM_CHAT_IDS:
+            try:
+                r = await c.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                                 json={"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True})
+                ok = ok and r.status_code == 200
+                if r.status_code != 200:
+                    logging.warning(f"telegram {chat}: {r.status_code} {r.text[:200]}")
+            except Exception as e:
+                ok = False
+                logging.warning(f"telegram {chat}: {e}")
+    return ok
+
+
+def _ist_day(iso: str):
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(IST).date()
+    except (TypeError, ValueError):
+        return None
+
+
+async def _pickup_watch_list(now_ist) -> tuple:
+    """(due_today, last_day): Easy Ship orders Amazon still shows as not picked up."""
+    due, last = [], []
+    async for a in db.amazon_orders.find({"ship_type": "easy_ship", "status": {"$nin": ["cancelled", "dispatched"]},
+                                          "easy_ship_status": {"$in": ["PendingPickUp", "PendingSchedule", ""]}},
+                                         {"_id": 0, "id": 1, "am_order_number": 1, "amazon_order_id": 1, "grand_total": 1,
+                                          "latest_ship_date": 1, "easy_ship_status": 1, "status": 1, "items.product_name": 1}):
+        d = _ist_day(a.get("latest_ship_date"))
+        if not d:
+            continue
+        lag = (now_ist.date() - d).days
+        if lag == 0:
+            due.append(a)
+        elif lag >= 1:
+            last.append(a)
+    return due, last
+
+
+def _pickup_line(a: dict) -> str:
+    item = ((a.get("items") or [{}])[0].get("product_name") or "")[:45]
+    d = _ist_day(a.get("latest_ship_date"))
+    return (f"• <b>{a.get('am_order_number')}</b> ({a.get('amazon_order_id')}) ₹{float(a.get('grand_total') or 0):,.0f}"
+            f" · ship-by {d.strftime('%d %b') if d else '?'} · Amazon: {a.get('easy_ship_status') or 'no pickup scheduled'}"
+            f" · OMS: {a.get('status')}\n  {item}")
+
+
+async def _pickup_watch_tick(force: bool = False) -> dict:
+    now = datetime.now(IST)
+    hour = now.hour
+    due, last = await _pickup_watch_list(now)
+    sent = []
+    day = now.strftime("%Y-%m-%d")
+    if (hour in PICKUP_ALERT_HOURS_DUE or force) and due:
+        key = f"due|{day}|{hour}"
+        if force or await db.pickup_alerts.find_one({"key": key}) is None:
+            text = ("⚠️ <b>Amazon pickup NOT updated</b> - ship-by is TODAY\n"
+                    f"{len(due)} Easy Ship parcel(s) still show as not picked up on Amazon:\n\n"
+                    + "\n".join(_pickup_line(a) for a in due)
+                    + "\n\nIf the Amazon person took them, get them scanned / call Amazon now, or Amazon cancels tomorrow night.")
+            if await _telegram_send(text):
+                await db.pickup_alerts.update_one({"key": key}, {"$set": {"key": key, "at": now.isoformat(),
+                                                  "orders": [a["am_order_number"] for a in due]}}, upsert=True)
+                sent.append(key)
+    if (hour in PICKUP_ALERT_HOURS_LAST or force) and last:
+        key = f"last|{day}|{hour}"
+        if force or await db.pickup_alerts.find_one({"key": key}) is None:
+            text = ("🚨 <b>LAST DAY - Amazon will CANCEL tonight</b>\n"
+                    f"{len(last)} Easy Ship parcel(s) are past their ship-by date and still not picked up on Amazon:\n\n"
+                    + "\n".join(_pickup_line(a) for a in last)
+                    + "\n\nCall Amazon Seller Support / the pickup person now - once cancelled, the order (and the parcel) is lost.")
+            if await _telegram_send(text):
+                await db.pickup_alerts.update_one({"key": key}, {"$set": {"key": key, "at": now.isoformat(),
+                                                  "orders": [a["am_order_number"] for a in last]}}, upsert=True)
+                sent.append(key)
+    # orders we warned about that Amazon has since picked up (or cancelled): say so once
+    warned = set()
+    async for r in db.pickup_alerts.find({"at": {"$gte": (now - timedelta(days=3)).isoformat()}, "orders": {"$exists": True}},
+                                         {"_id": 0, "orders": 1}):
+        warned.update(r.get("orders") or [])
+    still = {a["am_order_number"] for a in due + last}
+    for num in sorted(warned - still):
+        if await db.pickup_alerts.find_one({"key": f"ok|{num}"}):
+            continue
+        a = await db.amazon_orders.find_one({"am_order_number": num}, {"_id": 0, "status": 1, "easy_ship_status": 1})
+        if not a:
+            continue
+        word = "❌ Cancelled by Amazon" if a.get("status") == "cancelled" else f"✅ Updated on Amazon: {a.get('easy_ship_status') or a.get('status')}"
+        if await _telegram_send(f"{word} - <b>{num}</b>"):
+            await db.pickup_alerts.update_one({"key": f"ok|{num}"}, {"$set": {"key": f"ok|{num}", "at": now.isoformat()}}, upsert=True)
+    return {"due_today": [a["am_order_number"] for a in due], "last_day": [a["am_order_number"] for a in last], "sent": sent}
+
+
+async def _pickup_watch_loop():
+    await asyncio.sleep(120)
+    while True:
+        try:
+            now = datetime.now(IST)
+            if now.minute < 10 and now.hour in set(PICKUP_ALERT_HOURS_DUE + PICKUP_ALERT_HOURS_LAST):
+                try:
+                    await _spapi_sync()          # fresh Amazon statuses before deciding
+                except Exception as e:
+                    logging.warning(f"pickup watch: sync failed, using last known status: {e}")
+                await _pickup_watch_tick()
+        except Exception as e:
+            logging.error(f"pickup watch error: {e}")
+        await asyncio.sleep(240)
+
+
+@app.on_event("startup")
+async def _start_pickup_watch():
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS:
+        asyncio.create_task(_pickup_watch_loop())
+
+
+@api_router.post("/admin/pickup-watch/test")
+async def pickup_watch_test(user=Depends(get_current_user)):
+    """Admin: send the current pickup-watch message to Telegram now."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS):
+        raise HTTPException(status_code=400, detail="Telegram is not set up on the server")
+    res = await _pickup_watch_tick(force=True)
+    if not res["sent"]:
+        await _telegram_send("✅ OMS pickup watch is connected. No Easy Ship parcel is waiting on Amazon right now.")
+    return res
+
+
 def _amz_own_booking(order: dict) -> bool:
     """A self-ship Amazon order booked on one of our couriers (not Amazon Shipping, whose own tracker dispatches it)."""
     return order.get("ship_type") == "self_ship" and any((
