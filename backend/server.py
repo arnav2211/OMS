@@ -12627,13 +12627,14 @@ def _pickup_line(a: dict) -> str:
             f" · OMS: {a.get('status')}\n  {item}")
 
 
-async def _pickup_watch_tick(force: bool = False) -> dict:
+async def _pickup_watch_tick(force: bool = False, alerts: bool = True) -> dict:
+    """alerts=False only sends the good news (parcels updated / all clear)."""
     now = datetime.now(IST)
     hour = now.hour
     due, last = await _pickup_watch_list(now)
     sent = []
     day = now.strftime("%Y-%m-%d")
-    if (hour in PICKUP_ALERT_HOURS_DUE or force) and due:
+    if alerts and (hour in PICKUP_ALERT_HOURS_DUE or force) and due:
         key = f"due|{day}|{hour}"
         if force or await db.pickup_alerts.find_one({"key": key}) is None:
             text = ("⚠️ <b>Amazon pickup NOT updated</b> - ship-by is TODAY\n"
@@ -12644,7 +12645,7 @@ async def _pickup_watch_tick(force: bool = False) -> dict:
                 await db.pickup_alerts.update_one({"key": key}, {"$set": {"key": key, "at": now.isoformat(),
                                                   "orders": [a["am_order_number"] for a in due]}}, upsert=True)
                 sent.append(key)
-    if (hour in PICKUP_ALERT_HOURS_LAST or force) and last:
+    if alerts and (hour in PICKUP_ALERT_HOURS_LAST or force) and last:
         key = f"last|{day}|{hour}"
         if force or await db.pickup_alerts.find_one({"key": key}) is None:
             text = ("🚨 <b>LAST DAY - Amazon will CANCEL tonight</b>\n"
@@ -12661,6 +12662,7 @@ async def _pickup_watch_tick(force: bool = False) -> dict:
                                          {"_id": 0, "orders": 1}):
         warned.update(r.get("orders") or [])
     still = {a["am_order_number"] for a in due + last}
+    resolved_now = []
     for num in sorted(warned - still):
         if await db.pickup_alerts.find_one({"key": f"ok|{num}"}):
             continue
@@ -12670,6 +12672,12 @@ async def _pickup_watch_tick(force: bool = False) -> dict:
         word = "❌ Cancelled by Amazon" if a.get("status") == "cancelled" else f"✅ Updated on Amazon: {a.get('easy_ship_status') or a.get('status')}"
         if await _telegram_send(f"{word} - <b>{num}</b>"):
             await db.pickup_alerts.update_one({"key": f"ok|{num}"}, {"$set": {"key": f"ok|{num}", "at": now.isoformat()}}, upsert=True)
+            resolved_now.append(num)
+    # everything we warned about is now settled: one calm "all clear"
+    if warned and not (warned & still) and resolved_now:
+        if await db.pickup_alerts.find_one({"key": f"allclear|{day}"}) is None:
+            if await _telegram_send("🎉 <b>All clear</b> - every parcel we warned about is now updated on Amazon. Nothing pending."):
+                await db.pickup_alerts.update_one({"key": f"allclear|{day}"}, {"$set": {"key": f"allclear|{day}", "at": now.isoformat()}}, upsert=True)
     return {"due_today": [a["am_order_number"] for a in due], "last_day": [a["am_order_number"] for a in last], "sent": sent}
 
 
@@ -12684,6 +12692,8 @@ async def _pickup_watch_loop():
                 except Exception as e:
                     logging.warning(f"pickup watch: sync failed, using last known status: {e}")
                 await _pickup_watch_tick()
+            elif 9 <= now.hour <= 23 and now.minute % 15 < 4:
+                await _pickup_watch_tick(alerts=False)      # good news as soon as the regular sync sees it
         except Exception as e:
             logging.error(f"pickup watch error: {e}")
         await asyncio.sleep(240)
