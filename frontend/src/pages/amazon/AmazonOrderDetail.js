@@ -155,6 +155,37 @@ export default function AmazonOrderDetail() {
         </div>
       </div>
 
+      {/* Timeline: when the order came, was packed and was picked up */}
+      {(() => {
+        const fmt = (v) => v ? new Date(v).toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }) : null;
+        const d = order.dispatch || {};
+        const pickedAt = d.dispatched_at || order.shiprocket_shipment?.picked_up_at || order.shipmozo_shipment?.picked_up_at;
+        const easyGone = ["PickedUp", "AtOriginFC", "AtDestinationFC", "OutForDelivery", "Delivered"].includes(order.easy_ship_status);
+        const rows = [
+          ["Order received", fmt(order.purchase_date || order.created_at), null],
+          ["Ship-by", fmt(order.latest_ship_date), null],
+          ["Packed", fmt(order.packaging?.packed_at), order.status === "new" || order.status === "packaging" ? "not packed yet" : null],
+          ["Picked up", order.status === "dispatched" && pickedAt ? fmt(pickedAt) : null,
+            order.status === "cancelled" ? "cancelled" :
+            order.ship_type === "easy_ship" && !easyGone ? `not picked up on Amazon yet${order.easy_ship_status ? ` (${order.easy_ship_status})` : ""}` : "not picked up yet"],
+        ];
+        return (
+          <Card data-testid="am-timeline">
+            <CardHeader className="pb-3"><CardTitle className="text-base">Timeline</CardTitle></CardHeader>
+            <CardContent className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {rows.map(([label, val, waiting]) => (
+                <div key={label}>
+                  <div className="text-xs text-muted-foreground">{label}</div>
+                  {val ? <div className="text-sm font-medium" data-testid={`am-timeline-${label.split(" ")[0].toLowerCase()}`}>{val}</div>
+                       : <div className={`text-sm ${label === "Picked up" && waiting !== "cancelled" ? "text-amber-600 font-medium" : "text-muted-foreground"}`}>{waiting || "—"}</div>}
+                  {label === "Picked up" && val && d.dispatched_by && <div className="text-[11px] text-muted-foreground">{d.dispatched_by}</div>}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* Customer Info */}
       <Card>
         <CardHeader className="pb-3"><CardTitle className="text-base">Customer Information</CardTitle></CardHeader>
