@@ -9871,31 +9871,44 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
         "warehouse_id": warehouse_id, "gst_ewaybill_number": "", "gstin_number": "",
     }
     ok, data, msg = await _sm_call("POST", "/push-order", json=push)
+    for _ in range(3):              # an earlier attempt already used this reference: take the next one
+        if ok or not re.search(r"exist|duplicate|already", msg or "", re.I):
+            break
+        rebooks += 1
+        ref = push["order_id"] = (order.get("order_number") or order["id"][:20]) + f"-R{rebooks}"
+        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})
+        ok, data, msg = await _sm_call("POST", "/push-order", json=push)
     if not ok:
         await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})
         raise HTTPException(status_code=400, detail=f"Shipmozo refused the order: {msg}")
+    # Shipmozo files the pushed order under its own id (e.g. "12634WP61391513073"); ours is only
+    # the reference_id. Every later call (rates, assign, pickup, detail, cancel) needs theirs.
+    sm_oid = str(_sm_find(data, "order_id") or ref)
 
     # rates for this pushed order, then the chosen (or cheapest) courier
-    couriers = await _sm_rates(str(sa.get("pincode") or ""), weight, cod, value, box, order_ref=ref)
+    try:
+        couriers = await _sm_rates(str(sa.get("pincode") or ""), weight, cod, value, box, order_ref=sm_oid)
+    except HTTPException:
+        couriers = await _sm_rates(str(sa.get("pincode") or ""), weight, cod, value, box)
     if not couriers:
         await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})
         raise HTTPException(status_code=400, detail="No Shipmozo courier serves this address")
     want = req.courier_id or ((order.get("shipmozo_courier") or {}).get("courier_id") if courier_name_is_sm(order) else None)
     chosen = next((c for c in couriers if want and int(c["courier_id"]) == int(want)), None) or couriers[0]
-    ok, data, msg = await _sm_call("POST", "/assign-courier", json={"order_id": ref, "courier_id": chosen["courier_id"]})
+    ok, data, msg = await _sm_call("POST", "/assign-courier", json={"order_id": sm_oid, "courier_id": chosen["courier_id"]})
     if not ok:
         await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})
         raise HTTPException(status_code=400, detail=f"Shipmozo could not assign {chosen['name']}: {msg}")
     courier_label = (data or {}).get("courier") or chosen["name"]
     awb, lr, pickup_note = _sm_find(data, "awb_number", "awb"), "", ""
     if not chosen.get("auto_pickup"):
-        ok, pd, msg = await _sm_call("POST", "/schedule-pickup", json={"order_id": ref})
+        ok, pd, msg = await _sm_call("POST", "/schedule-pickup", json={"order_id": sm_oid})
         awb = awb or _sm_find(pd, "awb_number", "awb")
         lr = _sm_find(pd, "lr_number") or ""
         pickup_note = "Pickup scheduled" if ok else f"Pickup not scheduled: {msg}"
     if not awb:
         for _ in range(4):           # the AWB can take a moment to appear
-            ok, od, msg = await _sm_call("GET", f"/get-order-detail/{ref}")
+            ok, od, msg = await _sm_call("GET", f"/get-order-detail/{sm_oid}")
             awb = _sm_find(od, "awb_number", "awb")
             if awb:
                 break
@@ -9915,7 +9928,7 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
     except Exception as e:
         logging.warning(f"shipmozo label {awb}: {e}")
     shipment = {
-        "reference": ref, "awb": awb, "tracking_id": awb, "lr_number": lr, "warehouse_id": warehouse_id,
+        "reference": ref, "sm_order_id": sm_oid, "awb": awb, "tracking_id": awb, "lr_number": lr, "warehouse_id": warehouse_id,
         "courier_id": chosen["courier_id"], "courier_name": courier_label, "rate": chosen["rate"],
         "etd": chosen.get("etd") or "", "auto_pickup": chosen.get("auto_pickup"), "pickup_note": pickup_note,
         "is_cod": cod > 0, "cod_amount": cod, "declared_value": round(value, 2),
@@ -9953,7 +9966,7 @@ async def _sm_cancel_one(order_id: str, user) -> dict:
         raise HTTPException(status_code=400, detail="No Shipmozo booking on this order")
     if (order.get("status") or "") == "dispatched":
         raise HTTPException(status_code=400, detail="Order is already dispatched - undo the dispatch before cancelling the label")
-    ok, data, msg = await _sm_call("POST", "/cancel-order", json={"order_id": shp["reference"], "awb_number": shp.get("awb") or ""})
+    ok, data, msg = await _sm_call("POST", "/cancel-order", json={"order_id": shp.get("sm_order_id") or shp["reference"], "awb_number": shp.get("awb") or ""})
     if not ok:
         raise HTTPException(status_code=400, detail=f"Shipmozo cancel failed: {msg}")
     now = datetime.now(timezone.utc).isoformat()
