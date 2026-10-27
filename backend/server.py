@@ -665,6 +665,8 @@ class OrderCreate(BaseModel):
     # Carrier the telecaller picked from Shiprocket's live quote while making the
     # order: {courier_id, name, rate, weight_kg, cod, quoted_at}. Booking preselects it.
     shiprocket_courier: Optional[dict] = None
+    # Same for Shipmozo: the carrier picked from its live quote while making the order.
+    shipmozo_courier: Optional[dict] = None
     # Set by the CRM for website orders: the Shopify order this one mirrors.
     shopify_order_id: str = ""
     shopify_order_name: str = ""
@@ -1373,6 +1375,7 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "courier_name": courier_name,
         "transporter_name": transporter_name,
         "shiprocket_courier": req.shiprocket_courier if courier_name == "Shiprocket" else None,
+        "shipmozo_courier": req.shipmozo_courier if courier_name == "Shipmozo" else None,
         "shipping_charge": req.shipping_charge,
         "shipping_gst": shipping_gst,
         "additional_charges": additional_charges,
@@ -6861,6 +6864,8 @@ async def update_amazon_courier(order_id: str, data: dict, user=Depends(get_curr
     # The Shiprocket carrier picked with live fares; booking preselects it.
     sr = data.get("shiprocket_courier")
     upd["shiprocket_courier"] = sr if (courier_name or "").lower().startswith("shiprocket") and isinstance(sr, dict) else None
+    sm = data.get("shipmozo_courier")
+    upd["shipmozo_courier"] = sm if (courier_name or "").lower().startswith("shipmozo") and isinstance(sm, dict) else None
     await db.amazon_orders.update_one({"id": order_id}, {"$set": upd})
     return {"status": "updated", "courier_name": courier_name}
 
@@ -9756,7 +9761,8 @@ async def shipmozo_bookable(user=Depends(get_current_user)):
         "courier_name": SM_COURIER_RE, "status": {"$nin": ["cancelled", "dispatched"]},
         "$or": [{"packaging.weight_kg": {"$nin": ["", None]}}, {"shipmozo_shipment.awb": {"$nin": ["", None]}}],
     }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "shipping_address": 1,
-        "packaging": 1, "shipmozo_shipment": 1, "status": 1, "is_cod": 1, "amount_paid": 1, "cod_amount": 1}).sort("created_at", -1).to_list(300)
+        "packaging": 1, "shipmozo_shipment": 1, "status": 1, "is_cod": 1, "amount_paid": 1, "cod_amount": 1,
+        "shipmozo_courier": 1}).sort("created_at", -1).to_list(300)
     out = []
     for o in orders:
         pkg = o.get("packaging") or {}
@@ -9771,6 +9777,7 @@ async def shipmozo_bookable(user=Depends(get_current_user)):
                     "weight_kg": weight, "weight_source": source, "num_boxes": pkg.get("num_boxes") or "1",
                     "shipping_address": o.get("shipping_address") or {},
                     "is_cod": bool(o.get("is_cod")), "cod_amount": _amazon_cod_amount(o),
+                    "shipmozo_courier": o.get("shipmozo_courier") or None,
                     "shipmozo_shipment": ({k: v for k, v in sh.items() if k != "raw"} if sh else None)})
     return out
 
@@ -9800,7 +9807,10 @@ async def shipmozo_quote(req: ShipmozoBookRequest, user=Depends(get_current_user
     couriers = await _sm_rates(str(sa.get("pincode") or ""), weight, cod, cod if cod > 0 else _declared_value(order), _amazon_box(order))
     if not couriers:
         return {"ok": False, "message": "No Shipmozo courier serves this address" + (" for COD" if cod > 0 else "")}
-    return {"ok": True, "couriers": couriers, "is_cod": cod > 0, "cod_amount": cod, "weight_kg": weight, "weight_source": weight_source}
+    pref = (order.get("shipmozo_courier") or {}) if courier_name_is_sm(order) else {}
+    return {"ok": True, "couriers": couriers, "is_cod": cod > 0, "cod_amount": cod, "weight_kg": weight, "weight_source": weight_source,
+            "preferred_courier_id": pref.get("courier_id"), "preferred_name": pref.get("name"),
+            "preferred_rate": pref.get("rate"), "preferred_weight_kg": pref.get("weight_kg")}
 
 
 @api_router.post("/shipmozo/book")
@@ -9870,7 +9880,8 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
     if not couriers:
         await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})
         raise HTTPException(status_code=400, detail="No Shipmozo courier serves this address")
-    chosen = next((c for c in couriers if req.courier_id and int(c["courier_id"]) == int(req.courier_id)), None) or couriers[0]
+    want = req.courier_id or ((order.get("shipmozo_courier") or {}).get("courier_id") if courier_name_is_sm(order) else None)
+    chosen = next((c for c in couriers if want and int(c["courier_id"]) == int(want)), None) or couriers[0]
     ok, data, msg = await _sm_call("POST", "/assign-courier", json={"order_id": ref, "courier_id": chosen["courier_id"]})
     if not ok:
         await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})

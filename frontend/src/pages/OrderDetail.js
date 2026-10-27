@@ -707,6 +707,12 @@ export default function OrderDetail() {
                 <span className="text-sm" data-testid="order-shiprocket-carrier">{order.shiprocket_courier.name} · ₹{Number(order.shiprocket_courier.rate).toFixed(0)} at {order.shiprocket_courier.weight_kg} kg</span>
               </div>
             )}
+            {activeShippingMethod === "courier" && order.shipmozo_courier?.name && !order.shipmozo_shipment?.awb && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Shipmozo carrier (chosen)</span>
+                <span className="text-sm" data-testid="order-shipmozo-carrier">{order.shipmozo_courier.name} · ₹{Number(order.shipmozo_courier.rate).toFixed(0)} at {order.shipmozo_courier.weight_kg} kg</span>
+              </div>
+            )}
             {order.shiprocket_shipment?.awb && (
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Shiprocket carrier (booked)</span>

@@ -115,8 +115,10 @@ export default function AmazonOrderDetail() {
   const saveCourier = async () => {
     if (!courierValue) return toast.error("Select a courier");
     try {
-      if (courierValue === "Shiprocket" && !srPick) return toast.error("Pick a Shiprocket carrier first");
-      await api.put(`/amazon/orders/${id}/courier`, { courier_name: courierValue, shiprocket_courier: courierValue === "Shiprocket" ? srPick : null });
+      if (["Shiprocket", "Shipmozo"].includes(courierValue) && !srPick) return toast.error(`Pick a ${courierValue} carrier first`);
+      await api.put(`/amazon/orders/${id}/courier`, { courier_name: courierValue,
+                                                     shiprocket_courier: courierValue === "Shiprocket" ? srPick : null,
+                                                     shipmozo_courier: courierValue === "Shipmozo" ? srPick : null });
       toast.success("Courier updated");
       setEditingCourier(false);
       loadOrder();
@@ -235,9 +237,10 @@ export default function AmazonOrderDetail() {
                 <div className="flex items-center gap-1">
                   <span className="text-sm">{order.courier_name || <span className="italic text-muted-foreground">Not set</span>}
                     {order.courier_name === "Shiprocket" && order.shiprocket_courier?.name && <span className="text-muted-foreground"> · {order.shiprocket_courier.name} ₹{Number(order.shiprocket_courier.rate).toFixed(0)}</span>}
+                    {order.courier_name === "Shipmozo" && order.shipmozo_courier?.name && <span className="text-muted-foreground"> · {order.shipmozo_courier.name} ₹{Number(order.shipmozo_courier.rate).toFixed(0)}</span>}
                   </span>
                   {canEditCourier && (
-                    <button onClick={() => { setCourierValue(order.courier_name || ""); setSrPick(order.shiprocket_courier || null); setEditingCourier(true); }} className="p-1 hover:bg-accent rounded" data-testid="edit-courier-btn">
+                    <button onClick={() => { setCourierValue(order.courier_name || ""); setSrPick((order.courier_name === "Shipmozo" ? order.shipmozo_courier : order.shiprocket_courier) || null); setEditingCourier(true); }} className="p-1 hover:bg-accent rounded" data-testid="edit-courier-btn">
                       <Edit2 className="w-3 h-3 text-muted-foreground" />
                     </button>
                   )}
@@ -245,8 +248,8 @@ export default function AmazonOrderDetail() {
               )}
             </div>
           )}
-          {order.ship_type === "self_ship" && editingCourier && courierValue === "Shiprocket" && (
-            <ShiprocketCarrierPick pincode={(String(order.address || "").match(/(\d{6})/) || [])[1]} cod={!!order.is_cod}
+          {order.ship_type === "self_ship" && editingCourier && ["Shiprocket", "Shipmozo"].includes(courierValue) && (
+            <ShiprocketCarrierPick key={courierValue} provider={courierValue} pincode={(String(order.address || "").match(/(\d{6})/) || [])[1]} cod={!!order.is_cod}
                                    value={srPick || (order.packaging?.weight_kg ? { weight_kg: order.packaging.weight_kg } : null)} onChange={setSrPick} />
           )}
           {order.dispatch?.lr_number && (

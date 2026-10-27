@@ -462,6 +462,7 @@ export default function EditOrder() {
       setShippingMethod(o.shipping_method || "");
       setCourierName(o.courier_name || "");
       setShiprocketCourier(o.shiprocket_courier || null);
+      setShipmozoCourier(o.shipmozo_courier || null);
       setTransporterName(o.transporter_name || "");
       setShippingCharge(o.shipping_charge || 0);
       // Carrier risk is a derived row, so it is kept out of the editable list.
@@ -562,6 +563,7 @@ export default function EditOrder() {
   // Set here rather than in an effect so it never fights hydration or a manual
   // override — it only moves when the courier itself changes.
   const [shiprocketCourier, setShiprocketCourier] = useState(null);
+  const [shipmozoCourier, setShipmozoCourier] = useState(null);
   const handleCourierChange = (value) => {
     setCourierName(value);
     if (value !== "Shiprocket") setShiprocketCourier(null);
@@ -673,6 +675,7 @@ export default function EditOrder() {
         shipping_method: shippingMethod,
         courier_name: courierName,
         shiprocket_courier: courierName === "Shiprocket" ? shiprocketCourier : null,
+        shipmozo_courier: courierName === "Shipmozo" ? shipmozoCourier : null,
         transporter_name: transporterName,
         shipping_charge: shippingCharge,
         shipping_gst: shippingGst,
@@ -1064,6 +1067,10 @@ export default function EditOrder() {
                 {shippingMethod === "courier" && courierName === "Shiprocket" && (
                   <ShiprocketCarrierPick pincode={(sameAsBilling ? billingAddress : shippingAddress)?.pincode} cod={isCod}
                                          value={shiprocketCourier} onChange={setShiprocketCourier} />
+                )}
+                {shippingMethod === "courier" && courierName === "Shipmozo" && (
+                  <ShiprocketCarrierPick key="shipmozo" provider="Shipmozo" pincode={(sameAsBilling ? billingAddress : shippingAddress)?.pincode} cod={isCod}
+                                         value={shipmozoCourier} onChange={setShipmozoCourier} />
                 )}
                 {shippingMethod === "transport" && (
                   <div><Label>Transporter</Label><Input value={transporterName} onChange={e => setTransporterName(e.target.value)} /></div>

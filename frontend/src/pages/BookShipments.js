@@ -552,6 +552,7 @@ export default function BookShipments() {
                           )}
                           {["Shiprocket", "Shipmozo", "Delhivery", "Delhivery B2B"].includes(o.courier) && sh.courier_name && <div className="text-[10px] text-muted-foreground mt-0.5">{sh.courier_name}</div>}
                           {o.courier === "Shiprocket" && !o.booked && o.shiprocket_courier?.name && <div className="text-[10px] text-violet-700 dark:text-violet-300 mt-0.5">wants {o.shiprocket_courier.name}</div>}
+                          {o.courier === "Shipmozo" && !o.booked && o.shipmozo_courier?.name && <div className="text-[10px] text-fuchsia-700 dark:text-fuchsia-300 mt-0.5">wants {o.shipmozo_courier.name}</div>}
                         </TableCell>
                         <TableCell className="font-mono text-sm">{o.order_number}</TableCell>
                         <TableCell className="text-sm">

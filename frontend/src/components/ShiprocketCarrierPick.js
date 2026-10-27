@@ -10,7 +10,14 @@ import { Loader2, Clock, PackageCheck, AlertTriangle } from "lucide-react";
 // and lets the telecaller pick one; booking later preselects that carrier.
 // The weight is an estimate typed here - packing's real weight decides the
 // final fare, so the booking screen re-quotes and flags a change.
-export default function ShiprocketCarrierPick({ pincode, cod = false, declared = 0, value, onChange }) {
+// Works for Shipmozo too (provider="Shipmozo"): both are aggregators with the same flow.
+const PROVIDERS = {
+  Shiprocket: { api: "shiprocket", box: "border-violet-300 bg-violet-50/60 dark:bg-violet-950/20 dark:border-violet-800", active: "border-violet-600 bg-white dark:bg-violet-900/40 ring-1 ring-violet-500" },
+  Shipmozo: { api: "shipmozo", box: "border-fuchsia-300 bg-fuchsia-50/60 dark:bg-fuchsia-950/20 dark:border-fuchsia-800", active: "border-fuchsia-600 bg-white dark:bg-fuchsia-900/40 ring-1 ring-fuchsia-500" },
+};
+
+export default function ShiprocketCarrierPick({ pincode, cod = false, declared = 0, value, onChange, provider = "Shiprocket" }) {
+  const P = PROVIDERS[provider] || PROVIDERS.Shiprocket;
   const [weight, setWeight] = useState(value?.weight_kg ? String(value.weight_kg) : "1");
   const [couriers, setCouriers] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -28,7 +35,7 @@ export default function ShiprocketCarrierPick({ pincode, cod = false, declared =
       setLoading(true);
       setMsg("");
       try {
-        const res = await api.get(`/shiprocket/check/${pin}`, { params: { weight: w, cod: !!cod } });
+        const res = await api.get(`/${P.api}/check/${pin}`, { params: { weight: w, cod: !!cod } });
         if (res.data.serviceable) {
           setCouriers(res.data.couriers || []);
           // keep the earlier pick if it is still offered, else fall back to cheapest
@@ -40,24 +47,24 @@ export default function ShiprocketCarrierPick({ pincode, cod = false, declared =
           }
         } else {
           setCouriers([]);
-          setMsg(res.data.message || "No Shiprocket courier serves this pincode");
+          setMsg(res.data.message || `No ${provider} courier serves this pincode`);
           if (value) onChange && onChange(null);
         }
       } catch {
-        setMsg("Could not reach Shiprocket right now");
+        setMsg(`Could not reach ${provider} right now`);
       } finally {
         setLoading(false);
       }
     }, 500);
     return () => clearTimeout(timer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pin, w, cod]);
+  }, [pin, w, cod, provider]);
 
   const pick = (c) => onChange && onChange({ courier_id: c.courier_id, name: c.name, rate: c.rate, etd: c.etd || "",
                                              weight_kg: w, cod: !!cod, quoted_at: new Date().toISOString() });
 
   return (
-    <div className="md:col-span-3 rounded-md border border-violet-300 bg-violet-50/60 dark:bg-violet-950/20 dark:border-violet-800 p-3 space-y-2" data-testid="shiprocket-carrier-pick">
+    <div className={`md:col-span-3 rounded-md border ${P.box} p-3 space-y-2`} data-testid={`${P.api}-carrier-pick`}>
       <div className="flex flex-wrap items-end gap-3">
         <div>
           <Label className="text-xs">Approx. weight (kg)</Label>
@@ -65,7 +72,7 @@ export default function ShiprocketCarrierPick({ pincode, cod = false, declared =
                  className="h-9 w-28 mt-1" data-testid="shiprocket-pick-weight" />
         </div>
         <div className="text-xs text-muted-foreground pb-2">
-          Shiprocket carriers for pincode <b>{pin || "—"}</b>{cod ? " · COD" : ""}. Fares include GST and are re-checked at booking with the packed weight.
+          {provider} carriers for pincode <b>{pin || "—"}</b>{cod ? " · COD" : ""}. Fares include GST and are re-checked at booking with the packed weight.
         </div>
         {loading && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground mb-2" />}
       </div>
@@ -80,7 +87,7 @@ export default function ShiprocketCarrierPick({ pincode, cod = false, declared =
             const active = value?.courier_id === c.courier_id;
             return (
               <button key={c.courier_id} type="button" onClick={() => pick(c)} data-testid={`shiprocket-pick-${i}`}
-                      className={`text-left rounded-md border px-3 py-2 transition ${active ? "border-violet-600 bg-white dark:bg-violet-900/40 ring-1 ring-violet-500" : "border-border bg-background hover:bg-accent/50"}`}>
+                      className={`text-left rounded-md border px-3 py-2 transition ${active ? P.active : "border-border bg-background hover:bg-accent/50"}`}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium truncate">
                     {c.name}
@@ -89,7 +96,8 @@ export default function ShiprocketCarrierPick({ pincode, cod = false, declared =
                   <span className="font-mono font-semibold text-sm shrink-0">₹{Number(c.rate).toFixed(0)}</span>
                 </div>
                 <div className="text-[11px] text-muted-foreground flex flex-wrap gap-x-3 mt-0.5">
-                  {c.etd && <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> by {c.etd}</span>}
+                  {c.etd && <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {provider === "Shipmozo" ? `in ${c.etd}` : `by ${c.etd}`}</span>}
+                  {provider === "Shipmozo" && c.auto_pickup === false && <span>pickup scheduled after booking</span>}
                   {c.cutoff_time && <span className="flex items-center gap-1"><PackageCheck className="w-3 h-3" /> pickup today if before {c.cutoff_time}</span>}
                   {c.rating ? <span>rating {c.rating}</span> : null}
                 </div>
