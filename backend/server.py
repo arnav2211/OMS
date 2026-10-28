@@ -9724,12 +9724,42 @@ def _sm_find(obj, *keys):
 
 
 async def _sm_label_png(awb: str) -> bytes:
+    """The courier's own label as a PDF (the same file the Shipmozo panel downloads, e.g. Amazon
+    Shipping's with sort codes). Without type_of_label=PDF Shipmozo returns its own generic PNG,
+    which is not what the courier expects. The PDF comes as a 1-hour S3 link, so we keep the bytes."""
     import base64
-    ok, data, msg = await _sm_call("GET", f"/get-order-label/{awb}")
-    lab = _sm_find(data, "label")
-    if not ok or not lab:
-        raise HTTPException(status_code=400, detail=f"Shipmozo label not ready: {msg or 'no label'}")
-    return base64.b64decode(str(lab).split(",", 1)[-1])
+    ok, data, msg = await _sm_call("GET", f"/get-order-label/{awb}", params={"type_of_label": "PDF"})
+    lab = str(_sm_find(data, "label") or "")
+    if ok and lab.startswith("http"):
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+            r = await c.get(lab)
+        if r.status_code == 200 and r.content[:4] == b"%PDF":
+            return r.content
+    elif ok and lab:
+        raw = base64.b64decode(lab.split(",", 1)[-1])
+        if raw[:4] == b"%PDF":
+            return raw
+    raise HTTPException(status_code=400, detail=f"Shipmozo label not ready: {msg or 'no label'}")
+
+
+def _sm_slip_jpg(label: bytes) -> Optional[bytes]:
+    """The label as a JPEG for the dispatch slip, trimmed to the label itself (Shipmozo's PDF is an
+    A4 page with the label in one corner)."""
+    from PIL import Image, ImageOps
+    if label[:4] == b"%PDF":
+        jpg = _pdf_first_page_jpg(label)
+        if not jpg:
+            return None
+        im = Image.open(io.BytesIO(jpg)).convert("RGB")
+    else:
+        im = Image.open(io.BytesIO(label)).convert("RGB")
+    box = ImageOps.invert(im.convert("L")).point(lambda v: 255 if v > 40 else 0).getbbox()
+    if box:
+        pad = 20
+        im = im.crop((max(0, box[0] - pad), max(0, box[1] - pad), min(im.width, box[2] + pad), min(im.height, box[3] + pad)))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=90)
+    return buf.getvalue()
 
 
 @api_router.get("/shipmozo/check/{pincode}")
@@ -9920,10 +9950,10 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
     awb = str(awb)
     label_url = ""
     try:
-        png = await _sm_label_png(awb)
-        fname = f"{uuid.uuid4()}.png"
+        pdf = await _sm_label_png(awb)
+        fname = f"{uuid.uuid4()}.pdf"
         async with aiofiles.open(UPLOAD_DIR / fname, "wb") as f:
-            await f.write(png)
+            await f.write(pdf)
         label_url = f"/api/uploads/{fname}"
     except Exception as e:
         logging.warning(f"shipmozo label {awb}: {e}")
@@ -9995,7 +10025,7 @@ async def shipmozo_bulk_cancel(req: BulkBookRequest, user=Depends(get_current_us
 async def _sm_label_bytes(shp: dict) -> bytes:
     """The saved label image, or a fresh one from Shipmozo."""
     url = shp.get("label_url") or ""
-    if url.startswith("/api/uploads/"):
+    if url.startswith("/api/uploads/") and url.endswith(".pdf"):     # older bookings saved Shipmozo's generic PNG
         try:
             async with aiofiles.open(UPLOAD_DIR / url.rsplit("/", 1)[-1], "rb") as f:
                 return await f.read()
@@ -10012,15 +10042,12 @@ async def _shipmozo_mark_dispatched(order: dict, when: str, by: str, docket: str
     slips = list(dispatch.get("dispatch_slip_images") or [])
     if not slips and shp.get("awb"):
         try:
-            png = await _sm_label_bytes(shp)
-            from PIL import Image
-            im = Image.open(io.BytesIO(png)).convert("RGB")
-            buf = io.BytesIO()
-            im.save(buf, "JPEG", quality=88)
-            fname = f"{uuid.uuid4()}.jpg"
-            async with aiofiles.open(UPLOAD_DIR / fname, "wb") as f:
-                await f.write(buf.getvalue())
-            slips.append(f"/api/uploads/{fname}")
+            jpg = _sm_slip_jpg(await _sm_label_bytes(shp))
+            if jpg:
+                fname = f"{uuid.uuid4()}.jpg"
+                async with aiofiles.open(UPLOAD_DIR / fname, "wb") as f:
+                    await f.write(jpg)
+                slips.append(f"/api/uploads/{fname}")
         except Exception as e:
             logging.warning(f"shipmozo slip image failed: {e}")
     dispatch.update({"courier_name": "Shipmozo", "courier_partner": shp.get("courier_name") or "",
@@ -11640,7 +11667,10 @@ async def shipments_labels(ids: str, token: str = "", user=None):
                 missing.append(num)
         elif (o.get("shipmozo_shipment") or {}).get("awb"):
             try:
-                quarter.append(await _sm_label_bytes(o["shipmozo_shipment"]))
+                # print the courier's PDF page exactly as Shipmozo's panel does
+                raw = await _sm_label_bytes(o["shipmozo_shipment"])
+                pages = _pdf_pages_jpg(raw) if raw[:4] == b"%PDF" else [raw]
+                full_pages.extend(pages) if pages else missing.append(num)
             except Exception as e:
                 logging.warning(f"shipmozo label: {e}")
                 missing.append(num)
