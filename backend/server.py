@@ -9900,8 +9900,22 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
         "length": str(box["length"]), "width": str(box["width"]), "height": str(box["height"]),
         "warehouse_id": warehouse_id, "gst_ewaybill_number": "", "gstin_number": "",
     }
-    ok, data, msg = await _sm_call("POST", "/push-order", json=push)
-    for _ in range(3):              # an earlier attempt already used this reference: take the next one
+    # A booking that failed after the push left that order sitting in Shipmozo; finish that one
+    # instead of pushing a second copy (CS-1994, 29 Oct 2026: two orders in the panel).
+    prev = order.get("shipmozo_pushed") or {}
+    if prev.get("sm_order_id"):
+        pok, pd, _m = await _sm_call("GET", f"/get-order-detail/{prev['sm_order_id']}")
+        pst = str(_sm_find(pd, "order_status") or "").upper()
+        if pok and "CANCEL" not in pst:
+            if _sm_find(pd, "awb_number"):
+                raise HTTPException(status_code=400, detail=f"Shipmozo already has a courier on {prev.get('reference')} "
+                                                            f"(Shipmozo order {prev['sm_order_id']}). Check the Shipmozo panel.")
+            ref, sm_oid = prev["reference"], prev["sm_order_id"]
+            ok, data, msg = True, {"order_id": sm_oid}, ""
+            push = None
+    if push is not None:
+        ok, data, msg = await _sm_call("POST", "/push-order", json=push)
+    for _ in range(3 if push is not None else 0):              # an earlier attempt already used this reference: take the next one
         if ok or not re.search(r"exist|duplicate|already", msg or "", re.I):
             break
         rebooks += 1
@@ -9914,6 +9928,8 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
     # Shipmozo files the pushed order under its own id (e.g. "12634WP61391513073"); ours is only
     # the reference_id. Every later call (rates, assign, pickup, detail, cancel) needs theirs.
     sm_oid = str(_sm_find(data, "order_id") or ref)
+    await ship_orders.update_one({"id": req.order_id}, {"$set": {"shipmozo_pushed": {
+        "reference": ref, "sm_order_id": sm_oid, "at": datetime.now(timezone.utc).isoformat()}}})
 
     # rates for this pushed order, then the chosen (or cheapest) courier
     try:
@@ -9921,13 +9937,12 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
     except HTTPException:
         couriers = await _sm_rates(str(sa.get("pincode") or ""), weight, cod, value, box)
     if not couriers:
-        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})
         raise HTTPException(status_code=400, detail="No Shipmozo courier serves this address")
     want = req.courier_id or ((order.get("shipmozo_courier") or {}).get("courier_id") if courier_name_is_sm(order) else None)
     chosen = next((c for c in couriers if want and int(c["courier_id"]) == int(want)), None) or couriers[0]
     ok, data, msg = await _sm_call("POST", "/assign-courier", json={"order_id": sm_oid, "courier_id": chosen["courier_id"]})
     if not ok:
-        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})
+        logging.warning(f"shipmozo assign {ref} ({sm_oid}): {msg}")
         raise HTTPException(status_code=400, detail=f"Shipmozo could not assign {chosen['name']}: {msg}")
     courier_label = (data or {}).get("courier") or chosen["name"]
     awb, lr, pickup_note = _sm_find(data, "awb_number", "awb"), "", ""
@@ -9944,7 +9959,6 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
                 break
             await asyncio.sleep(3)
     if not awb:
-        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"shipmozo_failed_attempts": 1}})
         raise HTTPException(status_code=400, detail=f"Shipmozo assigned {courier_label} but returned no AWB yet. "
                                                     f"Check order {ref} in the Shipmozo panel before booking again.")
     awb = str(awb)
@@ -9966,7 +9980,8 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
         "booked_by": user["name"], "booked_at": datetime.now(timezone.utc).isoformat(),
     }
     await ship_orders.update_one({"id": req.order_id}, {"$set": {
-        "shipmozo_shipment": shipment, "courier_name": "Shipmozo", "updated_at": datetime.now(timezone.utc).isoformat()}})
+        "shipmozo_shipment": shipment, "courier_name": "Shipmozo", "updated_at": datetime.now(timezone.utc).isoformat()},
+        "$unset": {"shipmozo_pushed": ""}})
     return {"ok": True, "shipment": shipment}
 
 
@@ -10077,7 +10092,7 @@ async def shipmozo_dispatch(req: ShipmozoDispatchRequest, user=Depends(get_curre
 
 
 # Shipmozo's current_status is free text; "Pickup Pending" / "Not Picked" mean still with us.
-SM_GONE_WORDS = ("picked up", "pickup done", "picked", "in transit", "intransit", "shipped", "out for delivery",
+SM_GONE_WORDS = ("picked up", "pickup done", "pickup completed", "pickup complete", "picked", "in transit", "intransit", "shipped", "out for delivery",
                  "delivered", "reached", "dispatched")
 SM_WAITING_WORDS = ("pending", "not picked", "cancel", "manifest", "booked", "ready", "scheduled", "failed pickup", "pickup failed")
 
