@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import api from "@/lib/api";
-import { mobilePrintPdf } from "@/lib/mobilePrint";
+import { printPdfBlob } from "@/lib/printPdf";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -180,21 +180,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
     setPrintLoading(true);
     try {
       const res = await api.post("/orders/print-addresses", { order_ids: [...selectedOrders], quantities: printQuantities }, { responseType: "blob" });
-      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-      if (isMobile) {
-        mobilePrintPdf(new Blob([res.data], { type: "application/pdf" }), "addresses.pdf");
-      } else {
-        const blobUrl = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
-        const iframe = document.createElement("iframe");
-        iframe.style.position = "fixed";
-        iframe.style.top = "-10000px";
-        iframe.style.left = "-10000px";
-        iframe.style.width = "0";
-        iframe.style.height = "0";
-        iframe.src = blobUrl;
-        document.body.appendChild(iframe);
-        iframe.onload = () => { setTimeout(() => { iframe.contentWindow.print(); }, 500); };
-      }
+      printPdfBlob(new Blob([res.data], { type: "application/pdf" }), "addresses.pdf");
       setShowPrintDialog(false);
     } catch { toast.error("Failed to generate address PDF"); }
     finally { setPrintLoading(false); }
@@ -204,21 +190,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
     setPrintLoading(true);
     try {
       const res = await api.post("/orders/print-packing-sheets", { order_ids: [...selectedOrders] }, { responseType: "blob" });
-      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-      if (isMobile) {
-        mobilePrintPdf(new Blob([res.data], { type: "application/pdf" }), "bulk_packing_sheets.pdf");
-      } else {
-        const blobUrl = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
-        const iframe = document.createElement("iframe");
-        iframe.style.position = "fixed";
-        iframe.style.top = "-10000px";
-        iframe.style.left = "-10000px";
-        iframe.style.width = "0";
-        iframe.style.height = "0";
-        iframe.src = blobUrl;
-        document.body.appendChild(iframe);
-        iframe.onload = () => { setTimeout(() => { iframe.contentWindow.print(); }, 500); };
-      }
+      printPdfBlob(new Blob([res.data], { type: "application/pdf" }), "bulk_packing_sheets.pdf");
     } catch { toast.error("Failed to generate packing sheets PDF"); }
     finally { setPrintLoading(false); }
   };

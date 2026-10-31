@@ -4,7 +4,7 @@ import api from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import OrderWorkStrip from "@/components/OrderWorkStrip";
 import { compressImage } from "@/lib/compressImage";
-import { mobilePrintPdf } from "@/lib/mobilePrint";
+import { printPdfBlob } from "@/lib/printPdf";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -242,22 +242,8 @@ export default function PackagingDashboard() {
   const handlePrint = (orderId) => {
     const token = localStorage.getItem("token");
     const url = `${backendUrl}/api/orders/${orderId}/print?token=${token}`;
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     fetch(url).then(res => res.blob()).then(blob => {
-      if (isMobile) {
-        mobilePrintPdf(blob, `packing-sheet-${orderId}.pdf`);
-      } else {
-        const blobUrl = URL.createObjectURL(blob);
-        const iframe = document.createElement("iframe");
-        iframe.style.position = "fixed";
-        iframe.style.top = "-10000px";
-        iframe.style.left = "-10000px";
-        iframe.style.width = "0";
-        iframe.style.height = "0";
-        iframe.src = blobUrl;
-        document.body.appendChild(iframe);
-        iframe.onload = () => { setTimeout(() => { iframe.contentWindow.print(); }, 500); };
-      }
+      printPdfBlob(blob, `packing-sheet-${orderId}.pdf`);
     }).catch(() => { window.open(url, "_blank"); });
   };
 

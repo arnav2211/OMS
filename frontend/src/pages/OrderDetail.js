@@ -19,7 +19,7 @@ import { toast } from "sonner";
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { mobilePrintPdf } from "@/lib/mobilePrint";
+import { printPdfBlob } from "@/lib/printPdf";
 import { SlipScanner } from "@/components/SlipScanner";
 import { validateLrNumber, getTrackingUrl, extractPorterLink, isLrMandatory, COURIER_LR_PATTERNS, isOtherCourier, supportsLiveTracking } from "@/lib/courierTracking";
 import CourierSelect from "@/components/CourierSelect";
@@ -279,22 +279,8 @@ export default function OrderDetail() {
   const handlePrint = () => {
     const token = localStorage.getItem("token");
     const url = `${process.env.REACT_APP_BACKEND_URL}/api/orders/${id}/print?token=${token}`;
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     fetch(url).then(res => res.blob()).then(blob => {
-      if (isMobile) {
-        mobilePrintPdf(blob, `${order.order_number || "order"}.pdf`);
-      } else {
-        const blobUrl = URL.createObjectURL(blob);
-        const iframe = document.createElement("iframe");
-        iframe.style.position = "fixed";
-        iframe.style.top = "-10000px";
-        iframe.style.left = "-10000px";
-        iframe.style.width = "0";
-        iframe.style.height = "0";
-        iframe.src = blobUrl;
-        document.body.appendChild(iframe);
-        iframe.onload = () => { setTimeout(() => { iframe.contentWindow.print(); }, 500); };
-      }
+      printPdfBlob(blob, `${order.order_number || "order"}.pdf`);
     }).catch(() => { window.open(url, "_blank"); });
   };
 
