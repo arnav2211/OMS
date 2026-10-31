@@ -11682,10 +11682,9 @@ async def shipments_labels(ids: str, token: str = "", user=None):
                 missing.append(num)
         elif (o.get("shipmozo_shipment") or {}).get("awb"):
             try:
-                # print the courier's PDF page exactly as Shipmozo's panel does
-                raw = await _sm_label_bytes(o["shipmozo_shipment"])
-                pages = _pdf_pages_jpg(raw) if raw[:4] == b"%PDF" else [raw]
-                full_pages.extend(pages) if pages else missing.append(num)
+                # the courier's label sits in one corner of an A4 page: trim it and share pages, four up
+                jpg = _sm_slip_jpg(await _sm_label_bytes(o["shipmozo_shipment"]))
+                quarter.append(jpg) if jpg else missing.append(num)
             except Exception as e:
                 logging.warning(f"shipmozo label: {e}")
                 missing.append(num)
