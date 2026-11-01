@@ -134,7 +134,7 @@ export default function PIBuilder() {
   const [pincodeLoading, setPincodeLoading] = useState(false);
   const [stateSearch, setStateSearch] = useState("");
   const [showNewCustomer, setShowNewCustomer] = useState(false);
-  const [newCust, setNewCust] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "" });
+  const [newCust, setNewCust] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
   const [sharing, setSharing] = useState({});
   const [showEditCustomer, setShowEditCustomer] = useState(false);
   const [editCustData, setEditCustData] = useState({ name: "", gst_no: "", phone_numbers: [""], email: "", alias: "" });
@@ -938,6 +938,7 @@ export default function PIBuilder() {
               </div>
             ))}
             <div><Label>Email (optional)</Label><Input type="email" value={newCust.email} onChange={e => setNewCust({ ...newCust, email: e.target.value })} /></div>
+            <div><Label>Alias (optional)</Label><Input value={newCust.alias} onChange={e => setNewCust({ ...newCust, alias: e.target.value })} placeholder="Short name / nickname" data-testid="pi-new-cust-alias" /></div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowNewCustomer(false)}>Cancel</Button>
