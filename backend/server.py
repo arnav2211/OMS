@@ -2931,6 +2931,19 @@ async def update_slip_received(order_id: str, body: dict, user=Depends(get_curre
     }})
     return await db.orders.find_one({"id": order_id}, {"_id": 0})
 
+def _courier_with_partner(order: dict) -> str:
+    """Courier for the packing slip, with the carrier that actually picks it up for the aggregators
+    (e.g. "Shiprocket - Delhivery Surface"): the booked one, else the one chosen on the order."""
+    import html as _html
+    name = order.get("courier_name") or ""
+    key = {"Shiprocket": "shiprocket", "Shipmozo": "shipmozo", "Delhivery": "delhivery"}.get(name)
+    if not key:
+        return name
+    partner = ((order.get(f"{key}_shipment") or {}).get("courier_name")
+               or (order.get(f"{key}_courier") or {}).get("name") or "")
+    return f"{name} - <b>{_html.escape(partner)}</b>" if partner and partner != name else name
+
+
 # Bulk Shipping Address Print
 @api_router.post("/orders/print-addresses")
 async def print_order_addresses(body: dict, user=Depends(get_current_user)):
@@ -3346,7 +3359,7 @@ async def print_bulk_packaging_sheets(body: dict, user=Depends(get_current_user)
             extras.append(("normal", f"<b>Extra Shipping Details:</b> {order['extra_shipping_details']}"))
         if order.get("shipping_method"):
             dispatch_parts = [f"<b>Dispatch:</b> {order['shipping_method'].replace('_',' ').title()}"]
-            if order.get("courier_name"):    dispatch_parts.append(f"Courier: {order['courier_name']}")
+            if order.get("courier_name"):    dispatch_parts.append(f"Courier: {_courier_with_partner(order)}")
             if order.get("transporter_name"): dispatch_parts.append(f"Transporter: {order['transporter_name']}")
             extras.append(("normal", "  |  ".join(dispatch_parts)))
         if order.get("remark"):
@@ -5571,7 +5584,7 @@ async def print_order(order_id: str, size: str = "A4", token: str = ""):
         extras.append(("normal", f"<b>Extra Shipping Details:</b> {order['extra_shipping_details']}"))
     if order.get("shipping_method"):
         dispatch_parts = [f"<b>Dispatch:</b> {order['shipping_method'].replace('_',' ').title()}"]
-        if order.get("courier_name"):    dispatch_parts.append(f"Courier: {order['courier_name']}")
+        if order.get("courier_name"):    dispatch_parts.append(f"Courier: {_courier_with_partner(order)}")
         if order.get("transporter_name"): dispatch_parts.append(f"Transporter: {order['transporter_name']}")
         extras.append(("normal", "  |  ".join(dispatch_parts)))
     if order.get("remark"):
