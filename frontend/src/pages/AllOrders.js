@@ -30,7 +30,7 @@ const CHECK_COLORS = {
   pending_recheck: "bg-red-100 text-red-800",
 };
 const CHECK_LABELS = { received: "Checked", pending: "Pending", pending_recheck: "Re-check" };
-const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Amazon", "Shiprocket", "Shipmozo", "Delhivery", "Delhivery B2B", "Others"];
+const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Amazon", "Shiprocket", "Shipmozo", "Delhivery B2B", "Others"];
 
 export default function AllOrders() {
   const { user } = useAuth();
@@ -176,10 +176,10 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
     else setSelectedOrders(new Set(filteredOrders.map(o => o.id)));
   };
 
-  const handlePrintAddresses = async () => {
+  const handlePrintAddresses = async (pageSize = "A4") => {
     setPrintLoading(true);
     try {
-      const res = await api.post("/orders/print-addresses", { order_ids: [...selectedOrders], quantities: printQuantities }, { responseType: "blob" });
+      const res = await api.post("/orders/print-addresses", { order_ids: [...selectedOrders], quantities: printQuantities, page_size: pageSize }, { responseType: "blob" });
       printPdfBlob(new Blob([res.data], { type: "application/pdf" }), "addresses.pdf");
       setShowPrintDialog(false);
     } catch { toast.error("Failed to generate address PDF"); }
@@ -570,9 +570,13 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowPrintDialog(false)}>Cancel</Button>
-            <Button onClick={handlePrintAddresses} disabled={printLoading} data-testid="confirm-print-btn">
+            <Button variant="outline" onClick={() => handlePrintAddresses("A5")} disabled={printLoading} data-testid="confirm-print-a5-btn">
               <Printer className="w-4 h-4 mr-1" />
-              {printLoading ? "Generating..." : "Print"}
+              {printLoading ? "Generating..." : "Print A5"}
+            </Button>
+            <Button onClick={() => handlePrintAddresses("A4")} disabled={printLoading} data-testid="confirm-print-btn">
+              <Printer className="w-4 h-4 mr-1" />
+              {printLoading ? "Generating..." : "Print A4"}
             </Button>
           </DialogFooter>
         </DialogContent>

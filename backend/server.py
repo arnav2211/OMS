@@ -2940,6 +2940,9 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
 
     order_ids = body.get("order_ids", [])
     quantities = body.get("quantities", {})  # {order_id: count}
+    # A5 landscape is as wide as A4 portrait, so the three columns and the text keep the same size
+    from reportlab.lib.pagesizes import A5, landscape
+    page_size = landscape(A5) if str(body.get("page_size") or "").upper() == "A5" else A4
     if not order_ids:
         raise HTTPException(status_code=400, detail="No orders selected")
 
@@ -2963,7 +2966,7 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
 
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=A4,
+        pagesize=page_size,
         leftMargin=5 * mm,   # reduced from 8mm
         rightMargin=5 * mm,  # reduced from 8mm
         topMargin=8 * mm,
@@ -3031,7 +3034,7 @@ async def print_order_addresses(body: dict, user=Depends(get_current_user)):
         return Paragraph("<br/>".join(lines), addr_style)
 
     # 3 columns per row
-    page_width = A4[0] - (10 * mm)  # because 5mm left + 5mm right
+    page_width = page_size[0] - (10 * mm)  # because 5mm left + 5mm right
     gap = 3 * mm                    # slightly reduced gap between columns
     col_w = (page_width - 2 * gap) / 3
 
