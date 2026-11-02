@@ -301,7 +301,7 @@ async def next_document_number(company: dict, kind: str) -> str:
     return f"{prefix}-{counter['seq']:04d}"
 
 
-COURIER_OPTIONS = ["DTDC", "Anjani", "Amazon", "Shiprocket", "Shipmozo", "Delhivery", "Delhivery B2B", "India Post", "Others"]
+COURIER_OPTIONS = ["DTDC", "Anjani", "Amazon", "Shiprocket", "Shipmozo", "Delhivery B2B", "India Post", "Others"]
 
 # Bank details for PI PDFs
 BANK_GST = {
@@ -11733,11 +11733,11 @@ async def rates_compare(pincode: str, weight: float = 1.0, cod: bool = False, us
     groups = await asyncio.gather(
         _compare_dtdc(pincode, weight), _compare_anjani(pincode, weight, state),
         _compare_amazon(pincode, weight, cod), _compare_shiprocket(pincode, weight, cod),
-        _compare_delhivery(pincode, weight, cod), _compare_delhivery_b2b(pincode, weight, cod),
+        _compare_delhivery_b2b(pincode, weight, cod),
         _compare_shipmozo(pincode, weight, cod),
         return_exceptions=True)
     options = []
-    for name, g in zip(("DTDC", "Anjani", "Amazon Shipping", "Shiprocket", "Delhivery", "Delhivery B2B", "Shipmozo"), groups):
+    for name, g in zip(("DTDC", "Anjani", "Amazon Shipping", "Shiprocket", "Delhivery B2B", "Shipmozo"), groups):
         if isinstance(g, Exception):
             logging.error(f"compare/{name}: {g}")
             options.append({"carrier": name, "service": "", "serviceable": None, "note": "Could not check right now"})

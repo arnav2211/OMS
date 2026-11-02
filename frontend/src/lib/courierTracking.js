@@ -4,7 +4,8 @@
 export const KNOWN_COURIERS = ["DTDC", "Anjani", "India Post", "Amazon", "Shiprocket", "Shipmozo", "Delhivery", "Delhivery B2B"];
 
 // What the courier dropdown shows. "Others" reveals a free-text box.
-export const COURIER_DROPDOWN = [...KNOWN_COURIERS, "Others"];
+// plain Delhivery (Surface) is no longer offered; it stays in KNOWN_COURIERS so old bookings still track
+export const COURIER_DROPDOWN = [...KNOWN_COURIERS.filter((c) => c !== "Delhivery"), "Others"];
 
 /** True when courier_name is a free-form / "Others" courier (not a named one). */
 export function isOtherCourier(courierName) {
