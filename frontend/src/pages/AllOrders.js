@@ -32,6 +32,15 @@ const CHECK_COLORS = {
 const CHECK_LABELS = { received: "Checked", pending: "Pending", pending_recheck: "Re-check" };
 const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Amazon", "Shiprocket", "Shipmozo", "Delhivery B2B", "Others"];
 
+// For the aggregators, the company whose pickup agent comes (booked one, else the one chosen), tagged SR / SM
+const AGGREGATOR_TAG = { Shiprocket: ["SR", "shiprocket"], Shipmozo: ["SM", "shipmozo"] };
+function courierLabel(o) {
+  const agg = AGGREGATOR_TAG[o.courier_name];
+  if (!agg) return o.courier_name || "Courier";
+  const partner = o[`${agg[1]}_shipment`]?.courier_name || o[`${agg[1]}_courier`]?.name || o.dispatch?.courier_partner;
+  return partner ? `${partner} (${agg[0]})` : o.courier_name;
+}
+
 export default function AllOrders() {
   const { user } = useAuth();
   const [sp, setSp] = useSearchParams();
@@ -454,7 +463,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
                         <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{new Date(o.created_at).toLocaleDateString("en-IN")}</TableCell>
                         <TableCell className="text-sm whitespace-nowrap" data-testid={`shipping-method-${o.id}`}>
                           <div className="flex items-center gap-1.5">
-                            <span>{o.shipping_method === "courier" ? (o.courier_name || "Courier") : o.shipping_method === "transport" ? (o.transporter_name || "Transport") : o.shipping_method || "-"}</span>
+                            <span>{o.shipping_method === "courier" ? courierLabel(o) : o.shipping_method === "transport" ? (o.transporter_name || "Transport") : o.shipping_method || "-"}</span>
                             {o.packaging?.ready_to_book && o.status !== "dispatched" && (
                               <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0" title={`Weighed: ${o.packaging?.weight_kg || "?"} KG · ${o.packaging?.num_boxes || 1} box(es)`}>
                                 Ready to Book
