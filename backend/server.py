@@ -9824,7 +9824,7 @@ async def _sm_warehouse_id() -> str:
 
 async def _sm_rates(pincode: str, weight_kg: float, cod_amount: float, value: float, box: Optional[dict] = None,
                     order_ref: str = "") -> list:
-    box = box or {"length": 15, "width": 15, "height": 15}
+    box = box or _amazon_box({"packaging": {"weight_kg": weight_kg}})   # never a made-up big box
     body = {"order_id": order_ref, "pickup_pincode": SHIPMOZO["pickup_pincode"], "delivery_pincode": str(pincode),
             "payment_type": "COD" if cod_amount > 0 else "PREPAID", "shipment_type": "FORWARD",
             "order_amount": str(round(max(1.0, value), 2)), "type_of_package": "SPS", "rov_type": "ROV_OWNER",
@@ -11717,7 +11717,7 @@ async def delhivery_b2b_check(pincode: str, weight: float = 20.0, cod: bool = Fa
         if not pin:
             return {"serviceable": False, "configured": True, "message": "Delhivery B2B does not serve this pincode."}
         w = max(1.0, float(weight or 20))
-        dims = [{"length_cm": 40, "width_cm": 40, "height_cm": 40, "box_count": 1}]
+        dims, _g, _b = _dlvb_boxes({"packaging": {"weight_kg": w}})
         est = await _dlvb_estimate(pincode, dims, int(w * 1000), 5000, 5000.0 if cod else 0.0, False)
         code, t = await _dlvb_call("GET", "/tat/estimate", params={"origin_pin": DLVB["origin_pin"], "destination_pin": pincode})
         tat = ((t or {}).get("data") or {}).get("tat") if code == 200 else None
@@ -12203,7 +12203,7 @@ async def _compare_delhivery_b2b(pincode: str, weight: float, cod: bool) -> list
         pin = await _dlvb_pin(pincode)
         if not pin:
             return [{"carrier": "Delhivery B2B", "service": "", "serviceable": False, "note": "Not served by Delhivery B2B"}]
-        est = await _dlvb_estimate(pincode, [{"length_cm": 40, "width_cm": 40, "height_cm": 40, "box_count": 1}],
+        est = await _dlvb_estimate(pincode, _dlvb_boxes({"packaging": {"weight_kg": weight}})[0],
                                    int(weight * 1000), 5000, 5000.0 if cod else 0.0, False)
         return [{"carrier": "Delhivery B2B", "service": "Surface LTL (transport)", "serviceable": True, "total": est["total"],
                  "gst_note": "GST included", "eta": "",
@@ -12644,6 +12644,7 @@ def _amazon_cod_amount(order: dict) -> float:
 # volume sits under the weight — the actual weight then always governs.
 AMAZON_VOLUMETRIC_DIVISOR = 5000
 AMAZON_BOX_HEADROOM = 0.85          # stay clear of the slab edge
+BOX_SIZING_DIVISOR = 2500           # strictest volumetric divisor across our couriers
 AMAZON_MIN_SIDE_CM = 1
 
 
@@ -12655,7 +12656,10 @@ def _amazon_box(order: dict) -> dict:
     except ValueError:
         w = 0
     w = max(0.01, w)
-    side = (AMAZON_VOLUMETRIC_DIVISOR * w * AMAZON_BOX_HEADROOM) ** (1.0 / 3.0)
+    # Our parcels are dense (oils, aroma chemicals): every courier must bill on actual weight,
+    # never volumetric. Size the declared box against the strictest divisor any courier uses
+    # (B2B/LTL ~2500-2800), so the volumetric weight stays below actual for all of them.
+    side = (BOX_SIZING_DIVISOR * w * AMAZON_BOX_HEADROOM) ** (1.0 / 3.0)
     side = max(AMAZON_MIN_SIDE_CM, int(side))       # floor, never round up
     return {"length": side, "width": side, "height": side}
 
@@ -14755,12 +14759,9 @@ INDIAPOST_CARD_WEIGHTS = [250, 500, 1000, 2000, 5000, 10000, 20000, 35000]
 
 
 def _card_dims(weight_g: int) -> dict:
-    """Representative box for each weight band, so volumetric weight is realistic."""
-    if weight_g <= 1000:
-        return {"length": 20, "breadth": 15, "height": 10}
-    if weight_g <= 5000:
-        return {"length": 30, "breadth": 25, "height": 20}
-    return {"length": 45, "breadth": 35, "height": 30}
+    """Weight-derived box (our parcels are dense), so the tariff goes on actual weight."""
+    b = _amazon_box({"packaging": {"weight_kg": weight_g / 1000}})
+    return {"length": b["length"], "breadth": b["width"], "height": b["height"]}
 
 
 @api_router.post("/indiapost/rate-card")
