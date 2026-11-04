@@ -30,7 +30,7 @@ const CHECK_COLORS = {
   pending_recheck: "bg-red-100 text-red-800",
 };
 const CHECK_LABELS = { received: "Checked", pending: "Pending", pending_recheck: "Re-check" };
-const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Amazon", "Shiprocket", "Shipmozo", "Delhivery B2B", "Others"];
+const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Amazon", "Shiprocket", "Shipmozo", "XpressBees", "Delhivery B2B", "Others"];
 
 // For the aggregators, the company whose pickup agent comes (booked one, else the one chosen), tagged SR / SM
 const AGGREGATOR_TAG = { Shiprocket: ["SR", "shiprocket"], Shipmozo: ["SM", "shipmozo"] };

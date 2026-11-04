@@ -301,7 +301,7 @@ async def next_document_number(company: dict, kind: str) -> str:
     return f"{prefix}-{counter['seq']:04d}"
 
 
-COURIER_OPTIONS = ["DTDC", "Anjani", "Amazon", "Shiprocket", "Shipmozo", "Delhivery B2B", "India Post", "Others"]
+COURIER_OPTIONS = ["DTDC", "Anjani", "Amazon", "Shiprocket", "Shipmozo", "XpressBees", "Delhivery B2B", "India Post", "Others"]
 
 # Bank details for PI PDFs
 BANK_GST = {
@@ -2946,7 +2946,7 @@ def _courier_with_partner(order: dict) -> str:
     (e.g. "Shiprocket - Delhivery Surface"): the booked one, else the one chosen on the order."""
     import html as _html
     name = order.get("courier_name") or ""
-    key = {"Shiprocket": "shiprocket", "Shipmozo": "shipmozo", "Delhivery": "delhivery"}.get(name)
+    key = {"Shiprocket": "shiprocket", "Shipmozo": "shipmozo", "Delhivery": "delhivery", "XpressBees": "xpressbees"}.get(name)
     if not key:
         return name
     partner = ((order.get(f"{key}_shipment") or {}).get("courier_name")
@@ -8564,6 +8564,14 @@ async def courier_status(order_id: str, user=Depends(get_current_user)):
                 "last_event": (events[0] if events else None),
                 "events": events[:12], "raw_status": d.get("status")}
 
+    xb = order.get("xpressbees_shipment") or {}
+    if xb.get("awb") and _xb_configured():
+        status, hist = await _xb_track(xb["awb"])
+        events = [{"type": h.get("status_code") or h.get("status"), "customer_update": h.get("message") or h.get("status"),
+                   "hub_name": h.get("location"), "event_time": h.get("event_time")} for h in hist if isinstance(h, dict)]
+        return {"ok": True, "courier": "XpressBees", "docket": xb["awb"], "status": status or xb.get("last_status") or "-",
+                "last_event": events[0] if events else None, "events": events[:12]}
+
     return {"ok": False, "message": "Order is not on DTDC or Anjani"}
 
 
@@ -10317,6 +10325,550 @@ async def _compare_shipmozo(pincode: str, weight: float, cod: bool) -> list:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# XPRESSBEES (direct, shipment.xpressbees.com). One account, several XpressBees
+# services (Surface 0.5 kg, Air, 1 kg, 2 kg ...) quoted live per order; booking
+# asks for auto pickup. Login is the panel's email + password, kept in the server
+# .env (XPRESSBEES_EMAIL / XPRESSBEES_PASSWORD). Status changes arrive on the
+# webhook (/api/xpressbees/webhook, HMAC-signed with XPRESSBEES_WEBHOOK_SECRET);
+# a poller covers anything the webhook missed.
+# ═══════════════════════════════════════════════════════════════════════════
+XPRESSBEES = {
+    "email": os.environ.get("XPRESSBEES_EMAIL", "").strip(),
+    "password": os.environ.get("XPRESSBEES_PASSWORD", "").strip(),
+    "webhook_secret": os.environ.get("XPRESSBEES_WEBHOOK_SECRET", "").strip(),
+    "warehouse_name": os.environ.get("XPRESSBEES_WAREHOUSE_NAME", "").strip(),
+    "pickup_pincode": os.environ.get("XPRESSBEES_PICKUP_PINCODE", os.environ.get("AMAZON_SHIP_ORIGIN_PINCODE", "440025")).strip(),
+}
+XB_BASE = "https://shipment.xpressbees.com/api"
+XB_ROLES = ["admin", "dispatch", "packaging", "accounts"]
+XB_COURIER_RE = {"$regex": r"^\s*xpress\s*bees", "$options": "i"}
+XB_SYNC_INTERVAL = int(os.environ.get("XPRESSBEES_SYNC_INTERVAL", "900"))
+_xb_token = {"value": "", "at": 0.0}
+
+
+def _xb_configured() -> bool:
+    return bool(XPRESSBEES["email"] and XPRESSBEES["password"])
+
+
+def courier_name_is_xb(order: dict) -> bool:
+    return bool(re.match(r"^\s*xpress\s*bees", order.get("courier_name") or "", re.I))
+
+
+async def _xb_login(force: bool = False) -> str:
+    import time as _t
+    if not force and _xb_token["value"] and _t.time() - _xb_token["at"] < 6 * 3600:
+        return _xb_token["value"]
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(f"{XB_BASE}/users/login", json={"email": XPRESSBEES["email"], "password": XPRESSBEES["password"]})
+    try:
+        j = r.json()
+    except Exception:
+        j = {}
+    if not j.get("status") or not j.get("data"):
+        raise HTTPException(status_code=400, detail=f"XpressBees login failed: {j.get('message') or r.text[:150]}")
+    _xb_token.update(value=str(j["data"]), at=_t.time())
+    return _xb_token["value"]
+
+
+async def _xb_call(method: str, path: str, **kw) -> tuple:
+    """(ok, data, message). XpressBees answers {"status": true|false, "message", "data"}."""
+    for attempt in (0, 1):
+        token = await _xb_login(force=attempt == 1)
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.request(method, XB_BASE + path, headers={"Authorization": f"Bearer {token}",
+                                                                 "Content-Type": "application/json"}, **kw)
+        try:
+            j = r.json()
+        except Exception:
+            return False, None, f"HTTP {r.status_code}: {r.text[:200]}"
+        msg = j.get("message") or ""
+        if attempt == 0 and re.search(r"token", str(msg), re.I) and not j.get("status"):
+            continue                        # expired token: log in again once
+        if isinstance(msg, (list, dict)):
+            msg = json.dumps(msg)[:300]
+        return bool(j.get("status")) and r.status_code < 400, j.get("data"), str(msg)
+    return False, None, "XpressBees login expired"
+
+
+def _xb_require(user):
+    if user["role"] not in XB_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not _xb_configured():
+        raise HTTPException(status_code=400, detail="XpressBees is not configured on the server")
+
+
+async def _xb_rates(pincode: str, weight_kg: float, cod_amount: float, value: float, box: Optional[dict] = None) -> list:
+    box = box or {"length": 15, "width": 15, "height": 15}
+    body = {"origin": XPRESSBEES["pickup_pincode"], "destination": str(pincode),
+            "payment_type": "cod" if cod_amount > 0 else "prepaid",
+            "order_amount": str(round(max(1.0, cod_amount if cod_amount > 0 else value), 2)),
+            "weight": str(max(1, int(round(weight_kg * 1000)))),
+            "length": str(box["length"]), "breadth": str(box["width"]), "height": str(box["height"])}
+    ok, data, msg = await _xb_call("POST", "/courier/serviceability", json=body)
+    if not ok:
+        if re.search(r"not servic|no courier|not available", msg or "", re.I):
+            return []
+        raise HTTPException(status_code=400, detail=f"XpressBees rates: {msg or 'not available'}")
+    out = []
+    for x in data or []:
+        try:
+            total = round(float(x.get("total_charges") or 0), 2)
+        except (TypeError, ValueError):
+            continue
+        if total <= 0:
+            continue
+        out.append({"courier_id": str(x.get("id")), "name": (x.get("name") or "XpressBees").strip(), "rate": total,
+                    "freight": x.get("freight_charges"), "cod_charges": x.get("cod_charges"),
+                    "min_weight": x.get("min_weight") or "", "chargeable_weight": x.get("chargeable_weight") or "",
+                    "etd": "", "auto_pickup": True})
+    out.sort(key=lambda c: c["rate"])
+    return out
+
+
+@api_router.get("/xpressbees/check/{pincode}")
+async def xpressbees_check(pincode: str, weight: float = 1.0, cod: bool = False, user=Depends(get_current_user)):
+    pincode = pincode.strip()
+    if not pincode.isdigit() or len(pincode) != 6:
+        return {"serviceable": False, "configured": True, "message": "Invalid pincode format."}
+    if not _xb_configured():
+        return {"serviceable": None, "configured": False, "message": "XpressBees is not configured on the server."}
+    try:
+        couriers = await _xb_rates(pincode, max(0.05, float(weight or 1)), 1000.0 if cod else 0.0, 1000.0)
+        if not couriers:
+            return {"serviceable": False, "configured": True, "message": "XpressBees does not serve this pincode" + (" for COD." if cod else ".")}
+        return {"serviceable": True, "configured": True, "couriers": couriers, "count": len(couriers)}
+    except HTTPException as e:
+        return {"serviceable": False, "configured": True, "message": str(e.detail)}
+    except Exception as e:
+        logging.error(f"xpressbees check: {e}")
+        return {"serviceable": False, "configured": True, "message": "Unable to reach XpressBees right now."}
+
+
+@api_router.get("/xpressbees/bookable")
+async def xpressbees_bookable(user=Depends(get_current_user)):
+    """Orders assigned to XpressBees that packing has weighed and that are not dispatched."""
+    _xb_require(user)
+    orders = await ship_orders.find({
+        "courier_name": XB_COURIER_RE, "status": {"$nin": ["cancelled", "dispatched"]},
+        "$or": [{"packaging.weight_kg": {"$nin": ["", None]}}, {"xpressbees_shipment.awb": {"$nin": ["", None]}}],
+    }, {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "grand_total": 1, "shipping_address": 1,
+        "packaging": 1, "xpressbees_shipment": 1, "status": 1, "is_cod": 1, "amount_paid": 1, "cod_amount": 1}
+    ).sort("created_at", -1).to_list(300)
+    out = []
+    for o in orders:
+        pkg = o.get("packaging") or {}
+        sh = o.get("xpressbees_shipment") or None
+        weight, source = _sr_weight(o)
+        if weight <= 0 and sh and sh.get("awb"):
+            weight, source = float(sh.get("weight_kg") or 0), "booked"
+        if weight <= 0:
+            continue
+        out.append({"id": o["id"], "order_number": o.get("order_number"), "customer_name": o.get("customer_name"),
+                    "grand_total": o.get("grand_total"), "status": o.get("status"),
+                    "weight_kg": weight, "weight_source": source, "num_boxes": pkg.get("num_boxes") or "1",
+                    "shipping_address": o.get("shipping_address") or {},
+                    "is_cod": bool(o.get("is_cod")), "cod_amount": _amazon_cod_amount(o),
+                    "xpressbees_shipment": ({k: v for k, v in sh.items() if k not in ("raw", "history")} if sh else None)})
+    return out
+
+
+class XpressbeesBookRequest(BaseModel):
+    order_id: str
+    courier_id: Optional[str] = None        # which quoted XpressBees service; cheapest if omitted
+    payment_mode: Optional[str] = None      # "prepaid" | "cod"
+    declared_value: Optional[float] = None  # required when the order total is 0
+    insure: Optional[bool] = False          # unused; kept for the shared booking screen
+
+
+@api_router.post("/xpressbees/quote")
+async def xpressbees_quote(req: XpressbeesBookRequest, user=Depends(get_current_user)):
+    """Live XpressBees services for one order - books nothing."""
+    _xb_require(user)
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    sa = order.get("shipping_address") or {}
+    weight, weight_source = _sr_weight(order)
+    if weight <= 0:
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+    cod = _sr_cod(order, req.payment_mode)
+    if (req.payment_mode or "").lower() == "cod" and cod <= 0:
+        raise HTTPException(status_code=400, detail="Nothing left to collect - this order is fully paid.")
+    couriers = await _xb_rates(str(sa.get("pincode") or ""), weight, cod, _declared_value(order), _amazon_box(order))
+    if not couriers:
+        return {"ok": False, "message": "XpressBees does not serve this address" + (" for COD" if cod > 0 else "")}
+    return {"ok": True, "couriers": couriers, "is_cod": cod > 0, "cod_amount": cod, "weight_kg": weight, "weight_source": weight_source}
+
+
+async def _xb_fetch_label(url: str) -> Optional[bytes]:
+    if not url or not str(url).startswith("http"):
+        return None
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+        r = await c.get(url)
+    return r.content if r.status_code == 200 and r.content[:4] == b"%PDF" else None
+
+
+@api_router.post("/xpressbees/book")
+async def xpressbees_book(req: XpressbeesBookRequest, user=Depends(get_current_user)):
+    """BUYS a real XpressBees shipment: creates it with auto pickup and saves the AWB and label."""
+    _xb_require(user)
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if (order.get("xpressbees_shipment") or {}).get("awb"):
+        raise HTTPException(status_code=400, detail="This order is already booked with XpressBees")
+    if req.declared_value and float(req.declared_value) > 0:
+        order["declared_value_override"] = float(req.declared_value)
+    elif float(order.get("grand_total") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Order total is ₹0 - enter a declared value for the shipment before booking")
+    weight, weight_source = _sr_weight(order)
+    if weight <= 0:
+        raise HTTPException(status_code=400, detail="Weight not entered by packing team yet")
+    phone = await _order_recipient_phone(order)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Customer has no valid phone number. Add one before booking.")
+    sa = order.get("shipping_address") or {}
+    line1, line2 = _address_lines(sa, cap=160)
+    if len((line1 or "").strip()) < 3:
+        raise HTTPException(status_code=400, detail="Shipping address is too short for the courier")
+    cod = _sr_cod(order, req.payment_mode)
+    if (req.payment_mode or "").lower() == "cod" and cod <= 0:
+        raise HTTPException(status_code=400, detail="Nothing left to collect - this order is fully paid.")
+    declared = _declared_value(order)
+    value = cod if cod > 0 else declared
+    box = _amazon_box(order)
+    couriers = await _xb_rates(str(sa.get("pincode") or ""), weight, cod, value, box)
+    if not couriers:
+        raise HTTPException(status_code=400, detail="XpressBees does not serve this address" + (" for COD" if cod > 0 else ""))
+    chosen = next((c for c in couriers if req.courier_id and str(c["courier_id"]) == str(req.courier_id)), None) or couriers[0]
+
+    # XpressBees refuses a repeated order number, so a cancelled or failed attempt gets a fresh one.
+    rebooks = sum(1 for c in (order.get("cancelled_shipments") or []) if (c.get("courier") or "") == "XpressBees")
+    rebooks += int(order.get("xpressbees_failed_attempts") or 0)
+    ref = (order.get("order_number") or order["id"][:20]) + (f"-R{rebooks}" if rebooks else "")
+    items = []
+    for it in order.get("items") or []:
+        amt = float(it.get("total") or it.get("amount") or 0)
+        if amt > 0:
+            items.append({"name": (it.get("product_name") or "Item")[:100], "qty": "1", "price": str(round(amt, 2)),
+                          "sku": re.sub(r"[^A-Za-z0-9]+", "-", (it.get("product_name") or "item"))[:40] or "item"})
+    if not items:
+        items = [{"name": "Aroma products", "qty": "1", "price": str(round(value, 2)), "sku": "AROMA"}]
+    pickup = {"warehouse_name": XPRESSBEES["warehouse_name"] or AMAZON_SHIP["origin_name"][:50],
+              "name": AMAZON_SHIP["origin_name"][:50], "address": AMAZON_SHIP["origin_addr"][:200], "address_2": "",
+              "city": AMAZON_SHIP["origin_city"], "state": AMAZON_SHIP["origin_state"],
+              "pincode": XPRESSBEES["pickup_pincode"], "phone": re.sub(r"\D", "", AMAZON_SHIP["origin_phone"])[-10:]}
+    body = {
+        "order_number": ref, "unique_order_number": "yes",
+        "shipping_charges": 0, "discount": 0, "cod_charges": 0,
+        "payment_type": "cod" if cod > 0 else "prepaid",
+        "order_amount": round(value, 2), "collectable_amount": round(cod, 2) if cod > 0 else 0,
+        "package_weight": max(1, int(round(weight * 1000))),
+        "package_length": box["length"], "package_breadth": box["width"], "package_height": box["height"],
+        "request_auto_pickup": "yes",
+        "consignee": {"name": (sa.get("address_name") or order.get("customer_name") or "Customer").strip()[:60],
+                      "address": line1, "address_2": line2 or "", "city": sa.get("city") or "",
+                      "state": sa.get("state") or "", "pincode": str(sa.get("pincode") or ""), "phone": phone},
+        "pickup": pickup, "order_items": items, "courier_id": str(chosen["courier_id"]),
+    }
+    ok, data, msg = await _xb_call("POST", "/shipments2", json=body)
+    for _ in range(2):          # an earlier attempt already used this order number: take the next one
+        if ok or not re.search(r"exist|duplicate|already", msg or "", re.I):
+            break
+        rebooks += 1
+        ref = body["order_number"] = (order.get("order_number") or order["id"][:20]) + f"-R{rebooks}"
+        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"xpressbees_failed_attempts": 1}})
+        ok, data, msg = await _xb_call("POST", "/shipments2", json=body)
+    if not ok:
+        await ship_orders.update_one({"id": req.order_id}, {"$inc": {"xpressbees_failed_attempts": 1}})
+        if re.search(r"wallet|balance|recharge", msg or "", re.I):
+            raise HTTPException(status_code=400, detail=f"XpressBees booking failed: wallet balance is too low. Recharge the XpressBees wallet and book again. ({msg})")
+        raise HTTPException(status_code=400, detail=f"XpressBees refused the shipment: {msg}")
+    data = data or {}
+    awb = str(data.get("awb_number") or "")
+    if not awb:
+        raise HTTPException(status_code=400, detail=f"XpressBees created {ref} but returned no AWB. Check the XpressBees panel before booking again.")
+    label_url = ""
+    try:
+        pdf = await _xb_fetch_label(data.get("label"))
+        if pdf:
+            fname = f"{uuid.uuid4()}.pdf"
+            async with aiofiles.open(UPLOAD_DIR / fname, "wb") as f:
+                await f.write(pdf)
+            label_url = f"/api/uploads/{fname}"
+    except Exception as e:
+        logging.warning(f"xpressbees label {awb}: {e}")
+    shipment = {
+        "reference": ref, "xb_order_id": str(data.get("order_id") or ""), "xb_shipment_id": str(data.get("shipment_id") or ""),
+        "awb": awb, "tracking_id": awb, "courier_id": str(data.get("courier_id") or chosen["courier_id"]),
+        "courier_name": data.get("courier_name") or chosen["name"], "rate": chosen["rate"],
+        "last_status": data.get("status") or "", "label_remote": data.get("label") or "", "manifest_url": data.get("manifest") or "",
+        "is_cod": cod > 0, "cod_amount": cod, "declared_value": round(value, 2),
+        "weight_kg": weight, "weight_source": weight_source, "label_url": label_url,
+        "booked_by": user["name"], "booked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await ship_orders.update_one({"id": req.order_id}, {"$set": {
+        "xpressbees_shipment": shipment, "courier_name": "XpressBees", "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"ok": True, "shipment": shipment}
+
+
+@api_router.post("/xpressbees/bulk-book")
+async def xpressbees_bulk_book(req: BulkBookRequest, user=Depends(get_current_user)):
+    _xb_require(user)
+    mode = (req.payment_mode or "prepaid").strip().lower()
+    if mode not in ("prepaid", "cod"):
+        raise HTTPException(status_code=400, detail="payment_mode must be prepaid or cod")
+
+    async def one(oid):
+        ch = (req.choices or {}).get(oid) or {}
+        return await xpressbees_book(XpressbeesBookRequest(
+            order_id=oid, payment_mode=(ch.get("payment_mode") or mode),
+            courier_id=str(ch["courier_id"]) if ch.get("courier_id") else None,
+            declared_value=(req.declared_values or {}).get(oid)), user=user)
+
+    return await _bulk_book(req.order_ids, one, user, "XpressBees")
+
+
+async def _xb_cancel_one(order_id: str, user) -> dict:
+    order = await ship_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    shp = order.get("xpressbees_shipment") or {}
+    if not shp.get("awb"):
+        raise HTTPException(status_code=400, detail="No XpressBees booking on this order")
+    if (order.get("status") or "") == "dispatched":
+        raise HTTPException(status_code=400, detail="Order is already dispatched - undo the dispatch before cancelling the label")
+    ok, data, msg = await _xb_call("POST", "/shipments2/cancel", json={"awb": shp["awb"]})
+    if not ok and not re.search(r"already cancel", msg or "", re.I):
+        raise HTTPException(status_code=400, detail=f"XpressBees cancel failed: {msg}")
+    now = datetime.now(timezone.utc).isoformat()
+    await ship_orders.update_one({"id": order_id}, {
+        "$push": {"cancelled_shipments": {"courier": "XpressBees", **{k: v for k, v in shp.items() if k != "history"},
+                                          "cancelled_by": user["name"], "cancelled_at": now}},
+        "$unset": {"xpressbees_shipment": ""}, "$set": {"updated_at": now}})
+    return {"ok": True, "cancelled": shp["awb"]}
+
+
+@api_router.post("/xpressbees/cancel")
+async def xpressbees_cancel(req: CancelLabelRequest, user=Depends(get_current_user)):
+    _xb_require(user)
+    return await _xb_cancel_one(req.order_id, user)
+
+
+@api_router.post("/xpressbees/bulk-cancel")
+async def xpressbees_bulk_cancel(req: BulkBookRequest, user=Depends(get_current_user)):
+    _xb_require(user)
+
+    async def one(oid):
+        return await _xb_cancel_one(oid, user)
+
+    return await _bulk_book(req.order_ids, one, user, "XpressBees cancel")
+
+
+async def _xb_label_bytes(shp: dict) -> bytes:
+    """The saved label PDF, or a fresh download from the link XpressBees gave at booking."""
+    url = shp.get("label_url") or ""
+    if url.startswith("/api/uploads/"):
+        try:
+            async with aiofiles.open(UPLOAD_DIR / url.rsplit("/", 1)[-1], "rb") as f:
+                return await f.read()
+        except OSError:
+            pass
+    pdf = await _xb_fetch_label(shp.get("label_remote"))
+    if pdf:
+        return pdf
+    raise HTTPException(status_code=400, detail="XpressBees label not available - download it from the XpressBees panel")
+
+
+async def _xpressbees_mark_dispatched(order: dict, when: str, by: str, docket: str = "") -> dict:
+    """Shared dispatch write for the manual button, the webhook and the poller."""
+    shp = order.get("xpressbees_shipment") or {}
+    docket = docket or shp.get("awb") or ""
+    dispatch = order.get("dispatch") or {}
+    slips = list(dispatch.get("dispatch_slip_images") or [])
+    if not slips and shp.get("awb"):
+        try:
+            jpg = _sm_slip_jpg(await _xb_label_bytes(shp))
+            if jpg:
+                fname = f"{uuid.uuid4()}.jpg"
+                async with aiofiles.open(UPLOAD_DIR / fname, "wb") as f:
+                    await f.write(jpg)
+                slips.append(f"/api/uploads/{fname}")
+        except Exception as e:
+            logging.warning(f"xpressbees slip image failed: {e}")
+    dispatch.update({"courier_name": "XpressBees", "courier_partner": shp.get("courier_name") or "",
+                     "transporter_name": "", "lr_no": docket, "dispatch_slip_images": slips,
+                     "dispatch_type": "courier", "porter_link": "", "dispatched_by": by, "dispatched_at": when})
+    await ship_orders.update_one({"id": order["id"]}, {"$set": {
+        "dispatch": dispatch, "status": "dispatched", "courier_name": "XpressBees",
+        "xpressbees_shipment.picked_up_at": when, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    return {"ok": True, "lr_no": docket, "slips": slips}
+
+
+class XpressbeesDispatchRequest(BaseModel):
+    order_id: str
+    docket_no: Optional[str] = ""
+
+
+@api_router.post("/xpressbees/dispatch")
+async def xpressbees_dispatch(req: XpressbeesDispatchRequest, user=Depends(get_current_user)):
+    _xb_require(user)
+    order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    docket = (req.docket_no or "").strip() or (order.get("xpressbees_shipment") or {}).get("awb") or ""
+    if not docket:
+        raise HTTPException(status_code=400, detail="Tracking / AWB number is required")
+    return await _xpressbees_mark_dispatched(order, datetime.now(timezone.utc).isoformat(), user["name"], docket)
+
+
+# XpressBees statuses are words ("pending pickup", "in transit", "delivered", "rto" ...);
+# anything past pickup means the parcel has left us.
+XB_GONE_WORDS = ("picked", "in transit", "intransit", "out for delivery", "delivered", "reached", "shipped", "rto", "lost", "damaged")
+XB_WAITING_WORDS = ("pending", "not picked", "cancel", "booked", "manifest", "pickup scheduled", "pickup failed", "failed pickup", "ready")
+
+
+def _xb_gone(status: str) -> bool:
+    s = (status or "").lower()
+    return bool(s) and not any(w in s for w in XB_WAITING_WORDS) and any(w in s for w in XB_GONE_WORDS)
+
+
+def _xb_when(event_time) -> str:
+    try:
+        return datetime.strptime(str(event_time)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST).astimezone(timezone.utc).isoformat()
+    except (TypeError, ValueError):
+        return datetime.now(timezone.utc).isoformat()
+
+
+async def _xb_apply_status(awb: str, status: str, event_time=None, location: str = "", message: str = "",
+                           rto_awb: str = "", source: str = "webhook") -> Optional[str]:
+    """Record one XpressBees status on its order; dispatch the order once the parcel is picked up.
+    Returns the order number it applied to."""
+    o = await ship_orders.find_one({"xpressbees_shipment.awb": str(awb)}, {"_id": 0})
+    if not o:
+        return None
+    ev = {"status": status, "at": _xb_when(event_time) if event_time else datetime.now(timezone.utc).isoformat(),
+          "location": location or "", "message": message or "", "source": source}
+    upd = {"xpressbees_shipment.last_status": status, "xpressbees_shipment.last_event": ev}
+    if rto_awb:
+        upd["xpressbees_shipment.rto_awb"] = rto_awb
+    if re.search(r"deliver", status or "", re.I) and not re.search(r"undeliver|out for", status or "", re.I):
+        upd["xpressbees_shipment.delivered_at"] = ev["at"]
+    await ship_orders.update_one({"id": o["id"]}, {"$set": upd, "$push": {"xpressbees_shipment.history": {"$each": [ev], "$slice": -40}}})
+    if _xb_gone(status) and (o.get("status") or "") not in ("dispatched", "cancelled"):
+        await _xpressbees_mark_dispatched(o, ev["at"], "XpressBees (auto)", str(awb))
+        logging.info(f"XpressBees pickup: {o.get('order_number')} dispatched ({status})")
+    return o.get("order_number")
+
+
+@api_router.post("/xpressbees/webhook")
+async def xpressbees_webhook(request: Request):
+    """Status pushes from XpressBees. Signed: X-Hmac-SHA256 = base64(HMAC-SHA256(body, secret)).
+    Must answer 200 within 5 seconds, so the work runs after the reply."""
+    import base64
+    import hashlib
+    import hmac
+    raw = await request.body()
+    secret = XPRESSBEES["webhook_secret"]
+    if not secret:
+        raise HTTPException(status_code=503, detail="Webhook secret not configured")
+    sent = request.headers.get("x-hmac-sha256") or ""
+    good = base64.b64encode(hmac.new(secret.encode(), raw, hashlib.sha256).digest()).decode()
+    if not hmac.compare_digest(sent.strip(), good):
+        logging.warning("xpressbees webhook: bad signature")
+        raise HTTPException(status_code=401, detail="Bad signature")
+    try:
+        payload = json.loads(raw or b"{}")
+    except ValueError:
+        return {"ok": True, "ignored": "not json"}
+    events = payload if isinstance(payload, list) else [payload]
+    await db.xpressbees_webhook_log.insert_one({"at": datetime.now(timezone.utc).isoformat(), "payload": payload})
+
+    async def work():
+        for e in events:
+            if not isinstance(e, dict) or not e.get("awb_number"):
+                continue
+            try:
+                await _xb_apply_status(str(e["awb_number"]), str(e.get("status") or ""), e.get("event_time"),
+                                       e.get("location") or "", e.get("message") or "", e.get("rto_awb") or "")
+            except Exception as ex:
+                logging.error(f"xpressbees webhook {e.get('awb_number')}: {ex}")
+
+    asyncio.create_task(work())
+    return {"ok": True}
+
+
+async def _xb_track(awb: str) -> tuple:
+    """(status, history) from XpressBees tracking."""
+    ok, data, msg = await _xb_call("GET", f"/shipments2/track/{awb}")
+    if not ok or not isinstance(data, dict):
+        return "", []
+    hist = data.get("history") or []
+    return str(data.get("status") or ""), hist if isinstance(hist, list) else []
+
+
+async def _xpressbees_sync_all() -> int:
+    """Safety net for missed webhooks: booked XpressBees orders the courier has collected become dispatched."""
+    n = 0
+    async for o in ship_orders.find({"xpressbees_shipment.awb": {"$nin": ["", None]},
+                                     "status": {"$nin": ["dispatched", "cancelled"]}}, {"_id": 0}).limit(100):
+        awb = o["xpressbees_shipment"]["awb"]
+        try:
+            status, hist = await _xb_track(awb)
+        except Exception as e:
+            logging.warning(f"xpressbees track {awb}: {e}")
+            continue
+        if not status:
+            continue
+        latest = hist[0] if hist and isinstance(hist[0], dict) else {}
+        before = o.get("status")
+        await _xb_apply_status(awb, status, latest.get("event_time"), latest.get("location") or "",
+                               latest.get("message") or "", source="poll")
+        if _xb_gone(status) and before not in ("dispatched", "cancelled"):
+            n += 1
+    return n
+
+
+async def _xpressbees_sync_loop():
+    await asyncio.sleep(120)
+    while True:
+        try:
+            await _xpressbees_sync_all()
+        except Exception as e:
+            logging.error(f"XpressBees sync loop error: {e}")
+        await asyncio.sleep(XB_SYNC_INTERVAL)
+
+
+@app.on_event("startup")
+async def _start_xpressbees_sync():
+    if _xb_configured():
+        asyncio.create_task(_xpressbees_sync_loop())
+
+
+@api_router.post("/xpressbees/sync-tracking")
+async def xpressbees_sync_now(user=Depends(get_current_user)):
+    _xb_require(user)
+    return {"count": await _xpressbees_sync_all()}
+
+
+async def _compare_xpressbees(pincode: str, weight: float, cod: bool) -> list:
+    if not _xb_configured():
+        return [{"carrier": "XpressBees", "service": "", "serviceable": None, "note": "Not configured on the server"}]
+    try:
+        rows = await _xb_rates(pincode, weight, 1000.0 if cod else 0.0, 1000.0)
+        if not rows:
+            return [{"carrier": "XpressBees", "service": "", "serviceable": False, "note": "XpressBees does not serve this pincode"}]
+        return [{"carrier": "XpressBees", "service": x["name"], "serviceable": True, "total": x["rate"],
+                 "gst_note": "as quoted by XpressBees", "eta": "", "pickup": "auto pickup",
+                 "note": f"min {x['min_weight']} g" if x.get("min_weight") else ""} for x in rows[:6]]
+    except HTTPException as e:
+        return [{"carrier": "XpressBees", "service": "", "serviceable": None, "note": str(e.detail)[:100]}]
+    except Exception as e:
+        logging.error(f"compare/xpressbees: {e}")
+        return [{"carrier": "XpressBees", "service": "", "serviceable": None, "note": "Could not reach XpressBees right now"}]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # AMAZON SELF-SHIP THROUGH OUR COURIERS. Self-ship Amazon orders are shipped by
 # us, so every courier (booking, labels, cancel, dispatch, pickup pollers) sees
 # them through `ship_orders`, which reads regular orders first and then Amazon
@@ -11666,7 +12218,7 @@ async def _compare_delhivery_b2b(pincode: str, weight: float, cod: bool) -> list
 # prints their labels as one PDF, and lets a weighed order be given a courier.
 # ═══════════════════════════════════════════════════════════════════════════
 SHIP_ROLES = ["admin", "dispatch", "packaging", "accounts"]
-SHIP_API_COURIERS = ["DTDC", "Amazon", "Shiprocket", "Shipmozo", "Delhivery", "Delhivery B2B"]
+SHIP_API_COURIERS = ["DTDC", "Amazon", "Shiprocket", "Shipmozo", "XpressBees", "Delhivery", "Delhivery B2B"]
 
 
 @api_router.get("/shipments/bookable")
@@ -11679,7 +12231,8 @@ async def shipments_bookable(user=Depends(get_current_user)):
                              ("Shiprocket", shiprocket_bookable, "shiprocket_shipment"),
                              ("Delhivery", delhivery_bookable, "delhivery_shipment"),
                              ("Delhivery B2B", delhivery_b2b_bookable, "delhivery_b2b_shipment"),
-                             ("Shipmozo", shipmozo_bookable, "shipmozo_shipment")):
+                             ("Shipmozo", shipmozo_bookable, "shipmozo_shipment"),
+                             ("XpressBees", xpressbees_bookable, "xpressbees_shipment")):
         try:
             for o in await fn(user=user):
                 sh = o.get(key) or {}
@@ -11687,6 +12240,8 @@ async def shipments_bookable(user=Depends(get_current_user)):
                 rows.append({**o, "courier": courier, "booked": booked,
                              "tracking": sh.get("awb") or sh.get("lrn") or sh.get("tracking_id") or sh.get("reference_number") or ""})
         except HTTPException as e:
+            if courier == "XpressBees" and not _xb_configured():
+                continue                    # not set up yet: nothing to show, not an error
             errors[courier] = str(e.detail)
         except Exception as e:
             logging.error(f"shipments/bookable {courier}: {e}")
@@ -11742,7 +12297,7 @@ async def shipments_set_courier(req: SetCourierRequest, user=Depends(get_current
         raise HTTPException(status_code=403, detail="Not authorized")
     courier = (req.courier_name or "").strip()
     if courier not in SHIP_API_COURIERS + ["Anjani"]:
-        raise HTTPException(status_code=400, detail="Courier must be DTDC, Amazon, Shiprocket, Shipmozo, Delhivery, Delhivery B2B or Anjani")
+        raise HTTPException(status_code=400, detail="Courier must be DTDC, Amazon, Shiprocket, Shipmozo, XpressBees, Delhivery, Delhivery B2B or Anjani")
     order = await ship_orders.find_one({"id": req.order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -11753,7 +12308,8 @@ async def shipments_set_courier(req: SetCourierRequest, user=Depends(get_current
             or (order.get("shiprocket_shipment") or {}).get("awb")
             or (order.get("delhivery_shipment") or {}).get("awb")
             or (order.get("delhivery_b2b_shipment") or {}).get("lrn")
-            or (order.get("shipmozo_shipment") or {}).get("awb")):
+            or (order.get("shipmozo_shipment") or {}).get("awb")
+            or (order.get("xpressbees_shipment") or {}).get("awb")):
         raise HTTPException(status_code=400, detail="This order already has a booked label. Cancel the label before changing the courier.")
     # Carrier risk is a DTDC charge the customer has been billed for.
     if order.get("carrier_risk_applicable") and courier != "DTDC":
@@ -11827,6 +12383,13 @@ async def shipments_labels(ids: str, token: str = "", user=None):
             except Exception as e:
                 logging.warning(f"shipmozo label: {e}")
                 missing.append(num)
+        elif (o.get("xpressbees_shipment") or {}).get("awb"):
+            try:
+                jpg = _sm_slip_jpg(await _xb_label_bytes(o["xpressbees_shipment"]))
+                quarter.append(jpg) if jpg else missing.append(num)
+            except Exception as e:
+                logging.warning(f"xpressbees label: {e}")
+                missing.append(num)
         elif (o.get("delhivery_shipment") or {}).get("awb"):
             try:
                 quarter.extend(_pdf_pages_jpg(await _dlv_label_pdf(o["delhivery_shipment"]["awb"])) or [])
@@ -11876,10 +12439,10 @@ async def rates_compare(pincode: str, weight: float = 1.0, cod: bool = False, or
         _compare_dtdc(pincode, weight), _compare_anjani(pincode, weight, state),
         _compare_amazon(pincode, weight, cod), _compare_shiprocket(pincode, weight, cod),
         _compare_delhivery_b2b(pincode, weight, cod),
-        _compare_shipmozo(pincode, weight, cod),
+        _compare_shipmozo(pincode, weight, cod), _compare_xpressbees(pincode, weight, cod),
         return_exceptions=True)
     options = []
-    for name, g in zip(("DTDC", "Anjani", "Amazon Shipping", "Shiprocket", "Delhivery B2B", "Shipmozo"), groups):
+    for name, g in zip(("DTDC", "Anjani", "Amazon Shipping", "Shiprocket", "Delhivery B2B", "Shipmozo", "XpressBees"), groups):
         if isinstance(g, Exception):
             logging.error(f"compare/{name}: {g}")
             options.append({"carrier": name, "service": "", "serviceable": None, "note": "Could not check right now"})

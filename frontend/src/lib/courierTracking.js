@@ -1,7 +1,7 @@
 // Named couriers with their own behaviour/LR rules. Anything else the user
 // types (via the "Others" option) is stored directly in courier_name and
 // treated as a free-form courier that does not require an LR number.
-export const KNOWN_COURIERS = ["DTDC", "Anjani", "India Post", "Amazon", "Shiprocket", "Shipmozo", "Delhivery", "Delhivery B2B"];
+export const KNOWN_COURIERS = ["DTDC", "Anjani", "India Post", "Amazon", "Shiprocket", "Shipmozo", "XpressBees", "Delhivery", "Delhivery B2B"];
 
 // What the courier dropdown shows. "Others" reveals a free-text box.
 // plain Delhivery (Surface) is no longer offered; it stays in KNOWN_COURIERS so old bookings still track
@@ -35,18 +35,19 @@ const TRACKING_URLS = {
   Amazon: (lr) => `https://track.amazon.in/tracking/${lr}`,
   Shiprocket: (lr) => `https://shiprocket.co/tracking/${lr}`,
   Shipmozo: (lr) => `https://panel.shipmozo.com/track-order?awb=${encodeURIComponent(lr)}`,
+  XpressBees: (lr) => `https://www.xpressbees.com/shipment/tracking?awbNo=${encodeURIComponent(lr)}`,
   Delhivery: (lr) => `https://www.delhivery.com/track-v2/package/${lr}`,
   "Delhivery B2B": (lr) => `https://www.delhivery.com/track-v2/package/${lr}`,
   "India Post": (lr) => `https://www.indiapost.gov.in`,
 };
 
 // Couriers we can pull live status from via /courier-status.
-export const LIVE_TRACKING_COURIERS = ["DTDC", "Anjani", "Amazon"];
+export const LIVE_TRACKING_COURIERS = ["DTDC", "Anjani", "Amazon", "XpressBees"];
 
 /** Does this courier support in-app live tracking? Free-text tolerant. */
 export function supportsLiveTracking(courierName) {
   const n = String(courierName || "").trim().toLowerCase();
-  return n.startsWith("dtdc") || n.startsWith("anjani") || n.startsWith("amazon");
+  return n.startsWith("dtdc") || n.startsWith("anjani") || n.startsWith("amazon") || n.startsWith("xpressbees");
 }
 
 /**
