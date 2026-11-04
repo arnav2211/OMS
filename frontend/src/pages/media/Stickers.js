@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import api from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Search, RefreshCw, Check, Ban, RotateCcw, Copy } from "lucide-react";
+import { Search, RefreshCw, Check, Ban, RotateCcw, Copy, Bell, BellOff } from "lucide-react";
 
 const VIEWS = [["todo", "To Print"], ["done", "Done"], ["all", "All"]];
 const SOURCES = [["all", "All"], ["oms", "OMS"], ["amazon", "Amazon"]];
@@ -14,6 +14,33 @@ const STATE_BADGE = {
   not_required: ["Not required", "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"],
   pending: ["To print", "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"],
 };
+
+const SEEN_KEY = "stickers_seen_v1";
+const canNotify = typeof window !== "undefined" && "Notification" in window;
+
+function readSeen() {
+  try {
+    const raw = localStorage.getItem(SEEN_KEY);
+    return raw ? new Set(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSeen(ids) {
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify(ids)); } catch { /* private window */ }
+}
+
+function chromeAlert(fresh) {
+  if (!canNotify || Notification.permission !== "granted") return;
+  const title = fresh.length === 1 ? `New sticker to print: ${fresh[0].order_number}` : `${fresh.length} new orders need stickers`;
+  const body = fresh.slice(0, 3).map((o) => `${o.order_number} - ${o.lines.filter((l) => l.status === "pending").map((l) => l.product).join(", ")}`)
+    .join("\n") + (fresh.length > 3 ? `\n+${fresh.length - 3} more` : "");
+  try {
+    const n = new Notification(title, { body: body.slice(0, 400), tag: "stickers-new", renotify: true, icon: "/favicon.ico" });
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch { /* some browsers only allow notifications from a service worker */ }
+}
 
 function fmtDate(v) {
   if (!v) return "";
@@ -46,11 +73,45 @@ export default function Stickers() {
     return () => clearTimeout(t);
   }, [load, q]);
 
-  // keep the queue fresh while the page stays open
+  const [perm, setPerm] = useState(canNotify ? Notification.permission : "unsupported");
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  const seenRef = useRef(null);
+
+  // Every minute: refresh the list and raise a Chrome alert for orders that newly need stickers.
+  // What has been seen is remembered in this browser, so reopening the page alerts only for what came in meanwhile.
   useEffect(() => {
-    const t = setInterval(load, 60000);
-    return () => clearInterval(t);
-  }, [load]);
+    let stop = false;
+    const check = async () => {
+      try {
+        const res = await api.get("/media/orders", { params: { view: "todo", source: "all" } });
+        if (stop) return;
+        const list = res.data || [];
+        const ids = list.map((o) => `${o.source}:${o.id}`);
+        if (seenRef.current === null) seenRef.current = readSeen() || new Set(ids);
+        const fresh = list.filter((o) => !seenRef.current.has(`${o.source}:${o.id}`));
+        if (fresh.length) {
+          chromeAlert(fresh);
+          toast.info(fresh.length === 1 ? `New order for stickers: ${fresh[0].order_number}` : `${fresh.length} new orders for stickers`);
+        }
+        seenRef.current = new Set(ids);
+        writeSeen(ids);
+        document.title = list.length ? `(${list.length}) Stickers` : "Stickers";
+      } catch { /* next round */ }
+    };
+    check();
+    const t = setInterval(() => { check(); loadRef.current(); }, 60000);
+    return () => { stop = true; clearInterval(t); };
+  }, []);
+
+  const enableAlerts = async () => {
+    if (!canNotify) return;
+    const p = await Notification.requestPermission();
+    setPerm(p);
+    if (p === "granted") {
+      try { new Notification("Sticker alerts are on", { body: "You'll get an alert here when a new order needs stickers.", icon: "/favicon.ico" }); } catch { /* ignore */ }
+    }
+  };
 
   const mark = async (o, keys, status) => {
     const tag = `${o.id}:${keys.join(",")}:${status}`;
@@ -83,9 +144,24 @@ export default function Stickers() {
             {view === "todo" ? `${orders.length} order(s), ${totalPending} sticker(s) to print` : `${orders.length} order(s)`}
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading} data-testid="stickers-refresh">
-          <RefreshCw className={`w-4 h-4 mr-1 ${loading ? "animate-spin" : ""}`} /> Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {perm === "default" && (
+            <Button size="sm" onClick={enableAlerts} data-testid="stickers-alerts-on">
+              <Bell className="w-4 h-4 mr-1" /> Turn on Chrome alerts
+            </Button>
+          )}
+          {perm === "granted" && (
+            <span className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1"><Bell className="w-3.5 h-3.5" /> Alerts on</span>
+          )}
+          {perm === "denied" && (
+            <span className="text-xs text-muted-foreground flex items-center gap-1" title="Click the lock icon next to the address and allow Notifications">
+              <BellOff className="w-3.5 h-3.5" /> Alerts blocked in Chrome
+            </span>
+          )}
+          <Button variant="outline" size="sm" onClick={load} disabled={loading} data-testid="stickers-refresh">
+            <RefreshCw className={`w-4 h-4 mr-1 ${loading ? "animate-spin" : ""}`} /> Refresh
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">

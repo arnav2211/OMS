@@ -4502,8 +4502,10 @@ async def media_orders(view: str = "todo", source: str = "all", q: str = "", use
     open_only = view == "todo"
     out = []
     flt = {"created_at": {"$gte": since}}
+    # once an order is packed the sticker can no longer go on, so the queue stops at packing
+    closed = ["packed", "dispatched", "cancelled"]
     if open_only:
-        flt["status"] = {"$nin": ["dispatched", "cancelled"]}
+        flt["status"] = {"$nin": closed}
     if source in ("all", "oms"):
         proj = {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "created_at": 1, "status": 1, "items": 1,
                 "free_samples": 1, "stickers": 1, "remark": 1, "website_order": 1}
@@ -4513,7 +4515,7 @@ async def media_orders(view: str = "todo", source: str = "all", q: str = "", use
                         "website": bool(o.get("website_order")), "lines": _sticker_lines(o, "oms")})
     if source in ("all", "amazon"):
         aflt = dict(flt)
-        aflt["status"] = {"$nin": ["dispatched", "cancelled"]} if open_only else {"$ne": "cancelled"}
+        aflt["status"] = {"$nin": closed} if open_only else {"$ne": "cancelled"}
         proj = {"_id": 0, "id": 1, "am_order_number": 1, "amazon_order_id": 1, "customer_name": 1, "created_at": 1,
                 "status": 1, "items": 1, "stickers": 1, "latest_ship_date": 1}
         async for o in db.amazon_orders.find(aflt, proj).sort("created_at", -1).limit(800):
