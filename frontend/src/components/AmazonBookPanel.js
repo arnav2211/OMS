@@ -116,7 +116,7 @@ export default function AmazonBookPanel() {
       const res = await api.post("/amazon/quote", { order_id: order.id, payment_mode: useMode });
       if (!res.data.ok) {
         toast.error(res.data.message || "No rates available");
-        if (res.data.detail) toast.error(res.data.detail, { duration: 7000 });
+        if (res.data.detail) toast.error(res.data.detail, { duration: 15000 });
         return;
       }
       setSelectedRate(res.data.rates[0] || null);

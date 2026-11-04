@@ -11862,8 +11862,11 @@ async def shipments_labels(ids: str, token: str = "", user=None):
 
 
 @api_router.get("/rates/compare")
-async def rates_compare(pincode: str, weight: float = 1.0, cod: bool = False, user=Depends(get_current_user)):
-    """Every courier for one pincode and weight, cheapest first, on a GST-inclusive basis."""
+async def rates_compare(pincode: str, weight: float = 1.0, cod: bool = False, order_id: Optional[str] = None,
+                        user=Depends(get_current_user)):
+    """Every courier for one pincode and weight, cheapest first, on a GST-inclusive basis.
+    With order_id, Amazon is also asked about the order's real address: it reads the address text,
+    not just the pincode, and can refuse an address in a pincode it otherwise serves."""
     pincode = (pincode or "").strip()
     if not pincode.isdigit() or len(pincode) != 6:
         raise HTTPException(status_code=400, detail="Enter a 6-digit pincode")
@@ -11882,6 +11885,20 @@ async def rates_compare(pincode: str, weight: float = 1.0, cod: bool = False, us
             options.append({"carrier": name, "service": "", "serviceable": None, "note": "Could not check right now"})
         else:
             options += g
+    if order_id and user["role"] in ["admin", "dispatch", "packaging", "accounts"] and any(
+            o["carrier"] == "Amazon Shipping" and o.get("serviceable") for o in options):
+        try:
+            q = await amazon_quote_order(AmazonBookRequest(order_id=order_id, payment_mode="cod" if cod else "prepaid"), user=user)
+        except HTTPException:
+            q = {"ok": True}
+        except Exception as e:
+            logging.warning(f"compare/amazon address check: {e}")
+            q = {"ok": True}
+        if not q.get("ok") and "not serve" in str(q.get("message") or ""):
+            for o in options:
+                if o["carrier"] == "Amazon Shipping":
+                    o["serviceable"], o["note"] = False, AMAZON_ADDRESS_REFUSED
+                    o.pop("total", None)
     if cod:
         for o in options:
             if o["carrier"] in ("DTDC", "Anjani") and o.get("serviceable"):
@@ -12115,6 +12132,11 @@ def _amazon_rates_body(ship_to: dict, weight_kg: float, declared_value: float, r
     return body
 
 
+AMAZON_ADDRESS_REFUSED = ("Amazon serves this pincode but not this exact address: it reads the address text and "
+                          "matched it to a place it does not deliver (often a named landmark such as an airport). "
+                          "Reword the landmark in the shipping address, or use another courier.")
+
+
 class AmazonBookRequest(BaseModel):
     order_id: str
     service_id: Optional[str] = None   # which quoted service to buy; cheapest if omitted
@@ -12234,6 +12256,8 @@ async def amazon_quote_order(req: AmazonBookRequest, user=Depends(get_current_us
             rs = (ir.get("ineligibilityReasons") or [{}])[0]
             reason = rs.get("message") or rs.get("code") or ""
             break
+        if "A-306" in reason or not reason:
+            reason = AMAZON_ADDRESS_REFUSED + (f" ({reason})" if reason else "")
         return {"ok": False, "message": "Amazon Shipping does not serve this address.", "detail": reason}
     return {"ok": True, "rates": rates, "request_token": payload.get("requestToken"),
             "cod_amount": cod, "is_cod": bool(cod), "box_cm": _amazon_box(order),
@@ -12302,7 +12326,7 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         payload = rr.json().get("payload") or rr.json()
         rates = payload.get("rates") or []
         if not rates:
-            raise HTTPException(status_code=400, detail="Amazon Shipping does not serve this address")
+            raise HTTPException(status_code=400, detail=AMAZON_ADDRESS_REFUSED)
         chosen = None
         if req.service_id:
             chosen = next((x for x in rates if x.get("serviceId") == req.service_id or x.get("rateId") == req.service_id), None)

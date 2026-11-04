@@ -342,7 +342,7 @@ export default function BookShipments() {
     if (!/^\d{6}$/.test(String(pin || ""))) return toast.error("This order has no valid pincode");
     setBusy(p => ({ ...p, [o.id]: true }));
     try {
-      const res = await api.get("/rates/compare", { params: { pincode: pin, weight: parseFloat(o.weight_kg), cod: !!o.is_cod } });
+      const res = await api.get("/rates/compare", { params: { pincode: pin, weight: parseFloat(o.weight_kg), cod: !!o.is_cod, order_id: o.id } });
       setCheapest(p => ({ ...p, [o.id]: (res.data.options || []).filter(x => x.serviceable && x.total).slice(0, 4) }));
     } catch (err) {
       toast.error(err.response?.data?.detail || "Could not compare right now");
