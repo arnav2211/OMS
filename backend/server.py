@@ -10382,6 +10382,8 @@ async def _xb_call(method: str, path: str, **kw) -> tuple:
         except Exception:
             return False, None, f"HTTP {r.status_code}: {r.text[:200]}"
         msg = j.get("message") or ""
+        if not j.get("status") and not msg and isinstance(j.get("data"), str):
+            msg = j["data"]                 # errors come back in "data", e.g. "Destination Pincode Not Servicable."
         if attempt == 0 and re.search(r"token", str(msg), re.I) and not j.get("status"):
             continue                        # expired token: log in again once
         if isinstance(msg, (list, dict)):
@@ -10398,7 +10400,8 @@ def _xb_require(user):
 
 
 async def _xb_rates(pincode: str, weight_kg: float, cod_amount: float, value: float, box: Optional[dict] = None) -> list:
-    box = box or {"length": 15, "width": 15, "height": 15}
+    # XpressBees bills volumetric weight, so an invented big box would inflate the quote
+    box = box or _amazon_box({"packaging": {"weight_kg": weight_kg}})
     body = {"origin": XPRESSBEES["pickup_pincode"], "destination": str(pincode),
             "payment_type": "cod" if cod_amount > 0 else "prepaid",
             "order_amount": str(round(max(1.0, cod_amount if cod_amount > 0 else value), 2)),
@@ -10420,7 +10423,7 @@ async def _xb_rates(pincode: str, weight_kg: float, cod_amount: float, value: fl
         out.append({"courier_id": str(x.get("id")), "name": (x.get("name") or "XpressBees").strip(), "rate": total,
                     "freight": x.get("freight_charges"), "cod_charges": x.get("cod_charges"),
                     "min_weight": x.get("min_weight") or "", "chargeable_weight": x.get("chargeable_weight") or "",
-                    "etd": "", "auto_pickup": True})
+                    "etd": x.get("edd") or "", "days": x.get("eddDays"), "auto_pickup": True})
     out.sort(key=lambda c: c["rate"])
     return out
 
@@ -10859,7 +10862,7 @@ async def _compare_xpressbees(pincode: str, weight: float, cod: bool) -> list:
         if not rows:
             return [{"carrier": "XpressBees", "service": "", "serviceable": False, "note": "XpressBees does not serve this pincode"}]
         return [{"carrier": "XpressBees", "service": x["name"], "serviceable": True, "total": x["rate"],
-                 "gst_note": "as quoted by XpressBees", "eta": "", "pickup": "auto pickup",
+                 "gst_note": "as quoted by XpressBees", "eta": x.get("etd") or "", "pickup": "auto pickup",
                  "note": f"min {x['min_weight']} g" if x.get("min_weight") else ""} for x in rows[:6]]
     except HTTPException as e:
         return [{"carrier": "XpressBees", "service": "", "serviceable": None, "note": str(e.detail)[:100]}]
