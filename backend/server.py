@@ -720,12 +720,12 @@ PASSWORD_MAX_AGE_DAYS = 365
 
 
 def check_password_policy(password: str):
-    """12+ characters with upper and lower case, a digit and a special character.
+    """6+ characters with upper and lower case, a digit and a special character.
     Applied whenever a password is set or changed; existing logins are not interrupted."""
     pw = password or ""
     problems = []
-    if len(pw) < 12:
-        problems.append("at least 12 characters")
+    if len(pw) < 6:
+        problems.append("at least 6 characters")
     if not re.search(r"[a-z]", pw) or not re.search(r"[A-Z]", pw):
         problems.append("upper and lower case letters")
     if not re.search(r"\d", pw):
