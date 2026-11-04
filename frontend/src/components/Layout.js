@@ -11,7 +11,7 @@ import {
   Package, Truck, Users, BarChart3, ClipboardList, Settings,
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
   FileText, TrendingUp, Bell, ShoppingBag, Megaphone,
-  ChevronDown, Layers, Navigation, IndianRupee, FileCheck, Rocket, Timer, Activity, CalendarDays,
+  ChevronDown, Layers, Navigation, IndianRupee, FileCheck, Rocket, Timer, Activity, CalendarDays, Tag,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -73,6 +73,7 @@ const NAV_ITEMS = {
     { label: "Accounts", icon: BarChart3, path: "/accounts" },
     { label: "Compare Couriers", icon: Layers, path: "/compare-rates" },
     { label: "Book Shipments", icon: Rocket, path: "/book-shipments" },
+    { label: "Stickers", icon: Tag, path: "/stickers" },
     { label: "Item Analytics", icon: TrendingUp, path: "/item-analytics" },
     { label: "Users", icon: Settings, path: "/users" },
     { label: "Field Tracking", icon: Navigation, path: "/tracking" },
@@ -80,6 +81,9 @@ const NAV_ITEMS = {
     { label: "Security Log", icon: Settings, path: "/security-log" },
     { label: "Courier Expenses", icon: IndianRupee, path: "/courier-expenses" },
     { label: "DTDC Bill Check", icon: FileCheck, path: "/dtdc-bill-check" },
+  ],
+  media: [
+    { label: "Stickers", icon: Tag, path: "/" },
   ],
   accounts: [
     { label: "Dashboard", icon: Home, path: "/" },

@@ -755,6 +755,11 @@ FIELD_EXECUTIVE_ALLOWED_PREFIXES = (
     "/api/auth/",
     "/api/location/",
 )
+# The media (sticker) team sees only its sticker queue.
+MEDIA_ALLOWED_PREFIXES = (
+    "/api/auth/",
+    "/api/media/",
+)
 
 async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -768,6 +773,9 @@ async def get_current_user(request: Request, credentials: HTTPAuthorizationCrede
     if user.get("role") == "field_executive":
         path = request.url.path
         if not any(path.startswith(p) for p in FIELD_EXECUTIVE_ALLOWED_PREFIXES):
+            raise HTTPException(status_code=403, detail="Not authorized for this resource")
+    if user.get("role") == "media":
+        if not any(request.url.path.startswith(p) for p in MEDIA_ALLOWED_PREFIXES):
             raise HTTPException(status_code=403, detail="Not authorized for this resource")
     return user
 
@@ -915,7 +923,7 @@ async def get_me(user=Depends(get_current_user)):
 # User Management (Admin)
 @api_router.post("/users")
 async def create_user(req: UserCreate, admin=Depends(require_admin)):
-    if req.role not in ["admin", "telecaller", "packaging", "dispatch", "accounts", "field_executive"]:
+    if req.role not in ["admin", "telecaller", "packaging", "dispatch", "accounts", "field_executive", "media"]:
         raise HTTPException(status_code=400, detail="Invalid role")
     existing = await db.users.find_one({"username": req.username})
     if existing:
@@ -950,6 +958,8 @@ async def update_user(user_id: str, req: UserUpdate, admin=Depends(require_admin
     if req.name is not None:
         update["name"] = req.name
     if req.role is not None:
+        if req.role not in ["admin", "telecaller", "packaging", "dispatch", "accounts", "field_executive", "media"]:
+            raise HTTPException(status_code=400, detail="Invalid role")
         update["role"] = req.role
     if req.password is not None:
         check_password_policy(req.password)
@@ -4451,6 +4461,117 @@ async def leave_my(user=Depends(get_current_user)):
     att = await _crm_attendance([crm_user["id"]])
     return {"linked": True, "crm_name": crm_user["name"], "leaves": await _crm_my_leaves(crm_user["id"]),
             "attendance": att[crm_user["id"]]}
+
+
+# Stickers (media team)
+# Each product line of an order carries a sticker state: printed / not_required / pending (unset).
+# Stored on the order as stickers.<key> = {status, product, by, at}; the key is the line's position
+# ("i0", "i1" ... items, "s0" ... free samples) and the product name is kept so an edited order
+# whose line changed shows as pending again instead of inheriting the old mark.
+MEDIA_ROLES = ["admin", "media"]
+STICKER_STATES = ("printed", "not_required", "pending")
+
+
+def _sticker_lines(o: dict, source: str) -> list:
+    stk = o.get("stickers") or {}
+    lines = []
+    for prefix, arr in (("i", o.get("items") or []), ("s", o.get("free_samples") or [])):
+        for n, it in enumerate(arr):
+            if not isinstance(it, dict):
+                continue
+            name = (it.get("product_name") or it.get("name") or "").strip()
+            if not name:
+                continue
+            key = f"{prefix}{n}"
+            mark = stk.get(key) or {}
+            if mark.get("product") != name:
+                mark = {}
+            lines.append({"key": key, "product": name, "sample": prefix == "s",
+                          "qty": it.get("qty", it.get("quantity")), "unit": it.get("unit") or "",
+                          "sku": it.get("sku") or "",
+                          "note": (it.get("description") or it.get("formulation") or "") if source == "oms" else "",
+                          "status": mark.get("status") or "pending", "by": mark.get("by") or "", "at": mark.get("at") or ""})
+    return lines
+
+
+@api_router.get("/media/orders")
+async def media_orders(view: str = "todo", source: str = "all", q: str = "", user=Depends(get_current_user)):
+    if user["role"] not in MEDIA_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    since = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    open_only = view == "todo"
+    out = []
+    flt = {"created_at": {"$gte": since}}
+    if open_only:
+        flt["status"] = {"$nin": ["dispatched", "cancelled"]}
+    if source in ("all", "oms"):
+        proj = {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "created_at": 1, "status": 1, "items": 1,
+                "free_samples": 1, "stickers": 1, "remark": 1, "website_order": 1}
+        async for o in db.orders.find(flt, proj).sort("created_at", -1).limit(800):
+            out.append({"source": "oms", "id": o["id"], "order_number": o.get("order_number"), "customer_name": o.get("customer_name"),
+                        "created_at": o.get("created_at"), "status": o.get("status"), "remark": o.get("remark") or "",
+                        "website": bool(o.get("website_order")), "lines": _sticker_lines(o, "oms")})
+    if source in ("all", "amazon"):
+        aflt = dict(flt)
+        aflt["status"] = {"$nin": ["dispatched", "cancelled"]} if open_only else {"$ne": "cancelled"}
+        proj = {"_id": 0, "id": 1, "am_order_number": 1, "amazon_order_id": 1, "customer_name": 1, "created_at": 1,
+                "status": 1, "items": 1, "stickers": 1, "latest_ship_date": 1}
+        async for o in db.amazon_orders.find(aflt, proj).sort("created_at", -1).limit(800):
+            out.append({"source": "amazon", "id": o["id"], "order_number": o.get("am_order_number") or o.get("amazon_order_id"),
+                        "amazon_order_id": o.get("amazon_order_id"), "customer_name": o.get("customer_name"),
+                        "created_at": o.get("created_at"), "status": o.get("status"), "ship_by": o.get("latest_ship_date"),
+                        "lines": _sticker_lines(o, "amazon")})
+    for o in out:
+        o["pending"] = sum(1 for l in o["lines"] if l["status"] == "pending")
+    if view == "todo":
+        out = [o for o in out if o["pending"]]
+    elif view == "done":
+        out = [o for o in out if o["lines"] and not o["pending"]]
+    q = (q or "").strip().lower()
+    if q:
+        out = [o for o in out if q in str(o.get("order_number") or "").lower() or q in str(o.get("customer_name") or "").lower()
+               or q in str(o.get("amazon_order_id") or "").lower() or any(q in l["product"].lower() for l in o["lines"])]
+    out.sort(key=lambda o: o.get("created_at") or "", reverse=view != "todo")
+    return out
+
+
+class StickerMark(BaseModel):
+    keys: List[str] = []          # empty = every product line of the order
+    status: str
+
+
+@api_router.post("/media/orders/{source}/{order_id}/stickers")
+async def media_mark_stickers(source: str, order_id: str, req: StickerMark, user=Depends(get_current_user)):
+    if user["role"] not in MEDIA_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if req.status not in STICKER_STATES:
+        raise HTTPException(status_code=400, detail="Invalid sticker status")
+    col = {"oms": db.orders, "amazon": db.amazon_orders}.get(source)
+    if col is None:
+        raise HTTPException(status_code=400, detail="Unknown order source")
+    o = await col.find_one({"id": order_id}, {"_id": 0, "items": 1, "free_samples": 1, "stickers": 1})
+    if not o:
+        raise HTTPException(status_code=404, detail="Order not found")
+    lines = {l["key"]: l for l in _sticker_lines(o, source)}
+    keys = req.keys or list(lines)
+    now = datetime.now(timezone.utc).isoformat()
+    upd_set, upd_unset = {}, {}
+    for k in keys:
+        if k not in lines:
+            raise HTTPException(status_code=400, detail="That product is no longer on the order - refresh")
+        if req.status == "pending":
+            upd_unset[f"stickers.{k}"] = ""
+        else:
+            upd_set[f"stickers.{k}"] = {"status": req.status, "product": lines[k]["product"], "by": user["name"], "at": now}
+    upd = {}
+    if upd_set:
+        upd["$set"] = upd_set
+    if upd_unset:
+        upd["$unset"] = upd_unset
+    if upd:
+        await col.update_one({"id": order_id}, upd)
+    o = await col.find_one({"id": order_id}, {"_id": 0, "items": 1, "free_samples": 1, "stickers": 1})
+    return {"ok": True, "lines": _sticker_lines(o, source)}
 
 
 # Courier Options

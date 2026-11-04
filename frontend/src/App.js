@@ -39,6 +39,7 @@ import MyLeave from "@/pages/MyLeave";
 import SecurityLog from "@/pages/admin/SecurityLog";
 import CourierCompare from "@/pages/CourierCompare";
 import BookShipments from "@/pages/BookShipments";
+import Stickers from "@/pages/media/Stickers";
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
@@ -59,6 +60,7 @@ function DashboardRouter() {
     case "packaging": return <PackagingDashboard />;
     case "dispatch": return <DispatchDashboard />;
     case "accounts": return <AccountsDashboard />;
+    case "media": return <Stickers />;
     default: return <TelecallerDashboard />;
   }
 }
@@ -82,6 +84,7 @@ function AppRoutes() {
       <Route path="/pi/:piId/convert" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><CreateOrder /></ProtectedRoute>} />
       <Route path="/proforma" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><PIBuilder /></ProtectedRoute>} />
       <Route path="/item-analytics" element={<ProtectedRoute allowedRoles={["admin"]}><ItemAnalytics /></ProtectedRoute>} />
+      <Route path="/stickers" element={<ProtectedRoute allowedRoles={["admin", "media"]}><Stickers /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute allowedRoles={["admin"]}><UserManagement /></ProtectedRoute>} />
       <Route path="/tracking" element={<ProtectedRoute allowedRoles={["admin"]}><FieldTracking /></ProtectedRoute>} />
       <Route path="/amazon-orders" element={<ProtectedRoute allowedRoles={["admin", "packaging"]}><AmazonOrders /></ProtectedRoute>} />
