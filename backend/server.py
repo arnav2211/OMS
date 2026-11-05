@@ -10050,14 +10050,17 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
     # A booking that failed after the push left that order sitting in Shipmozo; finish that one
     # instead of pushing a second copy (CS-1994, 29 Oct 2026: two orders in the panel).
     prev = order.get("shipmozo_pushed") or {}
+    adopted = None
     if prev.get("sm_order_id"):
         pok, pd, _m = await _sm_call("GET", f"/get-order-detail/{prev['sm_order_id']}")
         pst = str(_sm_find(pd, "order_status") or "").upper()
         if pok and "CANCEL" not in pst:
-            if _sm_find(pd, "awb_number"):
-                raise HTTPException(status_code=400, detail=f"Shipmozo already has a courier on {prev.get('reference')} "
-                                                            f"(Shipmozo order {prev['sm_order_id']}). Check the Shipmozo panel.")
             ref, sm_oid = prev["reference"], prev["sm_order_id"]
+            if _sm_find(pd, "awb_number"):
+                # an earlier attempt got the courier but failed before saving it (CS-2059): take that booking over
+                adopted = {"awb": str(_sm_find(pd, "awb_number")),
+                           "courier": _sm_find(pd, "courier_company") or "Shipmozo",
+                           "lr": _sm_find(pd, "lr_number") or ""}
             ok, data, msg = True, {"order_id": sm_oid}, ""
             push = None
     if push is not None:
@@ -10079,35 +10082,45 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
         "reference": ref, "sm_order_id": sm_oid, "at": datetime.now(timezone.utc).isoformat()}}})
 
     # rates for this pushed order, then the chosen (or cheapest) courier
-    try:
-        couriers = await _sm_rates(str(sa.get("pincode") or ""), weight, cod, value, box, order_ref=sm_oid)
-    except HTTPException:
-        couriers = await _sm_rates(str(sa.get("pincode") or ""), weight, cod, value, box)
-    if not couriers:
-        raise HTTPException(status_code=400, detail="No Shipmozo courier serves this address")
-    want = req.courier_id or ((order.get("shipmozo_courier") or {}).get("courier_id") if courier_name_is_sm(order) else None)
-    chosen = next((c for c in couriers if want and int(c["courier_id"]) == int(want)), None) or couriers[0]
-    ok, data, msg = await _sm_call("POST", "/assign-courier", json={"order_id": sm_oid, "courier_id": chosen["courier_id"]})
-    if not ok:
-        logging.warning(f"shipmozo assign {ref} ({sm_oid}): {msg}")
-        raise HTTPException(status_code=400, detail=f"Shipmozo could not assign {chosen['name']}: {msg}")
-    courier_label = (data or {}).get("courier") or chosen["name"]
-    awb, lr, pickup_note = _sm_find(data, "awb_number", "awb"), "", ""
-    if not chosen.get("auto_pickup"):
-        ok, pd, msg = await _sm_call("POST", "/schedule-pickup", json={"order_id": sm_oid})
-        awb = awb or _sm_find(pd, "awb_number", "awb")
-        lr = _sm_find(pd, "lr_number") or ""
-        pickup_note = "Pickup scheduled" if ok else f"Pickup not scheduled: {msg}"
-    if not awb:
-        for _ in range(4):           # the AWB can take a moment to appear
-            ok, od, msg = await _sm_call("GET", f"/get-order-detail/{sm_oid}")
-            awb = _sm_find(od, "awb_number", "awb")
-            if awb:
-                break
-            await asyncio.sleep(3)
-    if not awb:
-        raise HTTPException(status_code=400, detail=f"Shipmozo assigned {courier_label} but returned no AWB yet. "
-                                                    f"Check order {ref} in the Shipmozo panel before booking again.")
+    if adopted:
+        couriers = []
+        try:
+            couriers = await _sm_rates(str(sa.get("pincode") or ""), weight, cod, value, box, order_ref=sm_oid)
+        except HTTPException:
+            pass
+        name = str(adopted["courier"]).lower()
+        chosen = next((c for c in couriers if c["name"].lower() == name), None)             or {"courier_id": None, "name": adopted["courier"], "rate": None, "etd": "", "auto_pickup": True}
+        courier_label, awb, lr, pickup_note = adopted["courier"], adopted["awb"], adopted["lr"], "Taken over from the Shipmozo panel"
+    else:
+        try:
+            couriers = await _sm_rates(str(sa.get("pincode") or ""), weight, cod, value, box, order_ref=sm_oid)
+        except HTTPException:
+            couriers = await _sm_rates(str(sa.get("pincode") or ""), weight, cod, value, box)
+        if not couriers:
+            raise HTTPException(status_code=400, detail="No Shipmozo courier serves this address")
+        want = req.courier_id or ((order.get("shipmozo_courier") or {}).get("courier_id") if courier_name_is_sm(order) else None)
+        chosen = next((c for c in couriers if want and int(c["courier_id"]) == int(want)), None) or couriers[0]
+        ok, data, msg = await _sm_call("POST", "/assign-courier", json={"order_id": sm_oid, "courier_id": chosen["courier_id"]})
+        if not ok:
+            logging.warning(f"shipmozo assign {ref} ({sm_oid}): {msg}")
+            raise HTTPException(status_code=400, detail=f"Shipmozo could not assign {chosen['name']}: {msg}")
+        courier_label = (data or {}).get("courier") or chosen["name"]
+        awb, lr, pickup_note = _sm_find(data, "awb_number", "awb"), "", ""
+        if not chosen.get("auto_pickup"):
+            ok, pd, msg = await _sm_call("POST", "/schedule-pickup", json={"order_id": sm_oid})
+            awb = awb or _sm_find(pd, "awb_number", "awb")
+            lr = _sm_find(pd, "lr_number") or ""
+            pickup_note = "Pickup scheduled" if ok else f"Pickup not scheduled: {msg}"
+        if not awb:
+            for _ in range(4):           # the AWB can take a moment to appear
+                ok, od, msg = await _sm_call("GET", f"/get-order-detail/{sm_oid}")
+                awb = _sm_find(od, "awb_number", "awb")
+                if awb:
+                    break
+                await asyncio.sleep(3)
+        if not awb:
+            raise HTTPException(status_code=400, detail=f"Shipmozo assigned {courier_label} but returned no AWB yet. "
+                                                        f"Check order {ref} in the Shipmozo panel before booking again.")
     awb = str(awb)
     label_url = ""
     try:
