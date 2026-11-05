@@ -10586,6 +10586,13 @@ async def xpressbees_book(req: XpressbeesBookRequest, user=Depends(get_current_u
         await ship_orders.update_one({"id": req.order_id}, {"$inc": {"xpressbees_failed_attempts": 1}})
         if re.search(r"wallet|balance|recharge", msg or "", re.I):
             raise HTTPException(status_code=400, detail=f"XpressBees booking failed: wallet balance is too low. Recharge the XpressBees wallet and book again. ({msg})")
+        if not (msg or "").strip():
+            # XpressBees answers 404 with no message when the wallet cannot cover the shipment
+            # (its quotes are before 18% GST), e.g. CS-2059: Rs 195 + GST against a Rs 200 wallet.
+            need = round(float(chosen.get("rate") or 0) * 1.18, 2)
+            raise HTTPException(status_code=400, detail=(
+                f"XpressBees refused the booking without giving a reason. This usually means the wallet is too low: "
+                f"{chosen['name']} costs about Rs {need} with GST. Recharge the XpressBees wallet and book again."))
         raise HTTPException(status_code=400, detail=f"XpressBees refused the shipment: {msg}")
     data = data or {}
     awb = str(data.get("awb_number") or "")
