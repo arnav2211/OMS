@@ -9529,6 +9529,7 @@ async def shiprocket_book(req: ShiprocketBookRequest, user=Depends(get_current_u
         "billing_city": sa.get("city") or "", "billing_pincode": str(sa.get("pincode") or ""),
         "billing_state": sa.get("state") or "", "billing_country": "India",
         "billing_email": await _amazon_recipient_email(order), "billing_phone": phone,
+        "billing_alternate_phone": await _order_alt_phone(order, phone),
         "shipping_is_billing": True, "order_items": items,
         "payment_method": "COD" if cod > 0 else "Prepaid", "sub_total": round(value, 2),
         "length": box["length"], "breadth": box["width"], "height": box["height"], "weight": weight,
@@ -10038,7 +10039,7 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
     push = {
         "order_id": ref, "order_date": datetime.now(IST).strftime("%Y-%m-%d"), "order_type": "NON ESSENTIALS",
         "consignee_name": (sa.get("address_name") or order.get("customer_name") or "Customer").strip()[:60],
-        "consignee_phone": phone, "consignee_alternate_phone": "", "consignee_email": await _amazon_recipient_email(order),
+        "consignee_phone": phone, "consignee_alternate_phone": await _order_alt_phone(order, phone), "consignee_email": await _amazon_recipient_email(order),
         "consignee_address_line_one": line1, "consignee_address_line_two": line2 or "",
         "consignee_pin_code": str(sa.get("pincode") or ""), "consignee_city": sa.get("city") or "", "consignee_state": sa.get("state") or "",
         "product_detail": items, "payment_type": "COD" if cod > 0 else "PREPAID",
@@ -10583,7 +10584,8 @@ async def xpressbees_book(req: XpressbeesBookRequest, user=Depends(get_current_u
         "package_length": box["length"], "package_breadth": box["width"], "package_height": box["height"],
         "request_auto_pickup": "yes",
         "consignee": {"name": (sa.get("address_name") or order.get("customer_name") or "Customer").strip()[:60],
-                      "address": line1, "address_2": line2 or "", "city": sa.get("city") or "",
+                      "address": line1, "address_2": _with_alt_phone(line2 or "", await _order_alt_phone(order, phone), 200),
+                      "city": sa.get("city") or "",
                       "state": sa.get("state") or "", "pincode": str(sa.get("pincode") or ""), "phone": phone},
         "pickup": pickup, "order_items": items, "courier_id": str(chosen["courier_id"]),
     }
@@ -11356,7 +11358,8 @@ async def delhivery_book(req: DelhiveryBookRequest, user=Depends(get_current_use
     desc = (", ".join(items) or "Aroma products")[:120]
     shipment = {
         "name": (sa.get("address_name") or order.get("customer_name") or "Customer").strip()[:60],
-        "add": (line1 + (", " + line2 if line2 else ""))[:250], "pin": str(sa.get("pincode") or ""),
+        "add": _with_alt_phone((line1 + (", " + line2 if line2 else ""))[:250], await _order_alt_phone(order, phone)),
+        "pin": str(sa.get("pincode") or ""),
         "city": sa.get("city") or "", "state": sa.get("state") or "", "country": "India", "phone": phone,
         "order": ref, "payment_mode": "COD" if cod > 0 else "Prepaid",
         "return_pin": DELHIVERY["origin_pin"], "return_city": "Nagpur", "return_phone": COMPANY["mobile"],
@@ -11860,10 +11863,11 @@ async def delhivery_b2b_book(req: DelhiveryB2BBookRequest, user=Depends(get_curr
     items = [(it.get("product_name") or "").strip() for it in (order.get("items") or []) if it.get("product_name")]
     desc = (", ".join(items) or "Aroma products")[:120]
     name = (sa.get("address_name") or order.get("customer_name") or "Customer").strip()[:60]
+    alt = await _order_alt_phone(order, phone)
     form = {
         "lrn": "", "pickup_location_name": DLVB["pickup_name"],
         "payment_mode": "cod" if cod > 0 else "prepaid", "weight": str(weight_g),
-        "dropoff_location": json.dumps({"consignee_name": name, "address": (line1 + (", " + line2 if line2 else ""))[:250],
+        "dropoff_location": json.dumps({"consignee_name": name, "address": _with_alt_phone((line1 + (", " + line2 if line2 else ""))[:250], alt),
                                         "city": sa.get("city") or "", "state": sa.get("state") or "",
                                         "zip": str(sa.get("pincode") or ""), "phone": phone,
                                         "email": await _amazon_recipient_email(order) or ""}),
@@ -12541,6 +12545,24 @@ async def _order_phones(order: dict) -> list:
             if v and v not in out:
                 out.append(v)
     return out
+
+
+async def _order_alt_phone(order: dict, primary: str = "") -> str:
+    """The customer's second number, sent to every courier so a missed call has a fallback."""
+    for p in await _order_phones(order):
+        if p and p != primary:
+            return p
+    return ""
+
+
+def _with_alt_phone(text: str, alt: str, cap: int = 250) -> str:
+    """For couriers with no alternate-phone field: put it on the address so it prints on the label."""
+    if not alt or alt in (text or ""):
+        return text or ""
+    tag = f"Alt ph {alt}"
+    if not text:
+        return tag
+    return f"{text[:cap - len(tag) - 2]}, {tag}"      # trim the address, never the number
 
 
 async def _order_recipient_phone(order: dict) -> str:
