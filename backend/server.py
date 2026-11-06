@@ -9835,6 +9835,11 @@ async def _sm_rates(pincode: str, weight_kg: float, cod_amount: float, value: fl
     ok, data, msg = await _sm_call("POST", "/rate-calculator", json=body)
     if not ok:
         raise HTTPException(status_code=400, detail=f"Shipmozo rates: {msg or 'not available'}")
+    # Shipmozo quotes XpressBees for pincodes XpressBees does not serve, then refuses on assign
+    # (CS-2062 144001, CS-2070 501301). Ask XpressBees directly and drop those rows.
+    if any(re.match(r"\s*xpress\s*bees", x.get("name") or "", re.I) for x in data or []):
+        if await _xb_serves(str(pincode)) is False:
+            data = [x for x in data if not re.match(r"\s*xpress\s*bees", x.get("name") or "", re.I)]
     out = []
     for x in data or []:
         try:
@@ -10102,16 +10107,29 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
         want = req.courier_id or ((order.get("shipmozo_courier") or {}).get("courier_id") if courier_name_is_sm(order) else None)
         chosen = next((c for c in couriers if want and int(c["courier_id"]) == int(want)), None) or couriers[0]
         ok, data, msg = await _sm_call("POST", "/assign-courier", json={"order_id": sm_oid, "courier_id": chosen["courier_id"]})
+        first = chosen
+        # Shipmozo's rate list includes couriers that then refuse the pincode on assign
+        # (CS-2062: "XpressBees 0.5 Kg" for 144001). Take the next cheapest instead of stopping.
+        for alt in [c for c in couriers if c is not first][:4]:
+            if ok or not re.search(r"servic|pincode", msg or "", re.I):
+                break
+            logging.warning(f"shipmozo assign {ref} ({sm_oid}): {chosen['name']} refused ({msg}), trying {alt['name']}")
+            chosen = alt
+            ok, data, msg = await _sm_call("POST", "/assign-courier", json={"order_id": sm_oid, "courier_id": chosen["courier_id"]})
         if not ok:
             logging.warning(f"shipmozo assign {ref} ({sm_oid}): {msg}")
             raise HTTPException(status_code=400, detail=f"Shipmozo could not assign {chosen['name']}: {msg}")
+        if chosen is not first:
+            pickup_switch = f"{first['name']} does not serve this pincode, booked {chosen['name']} instead"
         courier_label = (data or {}).get("courier") or chosen["name"]
         awb, lr, pickup_note = _sm_find(data, "awb_number", "awb"), "", ""
+        if chosen is not first:
+            pickup_note = pickup_switch
         if not chosen.get("auto_pickup"):
             ok, pd, msg = await _sm_call("POST", "/schedule-pickup", json={"order_id": sm_oid})
             awb = awb or _sm_find(pd, "awb_number", "awb")
             lr = _sm_find(pd, "lr_number") or ""
-            pickup_note = "Pickup scheduled" if ok else f"Pickup not scheduled: {msg}"
+            pickup_note = ((pickup_note + ". ") if pickup_note else "") + ("Pickup scheduled" if ok else f"Pickup not scheduled: {msg}")
         if not awb:
             for _ in range(4):           # the AWB can take a moment to appear
                 ok, od, msg = await _sm_call("GET", f"/get-order-detail/{sm_oid}")
@@ -10356,6 +10374,9 @@ XPRESSBEES = {
 XB_BASE = "https://shipment.xpressbees.com/api"
 XB_ROLES = ["admin", "dispatch", "packaging", "accounts"]
 XB_COURIER_RE = {"$regex": r"^\s*xpress\s*bees", "$options": "i"}
+# Services XpressBees quotes but refuses to book over the API (404, no message). 12944
+# "Wallet Surface - 250gm" is always the cheapest quote, so it blocked every booking (CS-2059).
+XB_API_UNBOOKABLE = {s.strip() for s in os.environ.get("XPRESSBEES_UNBOOKABLE", "12944").split(",") if s.strip()}
 XB_SYNC_INTERVAL = int(os.environ.get("XPRESSBEES_SYNC_INTERVAL", "900"))
 _xb_token = {"value": "", "at": 0.0}
 
@@ -10432,7 +10453,7 @@ async def _xb_rates(pincode: str, weight_kg: float, cod_amount: float, value: fl
             total = round(float(x.get("total_charges") or 0), 2)
         except (TypeError, ValueError):
             continue
-        if total <= 0:
+        if total <= 0 or str(x.get("id")) in XB_API_UNBOOKABLE:
             continue
         out.append({"courier_id": str(x.get("id")), "name": (x.get("name") or "XpressBees").strip(), "rate": total,
                     "freight": x.get("freight_charges"), "cod_charges": x.get("cod_charges"),
@@ -10440,6 +10461,24 @@ async def _xb_rates(pincode: str, weight_kg: float, cod_amount: float, value: fl
                     "etd": x.get("edd") or "", "days": x.get("eddDays"), "auto_pickup": True})
     out.sort(key=lambda c: c["rate"])
     return out
+
+
+_XB_SERVES_CACHE: dict = {}
+
+
+async def _xb_serves(pincode: str):
+    """True/False from XpressBees itself (cached 6 h); None when it cannot be asked."""
+    if not _xb_configured():
+        return None
+    hit = _XB_SERVES_CACHE.get(pincode)
+    if hit and time.time() - hit[1] < 6 * 3600:
+        return hit[0]
+    try:
+        rows = await _xb_rates(pincode, 0.5, 0, 500)
+    except Exception:
+        return None
+    _XB_SERVES_CACHE[pincode] = (bool(rows), time.time())
+    return bool(rows)
 
 
 @api_router.get("/xpressbees/check/{pincode}")
@@ -10590,6 +10629,16 @@ async def xpressbees_book(req: XpressbeesBookRequest, user=Depends(get_current_u
         "pickup": pickup, "order_items": items, "courier_id": str(chosen["courier_id"]),
     }
     ok, data, msg = await _xb_call("POST", "/shipments2", json=body)
+    # a service XpressBees quoted but will not book (404, blank) or not for this pincode: try the next cheapest
+    tried = [chosen]
+    for alt in [c for c in couriers if c is not chosen][:3]:
+        if ok or not (not (msg or "").strip() or re.search(r"not servic", msg or "", re.I)):
+            break
+        logging.warning(f"xpressbees book {ref}: service {chosen['courier_id']} refused ({msg!r}), trying {alt['courier_id']}")
+        chosen = alt
+        tried.append(alt)
+        body["courier_id"] = str(alt["courier_id"])
+        ok, data, msg = await _xb_call("POST", "/shipments2", json=body)
     for _ in range(2):          # an earlier attempt already used this order number: take the next one
         if ok or not re.search(r"exist|duplicate|already", msg or "", re.I):
             break
