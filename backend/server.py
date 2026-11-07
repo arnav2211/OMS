@@ -7450,6 +7450,7 @@ async def dtdc_book(req: DtdcBookRequest, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("dtdc_shipment") or {}).get("reference_number") and not req.allow_rebook:
         raise HTTPException(status_code=400, detail="This order is already booked with DTDC")
+    _refuse_if_booked_elsewhere(order, "DTDC")
     if req.declared_value and float(req.declared_value) > 0:
         order["declared_value_override"] = float(req.declared_value)
     elif float(order.get("grand_total") or 0) <= 0:
@@ -9480,6 +9481,7 @@ async def shiprocket_book(req: ShiprocketBookRequest, user=Depends(get_current_u
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("shiprocket_shipment") or {}).get("awb"):
         raise HTTPException(status_code=400, detail="This order is already booked with Shiprocket")
+    _refuse_if_booked_elsewhere(order, "Shiprocket")
     if req.declared_value and float(req.declared_value) > 0:
         order["declared_value_override"] = float(req.declared_value)
     elif float(order.get("grand_total") or 0) <= 0:
@@ -10005,6 +10007,7 @@ async def shipmozo_book(req: ShipmozoBookRequest, user=Depends(get_current_user)
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("shipmozo_shipment") or {}).get("awb"):
         raise HTTPException(status_code=400, detail="This order is already booked with Shipmozo")
+    _refuse_if_booked_elsewhere(order, "Shipmozo")
     if req.declared_value and float(req.declared_value) > 0:
         order["declared_value_override"] = float(req.declared_value)
     elif float(order.get("grand_total") or 0) <= 0:
@@ -10573,6 +10576,7 @@ async def xpressbees_book(req: XpressbeesBookRequest, user=Depends(get_current_u
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("xpressbees_shipment") or {}).get("awb"):
         raise HTTPException(status_code=400, detail="This order is already booked with XpressBees")
+    _refuse_if_booked_elsewhere(order, "XpressBees")
     if req.declared_value and float(req.declared_value) > 0:
         order["declared_value_override"] = float(req.declared_value)
     elif float(order.get("grand_total") or 0) <= 0:
@@ -11377,6 +11381,7 @@ async def delhivery_book(req: DelhiveryBookRequest, user=Depends(get_current_use
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("delhivery_shipment") or {}).get("awb"):
         raise HTTPException(status_code=400, detail="This order is already booked with Delhivery")
+    _refuse_if_booked_elsewhere(order, "Delhivery")
     if req.declared_value and float(req.declared_value) > 0:
         order["declared_value_override"] = float(req.declared_value)
     elif float(order.get("grand_total") or 0) <= 0:
@@ -11882,6 +11887,7 @@ async def delhivery_b2b_book(req: DelhiveryB2BBookRequest, user=Depends(get_curr
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("delhivery_b2b_shipment") or {}).get("lrn"):
         raise HTTPException(status_code=400, detail="This order already has a Delhivery B2B LR")
+    _refuse_if_booked_elsewhere(order, "Delhivery B2B")
     if req.declared_value and float(req.declared_value) > 0:
         order["declared_value_override"] = float(req.declared_value)
     elif float(order.get("grand_total") or 0) <= 0:
@@ -12596,6 +12602,20 @@ async def _order_phones(order: dict) -> list:
     return out
 
 
+_LIVE_LABEL_KEYS = (("DTDC", "dtdc_shipment", "reference_number"), ("Amazon", "amazon_shipment", "shipment_id"),
+                    ("Shiprocket", "shiprocket_shipment", "awb"), ("Delhivery", "delhivery_shipment", "awb"),
+                    ("Delhivery B2B", "delhivery_b2b_shipment", "lrn"), ("Shipmozo", "shipmozo_shipment", "awb"),
+                    ("XpressBees", "xpressbees_shipment", "awb"))
+
+
+def _refuse_if_booked_elsewhere(order: dict, own: str):
+    """One live label per order: booking a second courier on top of the first paid twice (CS-2068)."""
+    for name, key, field in _LIVE_LABEL_KEYS:
+        if name != own and (order.get(key) or {}).get(field):
+            raise HTTPException(status_code=400, detail=f"This order is already booked with {name} "
+                                                        f"({(order.get(key) or {}).get(field)}). Cancel that label first.")
+
+
 async def _order_alt_phone(order: dict, primary: str = "") -> str:
     """The customer's second number, sent to every courier so a missed call has a fallback."""
     for p in await _order_phones(order):
@@ -12937,6 +12957,7 @@ async def amazon_book_order(req: AmazonBookRequest, user=Depends(get_current_use
         raise HTTPException(status_code=404, detail="Order not found")
     if (order.get("amazon_shipment") or {}).get("shipment_id"):
         raise HTTPException(status_code=400, detail="This order is already booked with Amazon")
+    _refuse_if_booked_elsewhere(order, "Amazon")
     if req.declared_value and float(req.declared_value) > 0:
         order["declared_value_override"] = float(req.declared_value)
     elif float(order.get("grand_total") or 0) <= 0:
