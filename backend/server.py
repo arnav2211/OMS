@@ -761,6 +761,18 @@ MEDIA_ALLOWED_PREFIXES = (
     "/api/media/",
     "/api/courier-status/",     # live tracking of the orders they work on
 )
+# ...plus a read-only view of all orders (as admin sees them), and dispatching.
+MEDIA_READ_PREFIXES = ("/api/orders", "/api/settings", "/api/packaging-staff", "/api/work/packed-by",
+                       "/api/courier-options", "/api/dtdc/track/")
+MEDIA_WRITE_RE = re.compile(r"^/api/(orders/[^/]+/dispatch|upload|scan-barcode)$")
+
+
+def _media_may(method: str, path: str) -> bool:
+    if any(path.startswith(p) for p in MEDIA_ALLOWED_PREFIXES):
+        return True
+    if method in ("GET", "HEAD") and any(path.startswith(p) for p in MEDIA_READ_PREFIXES):
+        return True
+    return method in ("PUT", "POST") and bool(MEDIA_WRITE_RE.match(path))
 
 async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -776,8 +788,8 @@ async def get_current_user(request: Request, credentials: HTTPAuthorizationCrede
         if not any(path.startswith(p) for p in FIELD_EXECUTIVE_ALLOWED_PREFIXES):
             raise HTTPException(status_code=403, detail="Not authorized for this resource")
     if user.get("role") == "media":
-        if not any(request.url.path.startswith(p) for p in MEDIA_ALLOWED_PREFIXES):
-            raise HTTPException(status_code=403, detail="Not authorized for this resource")
+        if not _media_may(request.method, request.url.path):
+            raise HTTPException(status_code=403, detail="View only: the media team can only dispatch orders")
     return user
 
 async def get_user_from_token_param(token: str):
@@ -1615,8 +1627,8 @@ async def list_orders(
         o["customer_gst_no"] = c.get("gst_no", "")
         o["customer_alias"] = c.get("alias", "")
 
-        # Hide telecaller info for non-admin
-        if user["role"] != "admin":
+        # Hide telecaller info for non-admin (the media team sees orders as admin does)
+        if user["role"] not in ("admin", "media"):
             if view_all:
                 o.pop("telecaller_name", None)
                 o.pop("telecaller_id", None)
@@ -1634,8 +1646,8 @@ async def list_orders(
             if not show_formulation_global:
                 for item in o.get("items", []):
                     item.pop("formulation", None)
-        elif user["role"] in ["dispatch", "accounts"]:
-            # Dispatch/Accounts: never see formulations
+        elif user["role"] in ["dispatch", "accounts", "media"]:
+            # Dispatch/Accounts/Media: never see formulations
             for item in o.get("items", []):
                 item.pop("formulation", None)
         # Admin: always sees formulations (no stripping)
@@ -1728,7 +1740,7 @@ async def get_order(order_id: str, user=Depends(get_current_user)):
     # Hide telecaller info for non-admin (keep telecaller_id for telecaller's own-order check)
     if user["role"] == "telecaller":
         order.pop("telecaller_name", None)
-    elif user["role"] != "admin":
+    elif user["role"] not in ("admin", "media"):
         order.pop("telecaller_name", None)
         order.pop("telecaller_id", None)
     # Formulation lock status - check BEFORE stripping formulations
@@ -1749,7 +1761,7 @@ async def get_order(order_id: str, user=Depends(get_current_user)):
             item.pop("formulation", None)
         for sample in order.get("free_samples", []):
             sample.pop("formulation", None)
-    elif user["role"] in ["dispatch", "accounts"]:
+    elif user["role"] in ["dispatch", "accounts", "media"]:
         for item in order.get("items", []):
             item.pop("formulation", None)
         for sample in order.get("free_samples", []):
@@ -2386,7 +2398,7 @@ async def restore_packaging_images(order_id: str, req: RestoreImagesRequest = Re
 # Dispatch
 @api_router.put("/orders/{order_id}/dispatch")
 async def update_dispatch(order_id: str, req: DispatchUpdate, user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "dispatch", "packaging"]:
+    if user["role"] not in ["admin", "dispatch", "packaging", "media"]:
         raise HTTPException(status_code=403, detail="Dispatch, packaging or admin only")
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
@@ -4621,6 +4633,11 @@ async def media_order_details(source: str, order_id: str, user=Depends(get_curre
     for k in list(o):
         if isinstance(o[k], dict):
             o[k].pop("label_base64", None)      # big label blobs, not needed to read the order
+    if user["role"] != "admin":                 # formulations stay with admin and packing
+        for arr in (o.get("items") or [], o.get("free_samples") or []):
+            for it in arr:
+                if isinstance(it, dict):
+                    it.pop("formulation", None)
     if source == "amazon":
         o["address"] = _pii_dec(o.get("address") or "") if isinstance(o.get("address"), str) else o.get("address")
         o["phone"] = _pii_dec(o.get("phone") or "") if isinstance(o.get("phone"), str) else o.get("phone")
@@ -4747,7 +4764,7 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
 
 @api_router.post("/scan-barcode")
 async def scan_barcode(file: UploadFile = File(...), user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "dispatch", "packaging"]:
+    if user["role"] not in ["admin", "dispatch", "packaging", "media"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     try:
         from pyzbar.pyzbar import decode as pyzbar_decode

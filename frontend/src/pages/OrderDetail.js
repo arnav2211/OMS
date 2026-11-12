@@ -118,7 +118,8 @@ export default function OrderDetail() {
   const canEditFormulation = user?.role === "admin" || (user?.role === "packaging" && formulationVisible);
   const showFormulations = user?.role === "admin" || (user?.role === "packaging" && formulationVisible);
   const canEditPackaging = user?.role === "admin" || (user?.role === "packaging" && !isDispatched);
-  const canEditDispatch = ["admin", "dispatch", "packaging"].includes(user?.role);
+  const canEditDispatch = ["admin", "dispatch", "packaging", "media"].includes(user?.role);
+  const isMedia = user?.role === "media";     // view only, except dispatching
   const canSharePI = ["admin", "telecaller"].includes(user?.role);
   const canShareImages = ["admin", "telecaller", "packaging"].includes(user?.role);
   // Telecaller can edit payment on own orders even after dispatch
@@ -598,7 +599,7 @@ export default function OrderDetail() {
           {isAdmin && (
             <Button variant="outline" size="sm" onClick={openEdit} data-testid="edit-order-btn"><Edit className="w-4 h-4 mr-1" /> Edit</Button>
           )}
-          {!isAdmin && (canEditOrder || canEditPackaging || canEditDispatch) && !isDispatched && (
+          {!isAdmin && !isMedia && (canEditOrder || canEditPackaging || canEditDispatch) && !isDispatched && (
             <Button variant="outline" size="sm" onClick={openEdit} data-testid="edit-order-btn"><Edit className="w-4 h-4 mr-1" /> Edit</Button>
           )}
           {canEditFormulation && <Button variant="outline" size="sm" onClick={openFormulation} data-testid="formulation-btn"><FileText className="w-4 h-4 mr-1" /> Formulation</Button>}
@@ -1193,7 +1194,7 @@ export default function OrderDetail() {
                   </button>
                 )}
               </div>
-              {["admin", "dispatch", "packaging"].includes(user?.role) && (order.status === "packed" || order.status === "dispatched") && (
+              {["admin", "dispatch", "packaging", "media"].includes(user?.role) && (order.status === "packed" || order.status === "dispatched") && (
                 <Button variant="outline" size="sm" onClick={openDispatch} data-testid="dispatch-order-btn">
                   <Truck className="w-4 h-4 mr-1" /> {order.status === "dispatched" ? "Edit Dispatch" : "Dispatch"}
                 </Button>

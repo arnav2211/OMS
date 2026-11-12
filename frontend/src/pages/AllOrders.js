@@ -412,7 +412,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
                     {user?.role === "accounts" && <TableHead className="text-xs uppercase whitespace-nowrap">GST</TableHead>}
                     {user?.role !== "accounts" && <TableHead className="text-xs uppercase whitespace-nowrap">Invoice</TableHead>}
                     {showPaymentCheck && <TableHead className="text-xs uppercase whitespace-nowrap">Check</TableHead>}
-                    {user?.role === "admin" && <TableHead className="text-xs uppercase whitespace-nowrap">Executive</TableHead>}
+                    {["admin", "media"].includes(user?.role) && <TableHead className="text-xs uppercase whitespace-nowrap">Executive</TableHead>}
                     <TableHead className="text-xs uppercase whitespace-nowrap">Date</TableHead>
                     <TableHead className="text-xs uppercase whitespace-nowrap">Shipping</TableHead>
                     {showSlip && <TableHead className="text-xs uppercase whitespace-nowrap">Slip Rcvd</TableHead>}
@@ -459,7 +459,7 @@ const [viewAll, setViewAll] = useState(sp.get("viewAll") === "true");
                             </Badge>
                           </TableCell>
                         )}
-                        {user?.role === "admin" && <TableCell className="text-sm whitespace-nowrap">{o.telecaller_name || "-"}</TableCell>}
+                        {["admin", "media"].includes(user?.role) && <TableCell className="text-sm whitespace-nowrap">{o.telecaller_name || "-"}</TableCell>}
                         <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{new Date(o.created_at).toLocaleDateString("en-IN")}</TableCell>
                         <TableCell className="text-sm whitespace-nowrap" data-testid={`shipping-method-${o.id}`}>
                           <div className="flex items-center gap-1.5">

@@ -84,6 +84,7 @@ const NAV_ITEMS = {
   ],
   media: [
     { label: "Stickers", icon: Tag, path: "/" },
+    { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
   ],
   accounts: [
     { label: "Dashboard", icon: Home, path: "/" },
