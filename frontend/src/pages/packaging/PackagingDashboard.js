@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import api from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import StickerUrgentToggle from "@/components/StickerUrgentToggle";
 import OrderWorkStrip from "@/components/OrderWorkStrip";
 import { compressImage } from "@/lib/compressImage";
 import { printPdfBlob } from "@/lib/printPdf";
@@ -345,6 +346,7 @@ export default function PackagingDashboard() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               Pack Order {selectedOrder?.order_number}
+              {selectedOrder && <StickerUrgentToggle source="oms" order={selectedOrder} />}
               {selectedOrder && formulationVisible && (
                 <Button variant="ghost" size="sm" onClick={() => loadFormulationHistory(selectedOrder.customer_id)} data-testid="view-formulation-history">
                   <History className="w-4 h-4 mr-1" /> History

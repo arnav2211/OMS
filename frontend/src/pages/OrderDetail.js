@@ -24,6 +24,7 @@ import { SlipScanner } from "@/components/SlipScanner";
 import { validateLrNumber, getTrackingUrl, extractPorterLink, isLrMandatory, COURIER_LR_PATTERNS, isOtherCourier, supportsLiveTracking } from "@/lib/courierTracking";
 import CourierSelect from "@/components/CourierSelect";
 import CourierStatusDialog from "@/components/CourierStatusDialog";
+import StickerUrgentToggle from "@/components/StickerUrgentToggle";
 import TallyFetchDialog from "@/components/TallyFetchDialog";
 import ExtraShipments from "@/components/ExtraShipments";
 
@@ -583,6 +584,7 @@ export default function OrderDetail() {
           </div>
         </div>
         <div className="flex gap-2">
+          <StickerUrgentToggle source="oms" order={order} />
           <Button variant="outline" size="sm" onClick={handlePrint} data-testid="print-order-btn"><Printer className="w-4 h-4 mr-1" /> Print</Button>
           {order.formulation_locked && <Badge variant="outline" className="text-amber-600 border-amber-300 text-xs"><Lock className="w-3 h-3 mr-1" />Formulation Locked</Badge>}
           {canSharePI && (

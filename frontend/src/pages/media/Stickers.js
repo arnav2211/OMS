@@ -5,7 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Search, RefreshCw, Check, Ban, RotateCcw, Copy, Bell, BellOff } from "lucide-react";
+import { Search, RefreshCw, Check, Ban, RotateCcw, Copy, Bell, BellOff, Truck, AlertTriangle, ExternalLink } from "lucide-react";
+import MediaOrderDetails from "@/components/MediaOrderDetails";
+import CourierStatusDialog from "@/components/CourierStatusDialog";
+import { SHIP_FILTERS, SHIP_BADGE, shipLabel } from "@/lib/mediaShipping";
+import { getTrackingUrl } from "@/lib/courierTracking";
 
 const VIEWS = [["todo", "To Print"], ["done", "Done"], ["all", "All"]];
 const SOURCES = [["all", "All"], ["oms", "OMS"], ["amazon", "Amazon"]];
@@ -52,6 +56,7 @@ export default function Stickers() {
   const [view, setView] = useState("todo");
   const [source, setSource] = useState("all");
   const [q, setQ] = useState("");
+  const [ship, setShip] = useState("all");
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
@@ -134,6 +139,8 @@ export default function Stickers() {
   };
 
   const totalPending = orders.reduce((n, o) => n + (o.pending || 0), 0);
+  const shown = ship === "all" ? orders : orders.filter((o) => (o.method || "") === ship);
+  const urgentCount = orders.filter((o) => o.urgent).length;
 
   return (
     <div className="space-y-4 max-w-5xl">
@@ -177,6 +184,13 @@ export default function Stickers() {
               className={`px-3 py-1.5 text-sm ${source === v ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>{label}</button>
           ))}
         </div>
+        <select value={ship} onChange={(e) => setShip(e.target.value)} data-testid="stickers-ship-filter"
+          className="h-9 rounded-md border bg-background px-2 text-sm">
+          {SHIP_FILTERS.map(([v, label]) => {
+            const n = v === "all" ? orders.length : orders.filter((o) => (o.method || "") === v).length;
+            return <option key={v} value={v}>{label} ({n})</option>;
+          })}
+        </select>
         <div className="relative flex-1 min-w-[200px]">
           <Search className="w-4 h-4 absolute left-2.5 top-2.5 text-muted-foreground" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Order no., customer or product"
@@ -184,14 +198,25 @@ export default function Stickers() {
         </div>
       </div>
 
-      {!loading && orders.length === 0 && (
+      {urgentCount > 0 && (
+        <div data-testid="stickers-urgent-alert"
+          className="w-full flex items-center gap-2 rounded-md border-2 border-red-500 bg-red-50 dark:bg-red-950/40 px-3 py-2 text-sm font-medium text-red-700 dark:text-red-300">
+          <AlertTriangle className="w-4 h-4" /> {urgentCount} order(s) marked urgent - they are at the top, do these first
+        </div>
+      )}
+
+      {!loading && shown.length === 0 && (
         <Card><CardContent className="py-10 text-center text-muted-foreground">
           {view === "todo" ? "Nothing to print right now." : "No orders found."}
         </CardContent></Card>
       )}
 
-      {orders.map((o) => (
-        <Card key={`${o.source}-${o.id}`} data-testid={`sticker-order-${o.order_number}`}>
+      {shown.map((o) => {
+        const urgent = !!o.urgent;
+        const trackUrl = o.docket ? getTrackingUrl(o.source === "amazon" ? "Amazon" : o.courier, o.docket) : null;
+        return (
+        <Card key={`${o.source}-${o.id}`} data-testid={`sticker-order-${o.order_number}`}
+          className={urgent ? "border-2 border-red-500 bg-red-50/60 dark:bg-red-950/30" : ""}>
           <CardContent className="p-4 space-y-3">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
@@ -203,6 +228,28 @@ export default function Stickers() {
                     {o.source === "amazon" ? "Amazon" : o.website ? "Website" : "OMS"}
                   </Badge>
                   <span className="text-xs text-muted-foreground capitalize">{o.status}</span>
+                  {urgent && (
+                    <Badge className="bg-red-600 text-white animate-pulse" data-testid="sticker-urgent-badge"
+                      title={o.urgent_by ? `Marked urgent by ${o.urgent_by}` : ""}>
+                      <AlertTriangle className="w-3 h-3 mr-1" /> URGENT{o.urgent_by ? ` · ${o.urgent_by}` : ""}
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2 mt-1 text-xs">
+                  <Badge className={SHIP_BADGE[o.method] || "bg-muted text-muted-foreground"} data-testid="sticker-ship-badge">
+                    <Truck className="w-3 h-3 mr-1" /> {shipLabel(o)}
+                  </Badge>
+                  {o.city && <span className="text-muted-foreground">{[o.city, o.state].filter(Boolean).join(", ")}</span>}
+                  {o.docket && (
+                    <span className="font-mono text-muted-foreground">
+                      {o.docket}
+                      {trackUrl && (
+                        <a href={trackUrl} target="_blank" rel="noreferrer" className="ml-1 inline-flex items-center text-primary" title="Open tracking">
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                    </span>
+                  )}
                 </div>
                 <div className="text-sm text-muted-foreground">
                   {o.customer_name || "-"} · {fmtDate(o.created_at)}
@@ -210,16 +257,22 @@ export default function Stickers() {
                 </div>
                 {o.remark && <div className="text-xs mt-1 text-red-700 dark:text-red-400">Remark: {o.remark}</div>}
               </div>
+              <div className="flex flex-wrap gap-1.5">
+                <MediaOrderDetails source={o.source} orderId={o.id} orderNumber={o.order_number} />
+                {o.source === "oms" && o.docket && (
+                  <CourierStatusDialog orderId={o.id} orderNumber={o.order_number} courier={o.courier} docket={o.docket} variant="button" />
+                )}
               {o.lines.length > 1 && (
-                <div className="flex gap-1.5">
+                <>
                   <Button size="sm" variant="outline" disabled={!!busy} onClick={() => mark(o, [], "printed")} data-testid="sticker-all-printed">
                     <Check className="w-4 h-4 mr-1" /> All printed
                   </Button>
                   <Button size="sm" variant="outline" disabled={!!busy} onClick={() => mark(o, [], "not_required")} data-testid="sticker-all-not-required">
                     <Ban className="w-4 h-4 mr-1" /> None needed
                   </Button>
-                </div>
+                </>
               )}
+              </div>
             </div>
 
             <div className="divide-y rounded-md border">
@@ -263,7 +316,8 @@ export default function Stickers() {
             </div>
           </CardContent>
         </Card>
-      ))}
+        );
+      })}
     </div>
   );
 }

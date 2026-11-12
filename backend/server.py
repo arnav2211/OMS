@@ -759,6 +759,7 @@ FIELD_EXECUTIVE_ALLOWED_PREFIXES = (
 MEDIA_ALLOWED_PREFIXES = (
     "/api/auth/",
     "/api/media/",
+    "/api/courier-status/",     # live tracking of the orders they work on
 )
 
 async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -4506,6 +4507,53 @@ def _sticker_lines(o: dict, source: str) -> list:
     return lines
 
 
+_MEDIA_AWB_KEYS = ("shiprocket_shipment", "shipmozo_shipment", "xpressbees_shipment", "delhivery_shipment")
+
+
+def _media_shipping(o: dict) -> dict:
+    """How the order goes out, and its docket once booked or dispatched."""
+    d = o.get("dispatch") or {}
+    method = (o.get("shipping_method") or "").strip()
+    courier = (d.get("courier_name") or o.get("courier_name") or "").strip()
+    docket = (d.get("lr_no") or "").strip()
+    if not docket:
+        for k in _MEDIA_AWB_KEYS:
+            if (o.get(k) or {}).get("awb"):
+                docket = o[k]["awb"]
+                break
+        docket = docket or (o.get("amazon_shipment") or {}).get("tracking_id")             or (o.get("dtdc_shipment") or {}).get("reference_number") or (o.get("delhivery_b2b_shipment") or {}).get("lrn") or ""
+    return {"method": method or ("courier" if courier else ""), "courier": courier,
+            "transporter": (d.get("transporter_name") or o.get("transporter_name") or "").strip(), "docket": str(docket or "")}
+
+
+def _media_urgent(o: dict) -> dict:
+    u = o.get("sticker_urgent") or {}
+    return {"urgent": bool(u.get("on")), "urgent_by": u.get("by") or "", "urgent_at": u.get("at") or ""}
+
+
+STICKER_URGENT_ROLES = ("admin", "telecaller", "packaging", "accounts")
+
+
+class StickerUrgentRequest(BaseModel):
+    urgent: bool
+
+
+@api_router.post("/sticker-urgent/{source}/{order_id}")
+async def set_sticker_urgent(source: str, order_id: str, req: StickerUrgentRequest, user=Depends(get_current_user)):
+    """Sales, packing or admin flag an order's stickers as urgent: it turns red and goes to the top for the media team."""
+    if user["role"] not in STICKER_URGENT_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    col = {"oms": db.orders, "amazon": db.amazon_orders}.get(source)
+    if col is None:
+        raise HTTPException(status_code=400, detail="Unknown order source")
+    o = await col.find_one({"id": order_id}, {"_id": 0, "id": 1, "telecaller_id": 1})
+    if not o:
+        raise HTTPException(status_code=404, detail="Order not found")
+    val = {"on": True, "by": user["name"], "at": datetime.now(timezone.utc).isoformat()} if req.urgent else None
+    await col.update_one({"id": order_id}, {"$set": {"sticker_urgent": val}} if val else {"$unset": {"sticker_urgent": ""}})
+    return {"ok": True, "sticker_urgent": val}
+
+
 @api_router.get("/media/orders")
 async def media_orders(view: str = "todo", source: str = "all", q: str = "", user=Depends(get_current_user)):
     if user["role"] not in MEDIA_ROLES:
@@ -4520,21 +4568,30 @@ async def media_orders(view: str = "todo", source: str = "all", q: str = "", use
         flt["status"] = {"$nin": closed}
     if source in ("all", "oms"):
         proj = {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "created_at": 1, "status": 1, "items": 1,
-                "free_samples": 1, "stickers": 1, "remark": 1, "website_order": 1}
+                "free_samples": 1, "stickers": 1, "remark": 1, "website_order": 1, "shipping_method": 1, "sticker_urgent": 1,
+                "courier_name": 1, "transporter_name": 1, "dispatch": 1, "shipping_address.city": 1,
+                "shipping_address.state": 1, **{f"{k}.awb": 1 for k in _MEDIA_AWB_KEYS},
+                "amazon_shipment.tracking_id": 1, "dtdc_shipment.reference_number": 1, "delhivery_b2b_shipment.lrn": 1}
         async for o in db.orders.find(flt, proj).sort("created_at", -1).limit(800):
             out.append({"source": "oms", "id": o["id"], "order_number": o.get("order_number"), "customer_name": o.get("customer_name"),
                         "created_at": o.get("created_at"), "status": o.get("status"), "remark": o.get("remark") or "",
-                        "website": bool(o.get("website_order")), "lines": _sticker_lines(o, "oms")})
+                        "website": bool(o.get("website_order")), "lines": _sticker_lines(o, "oms"),
+                        "city": (o.get("shipping_address") or {}).get("city") or "",
+                        "state": (o.get("shipping_address") or {}).get("state") or "", **_media_shipping(o), **_media_urgent(o)})
     if source in ("all", "amazon"):
         aflt = dict(flt)
         aflt["status"] = {"$nin": closed} if open_only else {"$ne": "cancelled"}
         proj = {"_id": 0, "id": 1, "am_order_number": 1, "amazon_order_id": 1, "customer_name": 1, "created_at": 1,
-                "status": 1, "items": 1, "stickers": 1, "latest_ship_date": 1}
+                "status": 1, "items": 1, "stickers": 1, "latest_ship_date": 1, "ship_type": 1, "shipping_method": 1,
+                "courier_name": 1, "dispatch": 1, "sticker_urgent": 1}
         async for o in db.amazon_orders.find(aflt, proj).sort("created_at", -1).limit(800):
+            ship = _media_shipping(o)
+            if not ship["courier"] and not o.get("shipping_method"):
+                ship.update(method="courier", courier="Amazon " + ("Easy Ship" if str(o.get("ship_type") or "").lower() != "self_ship" else "self-ship"))
             out.append({"source": "amazon", "id": o["id"], "order_number": o.get("am_order_number") or o.get("amazon_order_id"),
                         "amazon_order_id": o.get("amazon_order_id"), "customer_name": o.get("customer_name"),
                         "created_at": o.get("created_at"), "status": o.get("status"), "ship_by": o.get("latest_ship_date"),
-                        "lines": _sticker_lines(o, "amazon")})
+                        "lines": _sticker_lines(o, "amazon"), **ship, **_media_urgent(o)})
     for o in out:
         o["pending"] = sum(1 for l in o["lines"] if l["status"] == "pending")
     if view == "todo":
@@ -4546,7 +4603,29 @@ async def media_orders(view: str = "todo", source: str = "all", q: str = "", use
         out = [o for o in out if q in str(o.get("order_number") or "").lower() or q in str(o.get("customer_name") or "").lower()
                or q in str(o.get("amazon_order_id") or "").lower() or any(q in l["product"].lower() for l in o["lines"])]
     out.sort(key=lambda o: o.get("created_at") or "", reverse=view != "todo")
+    out.sort(key=lambda o: not o.get("urgent"))      # marked urgent by sales / packing: top of the list
     return out
+
+
+@api_router.get("/media/orders/{source}/{order_id}/details")
+async def media_order_details(source: str, order_id: str, user=Depends(get_current_user)):
+    """The whole order, read-only, for the media team (they cannot open /orders)."""
+    if user["role"] not in MEDIA_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    col = {"oms": db.orders, "amazon": db.amazon_orders}.get(source)
+    if col is None:
+        raise HTTPException(status_code=400, detail="Unknown order source")
+    o = await col.find_one({"id": order_id}, {"_id": 0})
+    if not o:
+        raise HTTPException(status_code=404, detail="Order not found")
+    for k in list(o):
+        if isinstance(o[k], dict):
+            o[k].pop("label_base64", None)      # big label blobs, not needed to read the order
+    if source == "amazon":
+        o["address"] = _pii_dec(o.get("address") or "") if isinstance(o.get("address"), str) else o.get("address")
+        o["phone"] = _pii_dec(o.get("phone") or "") if isinstance(o.get("phone"), str) else o.get("phone")
+    o.update(_media_shipping(o))
+    return o
 
 
 class StickerMark(BaseModel):

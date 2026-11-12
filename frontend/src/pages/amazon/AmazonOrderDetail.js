@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import api from "@/lib/api";
 import { compressImage } from "@/lib/compressImage";
 import { useAuth } from "@/contexts/AuthContext";
+import StickerUrgentToggle from "@/components/StickerUrgentToggle";
 import OrderWorkStrip from "@/components/OrderWorkStrip";
 import ShiprocketCarrierPick from "@/components/ShiprocketCarrierPick";
 import { toast } from "sonner";
@@ -142,6 +143,7 @@ export default function AmazonOrderDetail() {
           <Badge variant="outline" className={`capitalize ${STATUS_BADGE[order.status]}`}>{order.status}</Badge>
         </div>
         <div className="flex gap-2">
+          <StickerUrgentToggle source="amazon" order={order} />
           {canEditPackaging && !isDispatched && (
             <Button variant="outline" size="sm" onClick={() => setShowPackaging(true)} data-testid="am-update-pkg-btn"><Package className="w-4 h-4 mr-1" /> Update Packaging</Button>
           )}
