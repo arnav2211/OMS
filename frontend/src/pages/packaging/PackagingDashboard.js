@@ -368,7 +368,14 @@ export default function PackagingDashboard() {
                 return (
                 <div key={idx} className="p-3 rounded-lg border space-y-2" data-testid={`pkg-item-${idx}`}>
                   <div className="flex items-center justify-between flex-wrap gap-1">
-                    <span className="font-medium text-sm">{item.product_name}</span>
+                    <span className="font-medium text-sm flex items-center gap-2">
+                      {item.image_url && (
+                        <a href={item.image_url} target="_blank" rel="noreferrer" title="Product picture from the website">
+                          <img src={item.image_url} alt="" loading="lazy" className="h-16 w-16 shrink-0 rounded border object-cover" data-testid={`pkg-item-img-${idx}`} />
+                        </a>
+                      )}
+                      {item.product_name}
+                    </span>
                     <span className="text-sm text-muted-foreground">
                       {item.qty} {item.unit} - {"\u20B9"}{item.total?.toFixed(2)}
                     </span>

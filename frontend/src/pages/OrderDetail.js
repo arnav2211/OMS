@@ -844,8 +844,17 @@ export default function OrderDetail() {
                   <TableRow key={i} data-testid={`order-item-row-${i}`}>
                     <TableCell className="text-sm">{i + 1}</TableCell>
                     <TableCell className="text-sm">
-                      {item.product_name}
-                      {item.description && <p className="text-xs text-muted-foreground">{item.description}</p>}
+                      <div className="flex items-center gap-2">
+                        {item.image_url && (
+                          <a href={item.image_url} target="_blank" rel="noreferrer" title="Product picture from the website">
+                            <img src={item.image_url} alt="" loading="lazy" className="h-12 w-12 shrink-0 rounded border object-cover" data-testid={`order-item-img-${i}`} />
+                          </a>
+                        )}
+                        <div>
+                          {item.product_name}
+                          {item.description && <p className="text-xs text-muted-foreground">{item.description}</p>}
+                        </div>
+                      </div>
                     </TableCell>
                     <TableCell className="text-sm text-right font-mono">{item.qty}</TableCell>
                     <TableCell className="text-sm">{item.unit}</TableCell>

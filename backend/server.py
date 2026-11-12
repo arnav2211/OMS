@@ -1446,6 +1446,13 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
     }
     await db.orders.insert_one(order_doc)
     created = await db.orders.find_one({"id": order_doc["id"]}, {"_id": 0})
+    if order_doc.get("shopify_order_id") and _shopify_configured():
+        async def _pics(o=created):
+            try:
+                await _shopify_item_images(o)
+            except Exception as e:
+                logging.warning(f"shopify item images {o.get('order_number')}: {e}")
+        asyncio.create_task(_pics())      # product pictures for the packing team, without delaying the CRM
     return created
 
 @api_router.get("/orders")
@@ -1920,6 +1927,11 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
                 # Fallback: match by product_name
                 if not new_item.get("formulation") and new_item.get("product_name") in existing_formulations:
                     new_item["formulation"] = existing_formulations[new_item["product_name"]]
+        # keep the website product picture on items that are still the same product
+        pics = {ei.get("product_name"): ei["image_url"] for ei in existing_items if ei.get("image_url")}
+        for new_item in new_items:
+            if isinstance(new_item, dict) and not new_item.get("image_url") and new_item.get("product_name") in pics:
+                new_item["image_url"] = pics[new_item["product_name"]]
         updates["items"] = new_items
 
     # CRITICAL: Preserve free_sample formulations
@@ -14005,6 +14017,63 @@ async def _shopify_fulfil_sweep():
         await _shopify_fulfill(o)
 
 
+_SHOPIFY_ITEM_IMAGES_Q = """query($id: ID!) { order(id: $id) { lineItems(first: 100) { nodes {
+    title variantTitle image { url } variant { image { url } product { featuredImage { url } } } } } } }"""
+
+
+def _norm_name(v) -> str:
+    return re.sub(r"\s+", " ", str(v or "")).strip().lower()
+
+
+async def _shopify_item_images(order: dict) -> int:
+    """Copy each website item's Shopify picture (the ordered variant, so the right colour) onto
+    the OMS item as image_url, for the packing team. Returns how many items got one."""
+    sid = str(order.get("shopify_order_id") or "").strip()
+    if not sid.isdigit():
+        return 0
+    d = await _shopify_gql(_SHOPIFY_ITEM_IMAGES_Q, {"id": f"gid://shopify/Order/{sid}"})
+    nodes = (((d or {}).get("order") or {}).get("lineItems") or {}).get("nodes") or []
+    lines = []
+    for n in nodes:
+        v = n.get("variant") or {}
+        url = ((n.get("image") or {}).get("url") or (v.get("image") or {}).get("url")
+               or ((v.get("product") or {}).get("featuredImage") or {}).get("url") or "")
+        if url:
+            lines.append({"title": _norm_name(n.get("title")), "variant": _norm_name(n.get("variantTitle")), "url": url, "used": False})
+    items = order.get("items") or []
+    sets, found = {}, 0
+    for i, it in enumerate(items):
+        name, unit = _norm_name(it.get("product_name")), _norm_name(it.get("unit"))
+        hit = (next((l for l in lines if not l["used"] and l["title"] == name and l["variant"] == unit), None)
+               or next((l for l in lines if not l["used"] and l["title"] == name), None)
+               or next((l for l in lines if not l["used"] and l["title"] and (l["title"] in name or name in l["title"])), None)
+               or (lines[i] if len(lines) == len(items) and not lines[i]["used"] else None))
+        if hit:
+            hit["used"] = True
+            found += 1
+            if it.get("image_url") != hit["url"]:
+                sets[f"items.{i}.image_url"] = hit["url"]
+    sets["shopify_images_at"] = datetime.now(timezone.utc).isoformat()
+    await db.orders.update_one({"id": order["id"]}, {"$set": sets})
+    return found
+
+
+async def _shopify_images_sweep():
+    """Website orders still being worked on whose items have no Shopify picture yet."""
+    if not _shopify_configured():
+        return
+    since = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
+    retry = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    q = {"website_order": True, "shopify_order_id": {"$nin": [None, ""]}, "created_at": {"$gte": since},
+         "status": {"$nin": ["cancelled"]}, "items": {"$elemMatch": {"image_url": {"$exists": False}}},
+         "$or": [{"shopify_images_at": {"$exists": False}}, {"shopify_images_at": {"$lt": retry}}]}
+    async for o in db.orders.find(q, {"_id": 0, "id": 1, "items": 1, "shopify_order_id": 1}).limit(30):
+        try:
+            await _shopify_item_images(o)
+        except Exception as e:
+            logging.warning(f"shopify item images {o.get('id')}: {e}")
+
+
 async def _shopify_fulfil_loop():
     await asyncio.sleep(90)
     while True:
@@ -14012,6 +14081,10 @@ async def _shopify_fulfil_loop():
             await _shopify_fulfil_sweep()
         except Exception as e:
             logging.error(f"shopify fulfil sweep: {e}")
+        try:
+            await _shopify_images_sweep()
+        except Exception as e:
+            logging.error(f"shopify images sweep: {e}")
         await asyncio.sleep(300)
 
 
