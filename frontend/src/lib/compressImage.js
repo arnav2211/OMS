@@ -54,9 +54,69 @@ function viaImage(file) {
   });
 }
 
+// Background-thread path: decode, scale and encode in a Web Worker so the page never freezes
+// on an old phone while a photo is being shrunk.
+const WORKER_SRC = `
+self.onmessage = async (e) => {
+  const { id, file, max, q } = e.data;
+  try {
+    const bmp = await createImageBitmap(file, { imageOrientation: "from-image", resizeWidth: max, resizeQuality: "medium" });
+    const r = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * r)), h = Math.max(1, Math.round(bmp.height * r));
+    const c = new OffscreenCanvas(w, h);
+    c.getContext("2d").drawImage(bmp, 0, 0, w, h);
+    bmp.close && bmp.close();
+    const blob = await c.convertToBlob({ type: "image/jpeg", quality: q });
+    self.postMessage({ id, blob });
+  } catch (err) {
+    self.postMessage({ id, blob: null });
+  }
+};`;
+
+let worker = null;
+let seq = 0;
+const waiting = new Map();
+
+function getWorker() {
+  if (worker !== null) return worker;
+  try {
+    if (typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined" || typeof createImageBitmap !== "function") {
+      worker = false;
+      return worker;
+    }
+    worker = new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" })));
+    worker.onmessage = (e) => {
+      const done = waiting.get(e.data.id);
+      if (done) { waiting.delete(e.data.id); done(e.data.blob); }
+    };
+    worker.onerror = () => { worker = false; waiting.forEach((d) => d(null)); waiting.clear(); };
+  } catch {
+    worker = false;
+  }
+  return worker;
+}
+
+function viaWorker(file) {
+  const w = getWorker();
+  if (!w) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const id = ++seq;
+    const timer = setTimeout(() => { waiting.delete(id); resolve(null); }, 20000);
+    waiting.set(id, (blob) => {
+      clearTimeout(timer);
+      resolve(blob ? new File([blob], (file.name || "photo").replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg", lastModified: Date.now() }) : null);
+    });
+    w.postMessage({ id, file, max: MAX_SIDE, q: QUALITY });
+  });
+}
+
 export async function compressImage(file) {
   if (!file?.type?.startsWith("image/")) return file;   // PDFs etc. go as they are
-  if (file.size < 150 * 1024) return file;              // already small
+  if (file.size < 150 * 1024) return file;              // already small (e.g. in-app camera shots)
+  try {
+    const out = await viaWorker(file);
+    if (out) return out;
+  } catch { /* fall back to the page thread */ }
   try {
     if (typeof createImageBitmap === "function") {
       const out = await viaBitmap(file);

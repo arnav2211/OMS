@@ -5,6 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import StickerUrgentToggle from "@/components/StickerUrgentToggle";
 import OrderWorkStrip from "@/components/OrderWorkStrip";
 import { uploadImage } from "@/lib/uploadImage";
+import QuickCamera from "@/components/QuickCamera";
 import { printPdfBlob } from "@/lib/printPdf";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -102,6 +103,7 @@ export default function PackagingDashboard() {
   const [numBoxes, setNumBoxes] = useState("1");
   const uploading = false;     // photos upload in the background now; nothing waits on them
   const [pendingCount, setPendingCount] = useState(0);
+  const [cameraTarget, setCameraTarget] = useState(null);   // in-app camera open for this photo slot
   const pendingRef = useRef(new Map());      // local preview URL -> upload promise
   const resolvedRef = useRef(new Map());     // local preview URL -> server URL (null if it failed)
   const fileInputRef = useRef(null);
@@ -176,8 +178,10 @@ export default function PackagingDashboard() {
   const handleUpload = (e) => {
     const files = Array.from(e.target.files || []);
     e.target.value = "";
-    if (!files.length) return;
-    const target = uploadTarget;
+    if (files.length) queueFiles(files, uploadTarget);
+  };
+
+  const queueFiles = (files, target) => {
     for (const file of files) {
       const local = URL.createObjectURL(file);
       addUrl(target, local);
@@ -211,8 +215,13 @@ export default function PackagingDashboard() {
     fileInputRef.current?.click();
   };
 
+  // In-app camera first (fast on old phones); the phone's own camera app only if it is unavailable.
   const triggerCameraUpload = (type, index) => {
     setUploadTarget({ type, index });
+    setCameraTarget({ type, index });
+  };
+  const cameraUnavailable = () => {
+    setCameraTarget(null);
     document.getElementById("pkg-camera-input")?.click();
   };
 
@@ -375,7 +384,10 @@ export default function PackagingDashboard() {
 
       {/* Detail Dialog */}
       <Dialog open={showDetail} onOpenChange={setShowDetail}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto"
+          onPointerDownOutside={(e) => { if (cameraTarget) e.preventDefault(); }}
+          onInteractOutside={(e) => { if (cameraTarget) e.preventDefault(); }}
+          onEscapeKeyDown={(e) => { if (cameraTarget) { e.preventDefault(); setCameraTarget(null); } }}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               Pack Order {selectedOrder?.order_number}
@@ -387,6 +399,9 @@ export default function PackagingDashboard() {
               )}
             </DialogTitle>
           </DialogHeader>
+          <QuickCamera open={!!cameraTarget}
+            title={cameraTarget?.type === "packed_box" ? "Packed box" : cameraTarget?.type === "order" ? "Whole order" : "Item photo"}
+            onShot={(f) => queueFiles([f], cameraTarget)} onClose={() => setCameraTarget(null)} onUnavailable={cameraUnavailable} />
           <input type="file" ref={fileInputRef} className="hidden" multiple accept="image/*" onChange={handleUpload} />
           <input type="file" className="hidden" accept="image/*" capture="environment" onChange={handleUpload} ref={el => { if (el) el.dataset.camera = "true"; }} id="pkg-camera-input" />
 
