@@ -2023,6 +2023,8 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
                 "at": datetime.now(timezone.utc).isoformat(), "by": user["name"],
             }]
 
+    if "items" in updates or "free_samples" in updates:
+        _sticker_edit_diff(order, updates, user["name"])     # the media team sees what changed
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.orders.update_one({"id": order_id}, {"$set": updates})
     if result.matched_count == 0:
@@ -4497,6 +4499,59 @@ MEDIA_ROLES = ["admin", "media"]
 STICKER_STATES = ("printed", "not_required", "pending")
 
 
+def _sticker_qty(it: dict) -> str:
+    q = it.get("qty", it.get("quantity"))
+    try:
+        q = f"{float(q):g}"
+    except (TypeError, ValueError):
+        q = str(q or "")
+    return f"{q} {it.get('unit') or ''}".strip()
+
+
+def _sticker_edit_diff(order: dict, updates: dict, by: str) -> None:
+    """When an edit adds, removes or changes products/quantities, tell the media team: record what
+    changed, and send changed lines back to "to print" (unchanged lines keep their sticker status)."""
+    old_marks = order.get("stickers") or {}
+    new_marks, changes = {}, []
+    for prefix, field, label in (("i", "items", ""), ("s", "free_samples", "Free sample ")):
+        if field not in updates:
+            for n, _ in enumerate(order.get(field) or []):          # untouched list keeps its marks
+                if f"{prefix}{n}" in old_marks:
+                    new_marks[f"{prefix}{n}"] = old_marks[f"{prefix}{n}"]
+            continue
+        old = [(n, it) for n, it in enumerate(order.get(field) or []) if isinstance(it, dict)]
+        new = [(n, it) for n, it in enumerate(updates.get(field) or []) if isinstance(it, dict)]
+        name = lambda it: (it.get("product_name") or it.get("name") or "").strip()
+        used = set()
+        pending = []
+        for n, it in new:                                           # same product, same quantity: unchanged
+            hit = next((m for m, o in old if m not in used and name(o) == name(it)
+                        and _sticker_qty(o) == _sticker_qty(it)), None)
+            if hit is not None:
+                used.add(hit)
+                if f"{prefix}{hit}" in old_marks:
+                    new_marks[f"{prefix}{n}"] = old_marks[f"{prefix}{hit}"]
+            else:
+                pending.append((n, it))
+        for n, it in pending:                                       # same product, new quantity / unit
+            hit = next((m for m, o in old if m not in used and name(o) == name(it)), None)
+            if hit is not None:
+                used.add(hit)
+                changes.append(f"{label}{name(it)}: {_sticker_qty(dict(old)[hit])} -> {_sticker_qty(it)}")
+            elif name(it):
+                changes.append(f"Added {label.lower()}{name(it)} ({_sticker_qty(it)})")
+        for m, o in old:
+            if m not in used and name(o):
+                changes.append(f"Removed {label.lower()}{name(o)} ({_sticker_qty(o)})")
+    if not changes:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    entry = {"at": now, "by": by, "changes": changes, "seen": False}
+    updates["stickers"] = new_marks
+    updates["sticker_edit"] = entry
+    updates["sticker_edit_log"] = ((order.get("sticker_edit_log") or []) + [entry])[-20:]
+
+
 def _sticker_lines(o: dict, source: str) -> list:
     stk = o.get("stickers") or {}
     lines = []
@@ -4581,6 +4636,7 @@ async def media_orders(view: str = "todo", source: str = "all", q: str = "", use
     if source in ("all", "oms"):
         proj = {"_id": 0, "id": 1, "order_number": 1, "customer_name": 1, "created_at": 1, "status": 1, "items": 1,
                 "free_samples": 1, "stickers": 1, "remark": 1, "website_order": 1, "shipping_method": 1, "sticker_urgent": 1,
+                "sticker_edit": 1,
                 "courier_name": 1, "transporter_name": 1, "dispatch": 1, "shipping_address.city": 1,
                 "shipping_address.state": 1, **{f"{k}.awb": 1 for k in _MEDIA_AWB_KEYS},
                 "amazon_shipment.tracking_id": 1, "dtdc_shipment.reference_number": 1, "delhivery_b2b_shipment.lrn": 1}
@@ -4589,7 +4645,8 @@ async def media_orders(view: str = "todo", source: str = "all", q: str = "", use
                         "created_at": o.get("created_at"), "status": o.get("status"), "remark": o.get("remark") or "",
                         "website": bool(o.get("website_order")), "lines": _sticker_lines(o, "oms"),
                         "city": (o.get("shipping_address") or {}).get("city") or "",
-                        "state": (o.get("shipping_address") or {}).get("state") or "", **_media_shipping(o), **_media_urgent(o)})
+                        "state": (o.get("shipping_address") or {}).get("state") or "", **_media_shipping(o), **_media_urgent(o),
+                        "edit": (o.get("sticker_edit") if not (o.get("sticker_edit") or {}).get("seen") else None)})
     if source in ("all", "amazon"):
         aflt = dict(flt)
         aflt["status"] = {"$nin": closed} if open_only else {"$ne": "cancelled"}
@@ -4606,8 +4663,8 @@ async def media_orders(view: str = "todo", source: str = "all", q: str = "", use
                         "lines": _sticker_lines(o, "amazon"), **ship, **_media_urgent(o)})
     for o in out:
         o["pending"] = sum(1 for l in o["lines"] if l["status"] == "pending")
-    if view == "todo":
-        out = [o for o in out if o["pending"]]
+    if view == "todo":          # an unseen edit keeps the order here even if nothing is left to print
+        out = [o for o in out if o["pending"] or o.get("edit")]
     elif view == "done":
         out = [o for o in out if o["lines"] and not o["pending"]]
     q = (q or "").strip().lower()
@@ -4615,8 +4672,20 @@ async def media_orders(view: str = "todo", source: str = "all", q: str = "", use
         out = [o for o in out if q in str(o.get("order_number") or "").lower() or q in str(o.get("customer_name") or "").lower()
                or q in str(o.get("amazon_order_id") or "").lower() or any(q in l["product"].lower() for l in o["lines"])]
     out.sort(key=lambda o: o.get("created_at") or "", reverse=view != "todo")
-    out.sort(key=lambda o: not o.get("urgent"))      # marked urgent by sales / packing: top of the list
+    out.sort(key=lambda o: (not o.get("urgent"), not o.get("edit")))   # urgent first, then just-edited orders
     return out
+
+
+@api_router.post("/media/orders/{source}/{order_id}/edit-seen")
+async def media_edit_seen(source: str, order_id: str, user=Depends(get_current_user)):
+    if user["role"] not in MEDIA_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if source != "oms":
+        raise HTTPException(status_code=400, detail="Only OMS orders are edited")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.orders.update_one({"id": order_id, "sticker_edit": {"$exists": True}},
+                               {"$set": {"sticker_edit.seen": True, "sticker_edit.seen_by": user["name"], "sticker_edit.seen_at": now}})
+    return {"ok": True}
 
 
 @api_router.get("/media/orders/{source}/{order_id}/details")

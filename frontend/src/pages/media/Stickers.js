@@ -35,10 +35,18 @@ function writeSeen(ids) {
   try { localStorage.setItem(SEEN_KEY, JSON.stringify(ids)); } catch { /* private window */ }
 }
 
+// An edit gives the order a new key, so an edited order alerts again.
+const seenKey = (o) => `${o.source}:${o.id}${o.edit?.at ? `:${o.edit.at}` : ""}`;
+
 function chromeAlert(fresh) {
   if (!canNotify || Notification.permission !== "granted") return;
-  const title = fresh.length === 1 ? `New sticker to print: ${fresh[0].order_number}` : `${fresh.length} new orders need stickers`;
-  const body = fresh.slice(0, 3).map((o) => `${o.order_number} - ${o.lines.filter((l) => l.status === "pending").map((l) => l.product).join(", ")}`)
+  const edited = fresh.filter((o) => o.edit);
+  const title = fresh.length === 1
+    ? (edited.length ? `Order edited: ${fresh[0].order_number}` : `New sticker to print: ${fresh[0].order_number}`)
+    : `${fresh.length} orders need stickers${edited.length ? ` (${edited.length} edited)` : ""}`;
+  const body = fresh.slice(0, 3).map((o) => (o.edit
+    ? `${o.order_number} edited by ${o.edit.by}: ${o.edit.changes.join("; ")}`
+    : `${o.order_number} - ${o.lines.filter((l) => l.status === "pending").map((l) => l.product).join(", ")}`))
     .join("\n") + (fresh.length > 3 ? `\n+${fresh.length - 3} more` : "");
   try {
     const n = new Notification(title, { body: body.slice(0, 400), tag: "stickers-new", renotify: true, icon: "/favicon.ico" });
@@ -92,12 +100,15 @@ export default function Stickers() {
         const res = await api.get("/media/orders", { params: { view: "todo", source: "all" } });
         if (stop) return;
         const list = res.data || [];
-        const ids = list.map((o) => `${o.source}:${o.id}`);
+        const ids = list.map(seenKey);
         if (seenRef.current === null) seenRef.current = readSeen() || new Set(ids);
-        const fresh = list.filter((o) => !seenRef.current.has(`${o.source}:${o.id}`));
+        const fresh = list.filter((o) => !seenRef.current.has(seenKey(o)));
         if (fresh.length) {
           chromeAlert(fresh);
-          toast.info(fresh.length === 1 ? `New order for stickers: ${fresh[0].order_number}` : `${fresh.length} new orders for stickers`);
+          const ed = fresh.filter((o) => o.edit).length;
+          toast.info(fresh.length === 1
+            ? (ed ? `Order edited: ${fresh[0].order_number}` : `New order for stickers: ${fresh[0].order_number}`)
+            : `${fresh.length} orders for stickers${ed ? ` (${ed} edited)` : ""}`);
         }
         seenRef.current = new Set(ids);
         writeSeen(ids);
@@ -129,6 +140,19 @@ export default function Stickers() {
     } catch (e) {
       toast.error(e.response?.data?.detail || "Could not save");
       load();
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const editSeen = async (o) => {
+    setBusy(`seen:${o.id}`);
+    try {
+      await api.post(`/media/orders/${o.source}/${o.id}/edit-seen`);
+      setOrders((prev) => prev.map((x) => (x.id === o.id ? { ...x, edit: null } : x))
+        .filter((x) => view !== "todo" || x.pending || x.edit));
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Could not save");
     } finally {
       setBusy("");
     }
@@ -256,6 +280,22 @@ export default function Stickers() {
                   {o.ship_by ? ` · ship by ${fmtDate(o.ship_by)}` : ""}
                 </div>
                 {o.remark && <div className="text-xs mt-1 text-red-700 dark:text-red-400">Remark: {o.remark}</div>}
+                {o.edit && (
+                  <div className="mt-2 rounded-md border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/40 px-3 py-2 text-sm" data-testid="sticker-edit-box">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold text-amber-900 dark:text-amber-200">
+                        Order edited by {o.edit.by}, {fmtDate(o.edit.at)} {new Date(o.edit.at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                      <Button size="sm" variant="outline" disabled={!!busy} onClick={() => editSeen(o)} data-testid="sticker-edit-seen">
+                        <Check className="w-4 h-4 mr-1" /> Seen
+                      </Button>
+                    </div>
+                    <ul className="mt-1 list-disc pl-5 text-amber-900 dark:text-amber-200">
+                      {o.edit.changes.map((c, i) => <li key={i}>{c}</li>)}
+                    </ul>
+                    <div className="text-xs text-amber-800/80 dark:text-amber-300/80 mt-1">Changed lines are back to "To print".</div>
+                  </div>
+                )}
               </div>
               <div className="flex flex-wrap gap-1.5">
                 <MediaOrderDetails source={o.source} orderId={o.id} orderNumber={o.order_number} />
