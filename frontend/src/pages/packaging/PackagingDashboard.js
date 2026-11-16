@@ -4,7 +4,7 @@ import api from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import StickerUrgentToggle from "@/components/StickerUrgentToggle";
 import OrderWorkStrip from "@/components/OrderWorkStrip";
-import { compressImage } from "@/lib/compressImage";
+import { uploadImage } from "@/lib/uploadImage";
 import { printPdfBlob } from "@/lib/printPdf";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -100,7 +100,10 @@ export default function PackagingDashboard() {
   const [weightKg, setWeightKg] = useState("");
   const [loadedAt, setLoadedAt] = useState("");     // what version of the order this form was opened on
   const [numBoxes, setNumBoxes] = useState("1");
-  const [uploading, setUploading] = useState(false);
+  const uploading = false;     // photos upload in the background now; nothing waits on them
+  const [pendingCount, setPendingCount] = useState(0);
+  const pendingRef = useRef(new Map());      // local preview URL -> upload promise
+  const resolvedRef = useRef(new Map());     // local preview URL -> server URL (null if it failed)
   const fileInputRef = useRef(null);
   const [uploadTarget, setUploadTarget] = useState(null);
   const [formulationVisible, setFormulationVisible] = useState(false);
@@ -153,30 +156,55 @@ export default function PackagingDashboard() {
     }
   };
 
-  const handleUpload = async (e) => {
-    const files = e.target.files;
-    if (!files?.length) return;
-    setUploading(true);
-    const urls = [];
-    for (const file of files) {
-      const compressed = await compressImage(file);
-      const formData = new FormData();
-      formData.append("file", compressed);
-      try {
-        const res = await api.post("/upload", formData, { headers: { "Content-Type": "multipart/form-data" } });
-        urls.push(res.data.url);
-      } catch { toast.error("Upload failed"); }
-    }
-    if (uploadTarget?.type === "item") {
-      setItemImages((prev) => ({ ...prev, [uploadTarget.index]: [...(prev[uploadTarget.index] || []), ...urls] }));
-    } else if (uploadTarget?.type === "order") {
-      setOrderImages((prev) => [...prev, ...urls]);
-    } else if (uploadTarget?.type === "packed_box") {
-      setPackedBoxImages((prev) => [...prev, ...urls]);
-    }
-    setUploading(false);
-    e.target.value = "";
+  // Each photo shows at once (local preview) and uploads in the background, with retries,
+  // so the packer can keep taking photos and filling the form on a slow connection.
+  const mapAll = (fn) => {
+    setItemImages((prev) => Object.fromEntries(Object.entries(prev).map(([k, v]) => [k, fn(v)])));
+    setOrderImages((prev) => fn(prev));
+    setPackedBoxImages((prev) => fn(prev));
   };
+  const addUrl = (target, url) => {
+    if (target?.type === "item") {
+      setItemImages((prev) => ({ ...prev, [target.index]: [...(prev[target.index] || []), url] }));
+    } else if (target?.type === "order") {
+      setOrderImages((prev) => [...prev, url]);
+    } else if (target?.type === "packed_box") {
+      setPackedBoxImages((prev) => [...prev, url]);
+    }
+  };
+
+  const handleUpload = (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    const target = uploadTarget;
+    for (const file of files) {
+      const local = URL.createObjectURL(file);
+      addUrl(target, local);
+      const p = uploadImage(file)
+        .then((url) => {
+          resolvedRef.current.set(local, url);
+          mapAll((arr) => (arr || []).map((u) => (u === local ? url : u)));
+          setTimeout(() => URL.revokeObjectURL(local), 5000);
+          return url;
+        })
+        .catch(() => {
+          resolvedRef.current.set(local, null);
+          mapAll((arr) => (arr || []).filter((u) => u !== local));
+          toast.error("A photo could not upload - check the internet and add it again");
+          return null;
+        })
+        .finally(() => {
+          pendingRef.current.delete(local);
+          setPendingCount(pendingRef.current.size);
+        });
+      pendingRef.current.set(local, p);
+    }
+    setPendingCount(pendingRef.current.size);
+  };
+
+  const imgSrc = (u) => (String(u).startsWith("blob:") ? u : `${backendUrl}${u}`);
+  const isPending = (u) => String(u).startsWith("blob:");
 
   const triggerUpload = (type, index) => {
     setUploadTarget({ type, index });
@@ -209,11 +237,16 @@ export default function PackagingDashboard() {
       );
       if (!ok) return;
     }
+    if (pendingRef.current.size) {
+      toast.info(`Finishing ${pendingRef.current.size} photo upload(s)...`);
+      await Promise.allSettled([...pendingRef.current.values()]);
+    }
+    const real = (arr) => (arr || []).map((u) => (isPending(u) ? resolvedRef.current.get(u) : u)).filter(Boolean);
     try {
       const payload = {
-        item_images: itemImages,
-        order_images: orderImages,
-        packed_box_images: packedBoxImages,
+        item_images: Object.fromEntries(Object.entries(itemImages).map(([k, v]) => [k, real(v)])),
+        order_images: real(orderImages),
+        packed_box_images: real(packedBoxImages),
         item_packed_by: itemPackedBy,
         box_packed_by: boxPackedBy,
         checked_by: checkedBy,
@@ -391,7 +424,8 @@ export default function PackagingDashboard() {
                   <div className="flex flex-wrap gap-2 mt-2">
                     {(itemImages[itemKey] || []).map((url, i) => (
                       <div key={i} className="relative w-16 h-16 rounded border overflow-hidden group">
-                        <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
+                        <img src={imgSrc(url)} alt="" className={`w-full h-full object-cover ${isPending(url) ? "opacity-60" : ""}`} />
+                        {isPending(url) && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><div className="w-5 h-5 rounded-full border-2 border-white border-t-transparent animate-spin" /></div>}
                         <button
                           className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
                           onClick={() => setItemImages((prev) => ({ ...prev, [itemKey]: prev[itemKey].filter((_, j) => j !== i) }))}
@@ -441,7 +475,8 @@ export default function PackagingDashboard() {
                   <div className="flex flex-wrap gap-2 mt-2">
                     {(itemImages[sampleKey] || []).map((url, i) => (
                       <div key={i} className="relative w-16 h-16 rounded border overflow-hidden group">
-                        <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
+                        <img src={imgSrc(url)} alt="" className={`w-full h-full object-cover ${isPending(url) ? "opacity-60" : ""}`} />
+                        {isPending(url) && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><div className="w-5 h-5 rounded-full border-2 border-white border-t-transparent animate-spin" /></div>}
                         <button
                           className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
                           onClick={() => setItemImages((prev) => ({ ...prev, [sampleKey]: prev[sampleKey].filter((_, j) => j !== i) }))}
@@ -478,7 +513,8 @@ export default function PackagingDashboard() {
               <div className="flex flex-wrap gap-2">
                 {orderImages.map((url, i) => (
                   <div key={i} className="relative w-20 h-20 rounded border overflow-hidden group">
-                    <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
+                    <img src={imgSrc(url)} alt="" className={`w-full h-full object-cover ${isPending(url) ? "opacity-60" : ""}`} />
+                        {isPending(url) && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><div className="w-5 h-5 rounded-full border-2 border-white border-t-transparent animate-spin" /></div>}
                     <button className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity" onClick={() => setOrderImages((prev) => prev.filter((_, j) => j !== i))}>
                       <X className="w-4 h-4 text-white" />
                     </button>
@@ -499,7 +535,8 @@ export default function PackagingDashboard() {
               <div className="flex flex-wrap gap-2">
                 {packedBoxImages.map((url, i) => (
                   <div key={i} className="relative w-20 h-20 rounded border overflow-hidden group">
-                    <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
+                    <img src={imgSrc(url)} alt="" className={`w-full h-full object-cover ${isPending(url) ? "opacity-60" : ""}`} />
+                        {isPending(url) && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><div className="w-5 h-5 rounded-full border-2 border-white border-t-transparent animate-spin" /></div>}
                     <button className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity" onClick={() => setPackedBoxImages((prev) => prev.filter((_, j) => j !== i))}>
                       <X className="w-4 h-4 text-white" />
                     </button>
@@ -558,6 +595,9 @@ export default function PackagingDashboard() {
           )}
 
           <DialogFooter className="flex-col sm:flex-row gap-2">
+            {pendingCount > 0 && (
+              <span className="text-xs text-muted-foreground self-center mr-auto" data-testid="pkg-uploading">Uploading {pendingCount} photo(s)... you can keep working</span>
+            )}
             <Button variant="outline" onClick={() => savePackaging(false)} data-testid="save-packaging-btn">Save Progress</Button>
             <Button onClick={() => savePackaging(true)} data-testid="mark-packed-btn">
               <Check className="w-4 h-4 mr-1" /> Mark as Packed

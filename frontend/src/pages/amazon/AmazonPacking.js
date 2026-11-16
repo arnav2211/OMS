@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import api from "@/lib/api";
-import { compressImage } from "@/lib/compressImage";
+import { uploadImage as uploadPhoto } from "@/lib/uploadImage";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -188,13 +188,9 @@ function PackForm({ order, staffList, onSave, onCancel, saving }) {
   const toggleStaff = (list, setList, name) => setList(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
 
   const uploadImage = async (file, target, itemKey) => {
-    const compressed = await compressImage(file);
-    const form = new FormData();
-    form.append("file", compressed);
     setUploading(true);
     try {
-      const res = await api.post("/upload", form, { headers: { "Content-Type": "multipart/form-data" } });
-      const url = res.data.url;
+      const url = await uploadPhoto(file);      // compressed, retried on a weak connection
       if (target === "item" && itemKey) setItemImages(prev => ({ ...prev, [itemKey]: [...(prev[itemKey] || []), url] }));
       else if (target === "order") setOrderImages(prev => [...prev, url]);
       else if (target === "packed_box") setPackedBoxImages(prev => [...prev, url]);
