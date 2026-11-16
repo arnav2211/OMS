@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import api from "@/lib/api";
 import { uploadImage as uploadPhoto } from "@/lib/uploadImage";
+import QuickCamera from "@/components/QuickCamera";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,6 +37,7 @@ const STATUS_BADGE = {
 export default function AmazonPacking() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const [camOpen, setCamOpen] = useState(false);     // in-app camera open over the pack dialog
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [staff, setStaff] = useState([]);
@@ -162,16 +164,19 @@ export default function AmazonPacking() {
 
       {/* Packaging Dialog */}
       <Dialog open={!!selected} onOpenChange={() => setSelected(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto"
+          onPointerDownOutside={(e) => { if (camOpen) e.preventDefault(); }}
+          onInteractOutside={(e) => { if (camOpen) e.preventDefault(); }}
+          onEscapeKeyDown={(e) => { if (camOpen) e.preventDefault(); }}>
           <DialogHeader><DialogTitle>Pack: {selected?.am_order_number}</DialogTitle></DialogHeader>
-          {selected && <PackForm order={selected} staffList={staff} onSave={savePackaging} onCancel={() => setSelected(null)} saving={saving} />}
+          {selected && <PackForm order={selected} staffList={staff} onSave={savePackaging} onCancel={() => setSelected(null)} saving={saving} onCamera={setCamOpen} />}
         </DialogContent>
       </Dialog>
     </div>
   );
 }
 
-function PackForm({ order, staffList, onSave, onCancel, saving }) {
+function PackForm({ order, staffList, onSave, onCancel, saving, onCamera }) {
   const { user: formUser } = useAuth();
   const canPickNames = formUser?.role === "admin";     // everyone else: names come from My Work only
   const [itemPackedBy, setItemPackedBy] = useState(order.packaging?.item_packed_by || []);
@@ -180,22 +185,61 @@ function PackForm({ order, staffList, onSave, onCancel, saving }) {
   const [itemImages, setItemImages] = useState(order.packaging?.item_images || {});
   const [orderImages, setOrderImages] = useState(order.packaging?.order_images || []);
   const [packedBoxImages, setPackedBoxImages] = useState(order.packaging?.packed_box_images || []);
-  const [uploading, setUploading] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [camTarget, setCamTarget] = useState(null);
+  const pendingRef = useRef(new Map());      // local preview URL -> upload promise
+  const resolvedRef = useRef(new Map());     // local preview URL -> server URL (null if it failed)
   const [weightKg, setWeightKg] = useState(order.packaging?.weight_kg || "");
   const [numBoxes, setNumBoxes] = useState(order.packaging?.num_boxes || "1");
   const selfShip = order.ship_type === "self_ship";
 
   const toggleStaff = (list, setList, name) => setList(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
 
-  const uploadImage = async (file, target, itemKey) => {
-    setUploading(true);
-    try {
-      const url = await uploadPhoto(file);      // compressed, retried on a weak connection
-      if (target === "item" && itemKey) setItemImages(prev => ({ ...prev, [itemKey]: [...(prev[itemKey] || []), url] }));
-      else if (target === "order") setOrderImages(prev => [...prev, url]);
-      else if (target === "packed_box") setPackedBoxImages(prev => [...prev, url]);
-    } catch { toast.error("Upload failed"); }
-    finally { setUploading(false); }
+  // Photos show at once and upload in the background (with retries), so packing never waits on them.
+  const mapAll = (fn) => {
+    setItemImages(prev => Object.fromEntries(Object.entries(prev).map(([k, v]) => [k, fn(v)])));
+    setOrderImages(prev => fn(prev));
+    setPackedBoxImages(prev => fn(prev));
+  };
+  const uploadImage = (file, target, itemKey) => {
+    const local = URL.createObjectURL(file);
+    if (target === "item" && itemKey) setItemImages(prev => ({ ...prev, [itemKey]: [...(prev[itemKey] || []), local] }));
+    else if (target === "order") setOrderImages(prev => [...prev, local]);
+    else if (target === "packed_box") setPackedBoxImages(prev => [...prev, local]);
+    const p = uploadPhoto(file)
+      .then((url) => {
+        resolvedRef.current.set(local, url);
+        mapAll(arr => (arr || []).map(u => (u === local ? url : u)));
+        setTimeout(() => URL.revokeObjectURL(local), 5000);
+      })
+      .catch(() => {
+        resolvedRef.current.set(local, null);
+        mapAll(arr => (arr || []).filter(u => u !== local));
+        toast.error("A photo could not upload - check the internet and add it again");
+      })
+      .finally(() => { pendingRef.current.delete(local); setPendingCount(pendingRef.current.size); });
+    pendingRef.current.set(local, p);
+    setPendingCount(pendingRef.current.size);
+  };
+  const isPending = (u) => String(u).startsWith("blob:");
+  const openCamera = (target, itemKey) => { setCamTarget({ target, itemKey }); onCamera?.(true); };
+  const closeCamera = () => { setCamTarget(null); onCamera?.(false); };
+  const cameraFallback = () => {
+    const t = camTarget;
+    closeCamera();
+    const el = document.getElementById("am-fallback-camera");
+    if (el && t) { el.dataset.target = t.target; el.dataset.itemKey = t.itemKey || ""; el.click(); }
+  };
+  const save = async () => {
+    if (pendingRef.current.size) {
+      toast.info(`Finishing ${pendingRef.current.size} photo upload(s)...`);
+      await Promise.allSettled([...pendingRef.current.values()]);
+    }
+    const real = (arr) => (arr || []).map(u => (isPending(u) ? resolvedRef.current.get(u) : u)).filter(Boolean);
+    onSave({ item_packed_by: itemPackedBy, box_packed_by: boxPackedBy, checked_by: checkedBy,
+      item_images: Object.fromEntries(Object.entries(itemImages).map(([k, v]) => [k, real(v)])),
+      order_images: real(orderImages), packed_box_images: real(packedBoxImages),
+      ...(selfShip ? { weight_kg: String(weightKg).trim(), num_boxes: String(numBoxes).trim() || "1" } : {}) });
   };
 
   const removeImage = (target, url, itemKey) => {
@@ -212,19 +256,20 @@ function PackForm({ order, staffList, onSave, onCancel, saving }) {
       <div className="flex flex-wrap gap-2 mt-1">
         {images.map((url, i) => (
           <div key={i} className="relative w-16 h-16 rounded-lg border overflow-hidden group">
-            <img src={`${backendUrl}${url}`} alt="" className="w-full h-full object-cover" />
+            <img src={isPending(url) ? url : `${backendUrl}${url}`} alt="" className={`w-full h-full object-cover ${isPending(url) ? "opacity-60" : ""}`} />
+            {isPending(url) && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><div className="w-5 h-5 rounded-full border-2 border-white border-t-transparent animate-spin" /></div>}
             <button className="absolute top-0 right-0 bg-red-500 text-white rounded-bl-lg p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
               onClick={() => removeImage(target, url, itemKey)}><X className="w-3 h-3" /></button>
           </div>
         ))}
         <label className="w-16 h-16 rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-accent">
           <Upload className="w-3 h-3 text-muted-foreground" /><span className="text-[10px] text-muted-foreground">Files</span>
-          <input type="file" accept="image/*" className="sr-only" disabled={uploading} onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], target, itemKey); e.target.value = ""; }} />
+          <input type="file" accept="image/*" multiple className="sr-only" onChange={e => { Array.from(e.target.files || []).forEach(f => uploadImage(f, target, itemKey)); e.target.value = ""; }} />
         </label>
-        <label className="w-16 h-16 rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-accent bg-secondary/30">
-          <Upload className="w-3 h-3 text-muted-foreground" /><span className="text-[10px] text-muted-foreground">Camera</span>
-          <input type="file" accept="image/*" capture="environment" className="sr-only" disabled={uploading} onChange={e => { if (e.target.files[0]) uploadImage(e.target.files[0], target, itemKey); e.target.value = ""; }} />
-        </label>
+        <button type="button" onClick={() => openCamera(target, itemKey)} data-testid="am-camera-btn"
+          className="w-16 h-16 rounded-lg border-2 border-dashed flex flex-col items-center justify-center cursor-pointer hover:bg-accent bg-secondary/30">
+          <Camera className="w-3 h-3 text-muted-foreground" /><span className="text-[10px] text-muted-foreground">Camera</span>
+        </button>
       </div>
     </div>
   );
@@ -267,10 +312,15 @@ function PackForm({ order, staffList, onSave, onCancel, saving }) {
       ))}
       <ImageUploadRow label="Full Order Images" images={orderImages} target="order" />
       <ImageUploadRow label="Packed Box Images" images={packedBoxImages} target="packed_box" />
-      {uploading && <p className="text-xs text-muted-foreground">Uploading...</p>}
+      {pendingCount > 0 && <p className="text-xs text-muted-foreground">Uploading {pendingCount} photo(s)... you can keep working</p>}
+      <QuickCamera open={!!camTarget}
+        title={camTarget?.target === "item" ? camTarget.itemKey : camTarget?.target === "packed_box" ? "Packed box" : "Full order"}
+        onShot={(f) => uploadImage(f, camTarget.target, camTarget.itemKey)} onClose={closeCamera} onUnavailable={cameraFallback} />
+      <input id="am-fallback-camera" type="file" accept="image/*" capture="environment" className="sr-only"
+        onChange={e => { const f = e.target.files?.[0]; if (f) uploadImage(f, e.target.dataset.target, e.target.dataset.itemKey || undefined); e.target.value = ""; }} />
       <DialogFooter>
         <Button variant="outline" onClick={onCancel}>Cancel</Button>
-        <Button onClick={() => onSave({ item_packed_by: itemPackedBy, box_packed_by: boxPackedBy, checked_by: checkedBy, item_images: itemImages, order_images: orderImages, packed_box_images: packedBoxImages, ...(selfShip ? { weight_kg: String(weightKg).trim(), num_boxes: String(numBoxes).trim() || "1" } : {}) })} disabled={saving || uploading}>
+        <Button onClick={save} disabled={saving}>
           {saving ? "Saving..." : "Save Packaging"}
         </Button>
       </DialogFooter>
