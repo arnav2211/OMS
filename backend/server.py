@@ -8295,12 +8295,19 @@ async def dtdc_manual_dispatch(req: DtdcDispatchRequest, user=Depends(get_curren
 # This used to be a substring search over the whole tracking JSON for hints
 # including "PICKUP" and "BOOKED", so a freshly booked consignment showing
 # "Pickup Awaited" matched "PICKUP" and was auto-dispatched on the spot.
+#
+# "pickup_accepted" is NOT a pickup either: it only means DTDC's pickup person accepted the job,
+# while the consignment status is still "pickup_scheduled" and the parcel is still with us
+# (CS-2131 / CS-2136, 17 Nov 2026: auto-dispatched and the customer told before pickup).
 DTDC_PICKED_STATUSES = {
-    "pickup_accepted", "pickup_completed", "picked_up", "pickedup",
+    "pickup_completed", "picked_up", "pickedup",
     "booked_at_hub", "in_transit", "intransit", "reached_at_hub",
     "out_for_delivery", "delivered",
 }
-DTDC_PICKED_EVENTS = {"pickup completed", "pickup accepted", "picked up"}
+DTDC_PICKED_EVENTS = {"pickup completed", "picked up"}
+# While the consignment itself still says one of these, nothing in its event list counts.
+DTDC_NOT_YET_STATUSES = {"pickup_scheduled", "pickup_awaited", "pickup_accepted", "softdata_upload",
+                         "assigned_to_hub", "booked", "pickup_reassigned", "pickup_rescheduled"}
 
 
 def _dtdc_norm(value) -> str:
@@ -8318,6 +8325,8 @@ def _dtdc_pickup_time(tracking: dict):
 
     status = _dtdc_norm(tracking.get("status")).replace(" ", "_")
     events = tracking.get("events") or []
+    if status in DTDC_NOT_YET_STATUSES:
+        return None
 
     picked = status in DTDC_PICKED_STATUSES
     event_time = None
