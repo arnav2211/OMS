@@ -15,6 +15,7 @@ import jwt
 import io
 import math
 import time
+import contextvars
 import collections
 import aiofiles
 import requests
@@ -9359,6 +9360,15 @@ async def _shiprocket_auth() -> str:
     return _shiprocket_token["token"]
 
 
+# Admin "inbound" quotes: price a parcel from another pincode to us. Set only inside
+# /rates/inbound; everywhere else the couriers keep quoting from our own pickup pincode.
+_QUOTE_ORIGIN: contextvars.ContextVar = contextvars.ContextVar("quote_origin", default="")
+
+
+def _origin(default) -> str:
+    return _QUOTE_ORIGIN.get() or str(default or "")
+
+
 async def _compare_shiprocket(pincode: str, weight: float, cod: bool) -> list:
     if not (SHIPROCKET["email"] and SHIPROCKET["password"]):
         return [{"carrier": "Shiprocket", "service": "", "serviceable": None, "note": "Not configured on the server"}]
@@ -9366,7 +9376,7 @@ async def _compare_shiprocket(pincode: str, weight: float, cod: bool) -> list:
         token = await _shiprocket_auth()
         async with httpx.AsyncClient(timeout=25) as c:
             r = await c.get("https://apiv2.shiprocket.in/v1/external/courier/serviceability/",
-                            params={"pickup_postcode": SHIPROCKET["pickup_pincode"], "delivery_postcode": pincode,
+                            params={"pickup_postcode": _origin(SHIPROCKET["pickup_pincode"]), "delivery_postcode": pincode,
                                     "weight": weight, "cod": 1 if cod else 0},
                             headers={"Authorization": f"Bearer {token}"})
         data = (r.json() or {}).get("data") or {}
@@ -10014,7 +10024,7 @@ async def _sm_warehouse_id() -> str:
 async def _sm_rates(pincode: str, weight_kg: float, cod_amount: float, value: float, box: Optional[dict] = None,
                     order_ref: str = "") -> list:
     box = box or _amazon_box({"packaging": {"weight_kg": weight_kg}})   # never a made-up big box
-    body = {"order_id": order_ref, "pickup_pincode": SHIPMOZO["pickup_pincode"], "delivery_pincode": str(pincode),
+    body = {"order_id": order_ref, "pickup_pincode": _origin(SHIPMOZO["pickup_pincode"]), "delivery_pincode": str(pincode),
             "payment_type": "COD" if cod_amount > 0 else "PREPAID", "shipment_type": "FORWARD",
             "order_amount": str(round(max(1.0, value), 2)), "type_of_package": "SPS", "rov_type": "ROV_OWNER",
             "cod_amount": str(round(cod_amount, 2)) if cod_amount > 0 else "",
@@ -10626,7 +10636,7 @@ def _xb_require(user):
 async def _xb_rates(pincode: str, weight_kg: float, cod_amount: float, value: float, box: Optional[dict] = None) -> list:
     # XpressBees bills volumetric weight, so an invented big box would inflate the quote
     box = box or _amazon_box({"packaging": {"weight_kg": weight_kg}})
-    body = {"origin": XPRESSBEES["pickup_pincode"], "destination": str(pincode),
+    body = {"origin": _origin(XPRESSBEES["pickup_pincode"]), "destination": str(pincode),
             "payment_type": "cod" if cod_amount > 0 else "prepaid",
             "order_amount": str(round(max(1.0, cod_amount if cod_amount > 0 else value), 2)),
             "weight": str(max(1, int(round(weight_kg * 1000)))),
@@ -11437,7 +11447,7 @@ async def _dlv_pin(pincode: str) -> Optional[dict]:
 
 async def _dlv_rate(pincode: str, weight_kg: float, cod_amount: float = 0, mode: str = "S") -> Optional[dict]:
     """GST-inclusive charge for one parcel, as Delhivery would bill it."""
-    params = {"md": mode, "ss": "Delivered", "d_pin": pincode, "o_pin": DELHIVERY["origin_pin"],
+    params = {"md": mode, "ss": "Delivered", "d_pin": pincode, "o_pin": _origin(DELHIVERY["origin_pin"]),
               "cgm": max(1, int(round(float(weight_kg) * 1000))), "pt": "COD" if cod_amount > 0 else "Pre-paid"}
     if cod_amount > 0:
         params["cod"] = int(round(cod_amount))
@@ -11951,7 +11961,7 @@ def _dlvb_boxes(order: dict) -> tuple:
 
 async def _dlvb_estimate(dest_pin: str, dims: list, weight_g: int, inv_amount: float, cod_amount: float, rov: bool) -> Optional[dict]:
     body = {"dimensions": dims, "weight_g": max(1, weight_g), "cheque_payment": False,
-            "source_pin": DLVB["origin_pin"], "consignee_pin": dest_pin,
+            "source_pin": _origin(DLVB["origin_pin"]), "consignee_pin": dest_pin,
             "payment_mode": "cod" if cod_amount > 0 else "prepaid", "inv_amount": max(1, int(round(inv_amount))),
             "freight_mode": "fod", "rov_insurance": bool(rov)}
     if cod_amount > 0:
@@ -12690,6 +12700,38 @@ async def shipments_labels(ids: str, token: str = "", user=None):
     if missing:
         headers["X-Labels-Missing"] = ", ".join(missing)[:400].encode("ascii", "ignore").decode()
     return StreamingResponse(out, media_type="application/pdf", headers=headers)
+
+
+@api_router.get("/rates/inbound")
+async def rates_inbound(origin: str, destination: str = "440025", weight: float = 1.0, user=Depends(get_current_user)):
+    """Admin only: what it would cost to bring a parcel from another pincode to us (or between any
+    two pincodes), from every courier that quotes arbitrary origins. Prepaid, GST included."""
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    origin, destination = origin.strip(), (destination or "440025").strip()
+    for pin in (origin, destination):
+        if not (pin.isdigit() and len(pin) == 6):
+            raise HTTPException(status_code=400, detail=f"Invalid pincode: {pin}")
+    weight = max(0.05, float(weight or 1))
+    tok = _QUOTE_ORIGIN.set(origin)
+    try:
+        groups = await asyncio.gather(
+            _compare_shiprocket(destination, weight, False), _compare_shipmozo(destination, weight, False),
+            _compare_xpressbees(destination, weight, False), _compare_delhivery(destination, weight, False),
+            _compare_delhivery_b2b(destination, weight, False), return_exceptions=True)
+    finally:
+        _QUOTE_ORIGIN.reset(tok)
+    rows = []
+    for name, g in zip(("Shiprocket", "Shipmozo", "XpressBees", "Delhivery", "Delhivery B2B"), groups):
+        if isinstance(g, Exception):
+            rows.append({"carrier": name, "service": "", "serviceable": None, "note": "Could not check right now"})
+        else:
+            rows.extend(g)
+    priced = sorted([r for r in rows if r.get("serviceable") and r.get("total")], key=lambda r: float(r["total"]))
+    rest = [r for r in rows if not (r.get("serviceable") and r.get("total"))]
+    return {"origin": origin, "destination": destination, "weight_kg": round(weight, 3),
+            "options": priced + rest, "cheapest": priced[0] if priced else None,
+            "basis": "Prepaid, GST included (XpressBees as quoted). DTDC, Anjani and Amazon quote only from our own pickup, so they are not included."}
 
 
 @api_router.get("/rates/compare")

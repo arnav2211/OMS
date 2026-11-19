@@ -1,5 +1,6 @@
 import { useState } from "react";
 import api from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -76,6 +77,9 @@ function AnjaniCenters({ centers }) {
 }
 
 export default function CourierCompare() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+  const [from, setFrom] = useState("");          // admin: price a parcel coming TO us from another pincode
   const [pincode, setPincode] = useState("");
   const [weight, setWeight] = useState("");
   const [cod, setCod] = useState(false);
@@ -84,12 +88,21 @@ export default function CourierCompare() {
 
   const check = async (e) => {
     e?.preventDefault();
-    if (!/^\d{6}$/.test(pincode.trim())) return toast.error("Enter a 6-digit pincode");
+    const inbound = isAdmin && from.trim() !== "";
+    const to = pincode.trim() || (inbound ? "440025" : "");
+    if (inbound && !/^\d{6}$/.test(from.trim())) return toast.error("Enter a 6-digit From pincode");
+    if (!/^\d{6}$/.test(to)) return toast.error("Enter a 6-digit pincode");
     if (!(parseFloat(weight) > 0)) return toast.error("Enter the weight in kg");
     setLoading(true);
     try {
-      const r = await api.get("/rates/compare", { params: { pincode: pincode.trim(), weight: parseFloat(weight), cod } });
-      setRes(r.data);
+      if (inbound) {
+        const r = await api.get("/rates/inbound", { params: { origin: from.trim(), destination: to, weight: parseFloat(weight) } });
+        const opts = (r.data.options || []).map((o, i) => ({ ...o, cheapest: i === 0 && o.serviceable && !!o.total }));
+        setRes({ ...r.data, options: opts, pincode: to, inbound: true });
+      } else {
+        const r = await api.get("/rates/compare", { params: { pincode: to, weight: parseFloat(weight), cod } });
+        setRes(r.data);
+      }
     } catch (err) { toast.error(err.response?.data?.detail || "Could not compare right now"); }
     finally { setLoading(false); }
   };
@@ -115,8 +128,16 @@ export default function CourierCompare() {
       <Card>
         <CardContent className="pt-5">
           <form onSubmit={check} className="flex flex-wrap items-end gap-3">
+            {isAdmin && (
+              <div>
+                <Label className="text-sm">From (optional)</Label>
+                <Input value={from} onChange={e => setFrom(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="Our pickup"
+                       inputMode="numeric" className="w-36 h-11 text-lg" data-testid="compare-from"
+                       title="Admin: price a parcel coming from another pincode (e.g. bringing stock to us)" />
+              </div>
+            )}
             <div>
-              <Label className="text-sm">Pincode</Label>
+              <Label className="text-sm">{isAdmin && from ? "To" : "Pincode"}</Label>
               <Input value={pincode} onChange={e => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="440025"
                      inputMode="numeric" className="w-36 h-11 text-lg" data-testid="compare-pincode" />
             </div>
@@ -125,9 +146,11 @@ export default function CourierCompare() {
               <Input value={weight} onChange={e => setWeight(e.target.value)} type="number" step="0.001" min="0" placeholder="2.5"
                      className="w-32 h-11 text-lg" data-testid="compare-weight" />
             </div>
-            <label className="flex items-center gap-2 h-11 cursor-pointer">
-              <Checkbox checked={cod} onCheckedChange={v => setCod(!!v)} /> <span className="text-sm">COD order</span>
-            </label>
+            {!(isAdmin && from) && (
+              <label className="flex items-center gap-2 h-11 cursor-pointer">
+                <Checkbox checked={cod} onCheckedChange={v => setCod(!!v)} /> <span className="text-sm">COD order</span>
+              </label>
+            )}
             <Button type="submit" className="h-11 px-6" disabled={loading} data-testid="compare-go">
               {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null} Compare
             </Button>
@@ -138,7 +161,7 @@ export default function CourierCompare() {
       {res && (
         <>
           <p className="text-sm text-muted-foreground">
-            {res.city ? `${res.city}, ${res.state} · ` : ""}{res.pincode} · {res.weight_kg} kg{res.cod ? " · COD" : ""} · {res.basis}
+            {res.inbound ? `${res.origin} → ${res.destination} · ` : (res.city ? `${res.city}, ${res.state} · ` : "")}{res.inbound ? "" : res.pincode}{res.inbound ? "" : " · "}{res.weight_kg} kg{res.cod ? " · COD" : ""} · {res.basis}
           </p>
 
           {priced.length === 0 && (
