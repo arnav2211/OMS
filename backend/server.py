@@ -2401,7 +2401,7 @@ async def restore_packaging_images(order_id: str, req: RestoreImagesRequest = Re
 # Dispatch
 @api_router.put("/orders/{order_id}/dispatch")
 async def update_dispatch(order_id: str, req: DispatchUpdate, user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "dispatch", "packaging", "media"]:
+    if user["role"] not in ["admin", "dispatch", "packaging", "media", "accounts"]:
         raise HTTPException(status_code=403, detail="Dispatch, packaging or admin only")
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
@@ -4834,7 +4834,7 @@ async def upload_file(file: UploadFile = File(...), user=Depends(get_current_use
 
 @api_router.post("/scan-barcode")
 async def scan_barcode(file: UploadFile = File(...), user=Depends(get_current_user)):
-    if user["role"] not in ["admin", "dispatch", "packaging", "media"]:
+    if user["role"] not in ["admin", "dispatch", "packaging", "media", "accounts"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     try:
         from pyzbar.pyzbar import decode as pyzbar_decode

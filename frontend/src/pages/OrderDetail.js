@@ -1195,7 +1195,7 @@ export default function OrderDetail() {
                   </button>
                 )}
               </div>
-              {["admin", "dispatch", "packaging", "media"].includes(user?.role) && (order.status === "packed" || order.status === "dispatched") && (
+              {["admin", "dispatch", "packaging", "media", "accounts"].includes(user?.role) && (order.status === "packed" || order.status === "dispatched") && (
                 <Button variant="outline" size="sm" onClick={openDispatch} data-testid="dispatch-order-btn">
                   <Truck className="w-4 h-4 mr-1" /> {order.status === "dispatched" ? "Edit Dispatch" : "Dispatch"}
                 </Button>
