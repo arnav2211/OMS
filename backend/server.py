@@ -1294,6 +1294,40 @@ async def list_companies(user=Depends(get_current_user)):
 
 
 # Order Routes
+_WEB_SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(ml|l|ltr|litre|liter|kg|g|gm|gms)(?![a-z])\s*(?:[(\-/,]\s*([^)]*?)\s*\)?)?\s*$", re.I)
+_WEB_UNIT = {"ml": "mL", "l": "L", "ltr": "L", "litre": "L", "liter": "L", "kg": "Kg", "g": "g", "gm": "g", "gms": "g"}
+
+
+def _website_item_fix(d: dict) -> dict:
+    """Shopify sends the variant title as the unit ("10mL(Roll-on)", "Beige"). Turn it into a real
+    quantity and unit (10 mL) with the packing or colour in the description. Amount, GST and total
+    are untouched; only the rate is restated per unit."""
+    variant = (d.get("unit") or "").strip()
+    if not variant or d.get("variant"):
+        return d
+    d = dict(d)
+    d["variant"] = variant                       # the original Shopify variant, kept for matching
+    pieces = float(d.get("qty") or 0) or 1
+    pcs = f"{int(pieces)}" if pieces == int(pieces) else f"{pieces:g}"
+    extra = [x for x in [(d.get("description") or "").strip()] if x]
+    m = _WEB_SIZE_RE.match(variant)
+    if m:
+        size, unit, packing = float(m.group(1)), _WEB_UNIT[m.group(2).lower()], (m.group(3) or "").strip()
+        sz = f"{size:g}{unit}"
+        d["qty"] = round(size * pieces, 3)
+        d["unit"] = unit
+        if d["qty"]:
+            d["rate"] = round(float(d.get("amount") or 0) / d["qty"], 4)
+        d["description"] = " | ".join([f"Packing: {pcs} x {sz}{(' ' + packing) if packing else ''}"] + extra)
+    elif variant.lower() == "default title":     # Shopify's name for "no variant"
+        d["unit"] = "pcs"
+    else:
+        d["unit"] = "pcs"
+        label = "Colour" if re.fullmatch(r"[A-Za-z][A-Za-z \-&/]*", variant) else "Variant"
+        d["description"] = " | ".join([f"{label}: {variant}"] + extra)
+    return d
+
+
 @api_router.post("/orders")
 async def create_order(req: OrderCreate, user=Depends(get_current_user)):
     company = company_of({"company": req.company})
@@ -1327,6 +1361,8 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         subtotal += item_dict["amount"]
         total_gst += item_dict["gst_amount"]
         items.append(item_dict)
+    if str(user.get("username") or "").strip().lower() == WEBSITE_USERNAME:
+        items = [_website_item_fix(d) for d in items]     # Shopify variant -> real qty/unit + description
 
     shipping_gst = 0
     if req.gst_applicable and req.shipping_charge > 0:
@@ -14269,7 +14305,7 @@ async def _shopify_item_images(order: dict) -> int:
     items = order.get("items") or []
     sets, found = {}, 0
     for i, it in enumerate(items):
-        name, unit = _norm_name(it.get("product_name")), _norm_name(it.get("unit"))
+        name, unit = _norm_name(it.get("product_name")), _norm_name(it.get("variant") or it.get("unit"))
         hit = (next((l for l in lines if not l["used"] and l["title"] == name and l["variant"] == unit), None)
                or next((l for l in lines if not l["used"] and l["title"] == name), None)
                or next((l for l in lines if not l["used"] and l["title"] and (l["title"] in name or name in l["title"])), None)
