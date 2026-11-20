@@ -12560,6 +12560,16 @@ async def shipments_bookable(user=Depends(get_current_user)):
                          "cod_expected": bool(o.get("is_cod")) or (o.get("mode_of_payment") or "").strip().lower() == "cod"}
     for r in rows + unassigned:
         r.update(owed.get(r.get("id")) or {"balance_due": 0.0, "cod_expected": bool(r.get("is_cod"))})
+    # Where the order lives (for the clickable order number) and its packing status, read fresh.
+    live = {}
+    async for o in db.orders.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "status": 1}):
+        live[o["id"]] = ("oms", o.get("status"))
+    async for o in db.amazon_orders.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "status": 1}):
+        live[o["id"]] = ("amazon", o.get("status"))
+    for r in rows + unassigned:
+        src, st = live.get(r.get("id"), ("oms", r.get("status")))
+        r["source"] = src
+        r["order_status"] = st or ""
     return {"orders": rows, "unassigned": unassigned, "errors": errors}
 
 

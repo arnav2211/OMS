@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import api from "@/lib/api";
+import { Link } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +41,26 @@ const fmtWindow = (w) => {
   const e = w.end ? new Date(w.end).toLocaleString("en-IN", o) : null;
   return s && e ? `${s} — ${e}` : (s || e);
 };
+
+// Order number that opens the order (OMS or Amazon) in a new tab, with its packing status.
+const PACK_BADGE = {
+  packed: ["Packed", "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"],
+  packaging: ["Packing", "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"],
+  new: ["Not packed", "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"],
+};
+
+function OrderRef({ o }) {
+  const href = o.source === "amazon" ? `/amazon-orders/${o.id}` : `/orders/${o.id}`;
+  const [label, cls] = PACK_BADGE[o.order_status] || [o.order_status || "", "bg-muted text-muted-foreground"];
+  return (
+    <div className="flex flex-col items-start gap-0.5">
+      <Link to={href} target="_blank" rel="noreferrer" className="font-mono text-sm text-primary hover:underline" data-testid={`ship-order-link-${o.id}`}>
+        {o.order_number}
+      </Link>
+      {label && <Badge className={`text-[10px] px-1 py-0 font-normal ${cls}`} data-testid={`ship-pack-status-${o.id}`}>{label}</Badge>}
+    </div>
+  );
+}
 
 export default function BookShipments() {
   const [orders, setOrders] = useState([]);
@@ -470,7 +491,7 @@ export default function BookShipments() {
                 )}
                 {unassigned.map(o => (
                   <TableRow key={o.id} data-testid={`ship-unassigned-${o.id}`}>
-                    <TableCell className="font-mono text-sm">{o.order_number}</TableCell>
+                    <TableCell><OrderRef o={o} /></TableCell>
                     <TableCell className="text-sm">
                       {o.customer_name}
                       {o.is_cod && <Badge className="ml-1.5 bg-amber-100 text-amber-800 text-[10px] px-1 py-0">COD ₹{Number(o.cod_amount || 0).toFixed(0)}</Badge>}
@@ -556,7 +577,7 @@ export default function BookShipments() {
                           {o.courier === "Shiprocket" && !o.booked && o.shiprocket_courier?.name && <div className="text-[10px] text-violet-700 dark:text-violet-300 mt-0.5">wants {o.shiprocket_courier.name}</div>}
                           {o.courier === "Shipmozo" && !o.booked && o.shipmozo_courier?.name && <div className="text-[10px] text-fuchsia-700 dark:text-fuchsia-300 mt-0.5">wants {o.shipmozo_courier.name}</div>}
                         </TableCell>
-                        <TableCell className="font-mono text-sm">{o.order_number}</TableCell>
+                        <TableCell><OrderRef o={o} /></TableCell>
                         <TableCell className="text-sm">
                           {o.customer_name}
                           {o.is_cod && <Badge className="ml-1.5 bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 text-[10px] px-1 py-0 align-middle">COD ₹{Number(o.cod_amount || 0).toFixed(0)}</Badge>}
@@ -634,7 +655,7 @@ export default function BookShipments() {
                   return (
                     <TableRow key={o.id} data-testid={`ship-review-${o.id}`}>
                       <TableCell className="align-top">
-                        <div className="font-mono text-sm">{o.order_number}</div>
+                        <OrderRef o={o} />
                         <div className="text-xs text-muted-foreground">{o.customer_name}</div>
                         {r.declared !== undefined && (
                           <div className="mt-1">
