@@ -11999,7 +11999,9 @@ async def _dlvb_estimate(dest_pin: str, dims: list, weight_g: int, inv_amount: f
     body = {"dimensions": dims, "weight_g": max(1, weight_g), "cheque_payment": False,
             "source_pin": _origin(DLVB["origin_pin"]), "consignee_pin": dest_pin,
             "payment_mode": "cod" if cod_amount > 0 else "prepaid", "inv_amount": max(1, int(round(inv_amount))),
-            "freight_mode": "fod", "rov_insurance": bool(rov)}
+            "rov_insurance": bool(rov)}
+    # No freight_mode: "fod" is freight-on-delivery (to-pay), which adds Delhivery's to-pay fee
+    # (~Rs 100 + fuel + GST) and made OMS quotes dearer than the portal. "fop" is refused for B2B.
     if cod_amount > 0:
         body["cod_amount"] = int(round(cod_amount))
     code, d = await _dlvb_call("POST", "/freight/estimate", json=body)
@@ -12163,7 +12165,7 @@ async def delhivery_b2b_book(req: DelhiveryB2BBookRequest, user=Depends(get_curr
                                  "inv_amt": round(declared, 2), "inv_qr_code": ""}]),
         "shipment_details": json.dumps([{"order_id": ref, "box_count": boxes, "description": desc,
                                          "weight": weight_g, "waybills": [], "master": False}]),
-        "fm_pickup": "True", "freight_mode": "fod",
+        "fm_pickup": "True",          # no freight_mode: "fod" would make it a to-pay shipment
         "billing_address": json.dumps({"name": COMPANY["brand"], "company": COMPANY["name"], "consignor": COMPANY["name"],
                                        "address": COMPANY["address"], "city": "Nagpur", "state": "Maharashtra",
                                        "pin": DLVB["origin_pin"], "phone": COMPANY["mobile"], "gst_number": COMPANY["gstin"]}),
