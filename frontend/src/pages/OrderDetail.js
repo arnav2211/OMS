@@ -28,6 +28,7 @@ import CourierStatusDialog from "@/components/CourierStatusDialog";
 import StickerUrgentToggle from "@/components/StickerUrgentToggle";
 import TallyFetchDialog from "@/components/TallyFetchDialog";
 import ExtraShipments from "@/components/ExtraShipments";
+import { shareFiles, prefetchFiles } from "@/lib/shareFiles";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 
@@ -102,6 +103,11 @@ export default function OrderDetail() {
     try {
       const res = await api.get(`/orders/${id}`);
       setOrder(res.data);
+      {   // load the photos in the background so Share opens instantly
+        const pk = res.data.packaging || {};
+        prefetchFiles([...Object.values(pk.item_images || {}).flat(), ...(pk.order_images || []),
+          ...(pk.packed_box_images || []), ...((res.data.dispatch || {}).dispatch_slip_images || [])]);
+      }
       setPiGstApplicable(res.data.gst_applicable || false);
       const d = new Date();
       const year = d.getFullYear();
@@ -346,38 +352,8 @@ export default function OrderDetail() {
 
   const sharePackingImages = async () => {
     if (!allPackingImageUrls.length) return toast.error("No packing images to share");
-    try {
-      const blobs = await Promise.all(
-        allPackingImageUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
-      );
-      const files = blobs.map((blob, i) => {
-        const ext = blob.type.includes("png") ? "png" : "jpg";
-        return new File([blob], `packing-${order.order_number}-${i + 1}.${ext}`, { type: blob.type });
-      });
-
-      if (navigator.canShare && navigator.canShare({ files })) {
-        await navigator.share({ files, title: `Packing Images - ${order.order_number}` });
-      } else {
-        files.forEach((file, i) => {
-          const url = URL.createObjectURL(file);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = file.name;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        });
-        toast.success("Images downloaded. Opening WhatsApp...");
-        if (customerPhone) {
-          const clean = customerPhone.replace(/[^0-9]/g, "");
-          const waPhone = clean.startsWith("91") ? clean : `91${clean}`;
-          setTimeout(() => window.open(`https://wa.me/${waPhone}`, "_blank"), 500);
-        }
-      }
-    } catch (err) {
-      if (err.name !== "AbortError") toast.error("Share failed");
-    }
+    await shareFiles({ title: `Packing Images - ${order.order_number}`, toast, phone: customerPhone,
+      items: allPackingImageUrls.map((url, i) => ({ url, name: `packing-${order.order_number}-${i + 1}` })) });
   };
 
   const packedBoxImageUrls = order.packaging?.packed_box_images || [];
@@ -386,77 +362,16 @@ export default function OrderDetail() {
     const dispatchSlipUrls = order.dispatch?.dispatch_slip_images || [];
     const allUrls = [...packedBoxImageUrls, ...dispatchSlipUrls];
     if (!allUrls.length) return toast.error("No images to share");
-    try {
-      const blobs = await Promise.all(
-        allUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
-      );
-      const files = blobs.map((blob, i) => {
-        const ext = blob.type.includes("png") ? "png" : "jpg";
-        const label = i < packedBoxImageUrls.length ? `packed-box-${i + 1}` : `dispatch-slip-${i - packedBoxImageUrls.length + 1}`;
-        return new File([blob], `${label}-${order.order_number}.${ext}`, { type: blob.type });
-      });
-
-      if (navigator.canShare && navigator.canShare({ files })) {
-        await navigator.share({ files, title: `Packed Box Images - ${order.order_number}` });
-      } else {
-        files.forEach((file) => {
-          const url = URL.createObjectURL(file);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = file.name;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        });
-        toast.success("Packed box images downloaded. Opening WhatsApp...");
-        if (customerPhone) {
-          const clean = customerPhone.replace(/[^0-9]/g, "");
-          const waPhone = clean.startsWith("91") ? clean : `91${clean}`;
-          setTimeout(() => window.open(`https://wa.me/${waPhone}`, "_blank"), 500);
-        }
-      }
-    } catch (err) {
-      if (err.name !== "AbortError") toast.error("Share failed");
-    }
+    await shareFiles({ title: `Packed Box Images - ${order.order_number}`, toast, phone: customerPhone,
+      items: allUrls.map((url, i) => ({ url, name: i < packedBoxImageUrls.length
+        ? `packed-box-${i + 1}-${order.order_number}` : `dispatch-slip-${i - packedBoxImageUrls.length + 1}-${order.order_number}` })) });
   };
 
   const shareDispatchSlip = async () => {
     const slipUrls = order.dispatch?.dispatch_slip_images || [];
     if (!slipUrls.length) return toast.error("No dispatch slip to share");
-    try {
-      const blobs = await Promise.all(
-        slipUrls.map(url => fetch(`${process.env.REACT_APP_BACKEND_URL}${url}`).then(r => r.blob()))
-      );
-      const files = blobs.map((blob, i) => {
-        // Courier-booked slips are PDFs; naming one .jpg produces a file that
-        // will not open on the recipient's phone.
-        const t = blob.type || "";
-        const ext = t.includes("pdf") ? "pdf"
-                  : t.includes("png") ? "png"
-                  : t.includes("webp") ? "webp" : "jpg";
-        return new File([blob], `dispatch-slip-${order.order_number}-${i + 1}.${ext}`, { type: blob.type });
-      });
-      if (navigator.canShare && navigator.canShare({ files })) {
-        await navigator.share({ files, title: `Dispatch Slip - ${order.order_number}` });
-      } else {
-        files.forEach((file) => {
-          const url = URL.createObjectURL(file);
-          const a = document.createElement("a");
-          a.href = url; a.download = file.name;
-          document.body.appendChild(a); a.click();
-          document.body.removeChild(a); URL.revokeObjectURL(url);
-        });
-        toast.success("Dispatch slip downloaded.");
-        if (customerPhone) {
-          const clean = customerPhone.replace(/[^0-9]/g, "");
-          const waPhone = clean.startsWith("91") ? clean : `91${clean}`;
-          setTimeout(() => window.open(`https://wa.me/${waPhone}`, "_blank"), 500);
-        }
-      }
-    } catch (err) {
-      if (err.name !== "AbortError") toast.error("Share failed");
-    }
+    await shareFiles({ title: `Dispatch Slip - ${order.order_number}`, toast, phone: customerPhone,
+      items: slipUrls.map((url, i) => ({ url, name: `dispatch-slip-${order.order_number}-${i + 1}` })) });
   };
 
 
