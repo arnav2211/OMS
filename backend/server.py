@@ -660,6 +660,7 @@ class OrderCreate(BaseModel):
     payment_screenshots: List[str] = []
     mode_of_payment: str = ""
     payment_mode_details: str = ""
+    payments: List[dict] = []      # split payment: [{mode, amount, note}] - drives amount_paid when given
     billing_address_id: str = ""
     shipping_address_id: str = ""
     extra_shipping_details: str = ""
@@ -1463,6 +1464,7 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "payment_screenshots": req.payment_screenshots,
         "mode_of_payment": req.mode_of_payment,
         "payment_mode_details": req.payment_mode_details,
+        "payments": req.payments,
         "billing_address_id": req.billing_address_id,
         "shipping_address_id": req.shipping_address_id,
         "billing_address": billing_addr,
@@ -1494,6 +1496,7 @@ async def create_order(req: OrderCreate, user=Depends(get_current_user)):
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
+    _apply_split(order_doc, grand_total)          # split payment rows decide paid / status / mode
     await db.orders.insert_one(order_doc)
     created = await db.orders.find_one({"id": order_doc["id"]}, {"_id": 0})
     if order_doc.get("shopify_order_id") and _shopify_configured():
@@ -1817,7 +1820,50 @@ async def get_order(order_id: str, user=Depends(get_current_user)):
 # Payment fields accounts may edit. Everything else on an order stays with
 # admin and the owning telecaller.
 PAYMENT_FIELDS = {"payment_status", "amount_paid", "balance_amount",
-                  "mode_of_payment", "payment_mode_details", "payment_screenshots"}
+                  "mode_of_payment", "payment_mode_details", "payment_screenshots", "payments"}
+
+SPLIT_MODE = "Split"
+
+
+def _clean_payments(rows) -> list:
+    """Split-payment rows as sent by the form -> [{mode, amount, note}], blanks dropped."""
+    out = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            amt = round(float(r.get("amount") or 0), 2)
+        except (TypeError, ValueError):
+            amt = 0.0
+        if amt <= 0:
+            continue
+        out.append({"mode": str(r.get("mode") or "Online").strip()[:30] or "Online", "amount": amt,
+                    "note": str(r.get("note") or "").strip()[:80]})
+    return out
+
+
+def _split_summary(rows: list) -> str:
+    """'Cash Rs 2,000 + Online Rs 3,000 (2nd UPI)' - goes in payment_mode_details, so every screen and PDF shows it."""
+    return " + ".join(f"{r['mode']} Rs {r['amount']:,.2f}".replace(".00", "") + (f" ({r['note']})" if r.get("note") else "")
+                      for r in rows)
+
+
+def _apply_split(doc: dict, grand_total: float) -> None:
+    """When split-payment rows are present, they decide the amount paid, status, balance and mode."""
+    rows = _clean_payments(doc.get("payments"))
+    doc["payments"] = rows
+    if not rows:
+        if doc.get("mode_of_payment") == SPLIT_MODE:
+            doc["mode_of_payment"] = ""
+            doc["payment_mode_details"] = ""
+        return
+    paid = round(sum(r["amount"] for r in rows), 2)
+    gt = round(float(grand_total or 0), 2)
+    doc["mode_of_payment"] = SPLIT_MODE
+    doc["payment_mode_details"] = _split_summary(rows)
+    doc["amount_paid"] = paid
+    doc["payment_status"] = "full" if gt > 0 and paid >= gt - 0.5 else ("partial" if paid > 0 else "unpaid")
+    doc["balance_amount"] = round(max(0.0, gt - paid), 2)
 
 
 @api_router.put("/orders/{order_id}")
@@ -2062,6 +2108,10 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
 
     if "items" in updates or "free_samples" in updates:
         _sticker_edit_diff(order, updates, user["name"])     # the media team sees what changed
+    if "payments" in updates or (order.get("payments") and "grand_total" in updates):
+        if "payments" not in updates:
+            updates["payments"] = order.get("payments")
+        _apply_split(updates, updates.get("grand_total", order.get("grand_total")))
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.orders.update_one({"id": order_id}, {"$set": updates})
     if result.matched_count == 0:

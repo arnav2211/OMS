@@ -29,6 +29,7 @@ import StickerUrgentToggle from "@/components/StickerUrgentToggle";
 import TallyFetchDialog from "@/components/TallyFetchDialog";
 import ExtraShipments from "@/components/ExtraShipments";
 import { shareFiles, prefetchFiles } from "@/lib/shareFiles";
+import SplitPayments, { SPLIT_MODE, SPLIT_LABEL, splitTotal, splitStatus, blankSplitRows } from "@/components/SplitPayments";
 
 const STATUS_COLORS = { new: "bg-blue-100 text-blue-800", packaging: "bg-yellow-100 text-yellow-800", packed: "bg-green-100 text-green-800", dispatched: "bg-purple-100 text-purple-800" };
 
@@ -1600,9 +1601,11 @@ function PaymentSection({ order, user, canEditPayment, isDispatched, isAdmin, or
   const [paymentModeDetails, setPaymentModeDetails] = useState(order.payment_mode_details || "");
   const [amountPaid, setAmountPaid] = useState(order.amount_paid || 0);
   const [screenshots, setScreenshots] = useState(order.payment_screenshots || []);
+  const [splitRows, setSplitRows] = useState(order.payments?.length ? order.payments.map(r => ({ ...r, amount: String(r.amount) })) : blankSplitRows());
   const [saving, setSaving] = useState(false);
 
-  const PAYMENT_MODES = ["Cash", "Online", "Other"];
+  const PAYMENT_MODES = ["Cash", "Online", "Other", SPLIT_MODE];
+  const isSplit = modeOfPayment === SPLIT_MODE;
   const grandTotal = order.grand_total || 0;
   const balanceAmount = payStatus === "full" ? 0 : payStatus === "partial" ? Math.max(0, grandTotal - amountPaid) : grandTotal;
 
@@ -1622,13 +1625,15 @@ function PaymentSection({ order, user, canEditPayment, isDispatched, isAdmin, or
   };
 
   const savePayment = async () => {
+    if (isSplit && splitTotal(splitRows) <= 0) return toast.error("Enter the amount of each payment received");
     setSaving(true);
     try {
       await api.put(`/orders/${orderId}`, {
-        payment_status: payStatus,
+        payment_status: isSplit ? splitStatus(splitRows, grandTotal) : payStatus,
+        payments: isSplit ? splitRows.filter(r => parseFloat(r.amount) > 0) : [],
         mode_of_payment: modeOfPayment,
         payment_mode_details: paymentModeDetails,
-        amount_paid: payStatus === "full" ? grandTotal : amountPaid,
+        amount_paid: isSplit ? splitTotal(splitRows) : (payStatus === "full" ? grandTotal : amountPaid),
         balance_amount: balanceAmount,
         payment_screenshots: screenshots,
       });
@@ -1652,7 +1657,7 @@ function PaymentSection({ order, user, canEditPayment, isDispatched, isAdmin, or
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <Label className="text-sm">Payment Status</Label>
-              <Select value={payStatus} onValueChange={setPayStatus}>
+              <Select value={isSplit ? splitStatus(splitRows, grandTotal) : payStatus} onValueChange={setPayStatus} disabled={isSplit}>
                 <SelectTrigger data-testid="edit-pay-status"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="unpaid">Unpaid</SelectItem>
@@ -1665,14 +1670,15 @@ function PaymentSection({ order, user, canEditPayment, isDispatched, isAdmin, or
               <Label className="text-sm">Mode of Payment</Label>
               <Select value={modeOfPayment} onValueChange={setModeOfPayment}>
                 <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                <SelectContent>{PAYMENT_MODES.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent>
+                <SelectContent>{PAYMENT_MODES.map(m => <SelectItem key={m} value={m}>{m === SPLIT_MODE ? SPLIT_LABEL : m}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             {modeOfPayment === "Other" && (
               <div><Label className="text-sm">Payment Details</Label><Input value={paymentModeDetails} onChange={e => setPaymentModeDetails(e.target.value)} /></div>
             )}
           </div>
-          {payStatus === "partial" && (
+          {isSplit && <SplitPayments rows={splitRows} onChange={setSplitRows} grandTotal={grandTotal} />}
+          {!isSplit && payStatus === "partial" && (
             <div className="grid grid-cols-2 gap-4">
               <div><Label className="text-sm">Amount Paid</Label><Input type="number" value={amountPaid || ""} onChange={e => setAmountPaid(+e.target.value)} data-testid="edit-pay-amount" /></div>
               <div><Label className="text-sm">Balance</Label><Input type="number" value={balanceAmount} readOnly className="bg-muted" /></div>
@@ -1724,7 +1730,17 @@ function PaymentSection({ order, user, canEditPayment, isDispatched, isAdmin, or
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex justify-between"><span className="text-sm text-muted-foreground">Status</span><Badge variant="outline">{order.payment_status}</Badge></div>
-        {order.mode_of_payment && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Mode</span><span className="text-sm">{order.mode_of_payment}{order.payment_mode_details ? ` (${order.payment_mode_details})` : ""}</span></div>}
+        {order.payments?.length > 0 ? (
+          <div className="space-y-1" data-testid="split-payments-view">
+            <span className="text-sm text-muted-foreground">Payments (split)</span>
+            {order.payments.map((p, i) => (
+              <div key={i} className="flex justify-between text-sm pl-3">
+                <span>{p.mode}{p.note ? <span className="text-muted-foreground"> · {p.note}</span> : ""}</span>
+                <span className="font-mono">{"₹"}{Number(p.amount).toLocaleString("en-IN")}</span>
+              </div>
+            ))}
+          </div>
+        ) : order.mode_of_payment && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Mode</span><span className="text-sm">{order.mode_of_payment}{order.payment_mode_details ? ` (${order.payment_mode_details})` : ""}</span></div>}
         {order.amount_paid > 0 && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Amount Paid</span><span className="text-sm font-mono">{"\u20B9"}{order.amount_paid}</span></div>}
         {order.balance_amount > 0 && <div className="flex justify-between"><span className="text-sm text-muted-foreground">Balance</span><span className="text-sm font-mono text-red-500">{"\u20B9"}{order.balance_amount}</span></div>}
         {order.payment_screenshots?.length > 0 && (

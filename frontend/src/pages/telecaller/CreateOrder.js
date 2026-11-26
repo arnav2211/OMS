@@ -24,6 +24,7 @@ import {
   resolveCarrierRiskCharge, formatCarrierRisk, stripCarrierRisk, resolveCarrierRiskFlag,
   CARRIER_RISK_GST_PERCENT, CARRIER_RISK_COURIER,
 } from "@/lib/carrierRisk";
+import SplitPayments, { SPLIT_MODE, SPLIT_LABEL, splitTotal, splitStatus, blankSplitRows } from "@/components/SplitPayments";
 
 const UNITS = ["mL", "L", "g", "Kg", "pcs", ""];
 const SHIPPING_METHODS = [
@@ -34,7 +35,7 @@ const SHIPPING_METHODS = [
   { value: "office_collection", label: "Office Collection" },
 ];
 const GST_RATES = [0, 5, 18];
-const PAYMENT_MODES = ["Cash", "Online", "Other"];
+const PAYMENT_MODES = ["Cash", "Online", "Other", SPLIT_MODE];
 
 const emptyItem = () => ({
   product_name: "", qty: 0, unit: "", rate: 0, amount: 0, gst_rate: 0, gst_amount: 0, total: 0, description: "",
@@ -154,6 +155,7 @@ export default function CreateOrder() {
   const [gstLoading, setGstLoading] = useState(false);
   const [modeOfPayment, setModeOfPayment] = useState("");
   const [paymentModeDetails, setPaymentModeDetails] = useState("");
+  const [splitRows, setSplitRows] = useState(blankSplitRows());   // split payment: several payments for one order
   const [freeSamples, setFreeSamples] = useState([]);
 
   // Address selection
@@ -250,8 +252,8 @@ export default function CreateOrder() {
       setCarrierRiskApplicable(resolveCarrierRiskFlag(d));
       setRemark(d.remark || "");
       setFreeSamples(d.free_samples || []);
-      setModeOfPayment(d.mode_of_payment || "");
-      setPaymentModeDetails(d.payment_mode_details || "");
+      setModeOfPayment(d.mode_of_payment === SPLIT_MODE ? "" : (d.mode_of_payment || ""));      // a copy has not been paid yet
+      setPaymentModeDetails(d.mode_of_payment === SPLIT_MODE ? "" : (d.payment_mode_details || ""));
       if (d.billing_address) setBillingAddress(d.billing_address);
       if (d.shipping_address) setShippingAddress(d.shipping_address);
       if (d.billing_address_id && d.shipping_address_id) {
@@ -476,6 +478,7 @@ export default function CreateOrder() {
     if (!sameAsBilling && !shippingAddress) return toast.error("Select a shipping address");
     if (shippingMethod === "courier" && !courierName) return toast.error("Select a courier");
     if (modeOfPayment === "Other" && !paymentModeDetails) return toast.error("Please specify payment details for 'Other'");
+    if (modeOfPayment === SPLIT_MODE && splitTotal(splitRows) <= 0) return toast.error("Enter the amount of each payment received");
 
     const spelt = await reviewItemSpelling(items);
     if (!spelt) return;
@@ -506,7 +509,8 @@ export default function CreateOrder() {
         ],
         carrier_risk_applicable: carrierRiskApplicable,
         remark,
-        payment_status: paymentStatus,
+        payment_status: modeOfPayment === SPLIT_MODE ? splitStatus(splitRows, grandTotal) : paymentStatus,
+        payments: modeOfPayment === SPLIT_MODE ? splitRows.filter(r => parseFloat(r.amount) > 0) : [],
         company,
         discount_enabled: discountEnabled,
         discount_mode: discountMode,
@@ -514,7 +518,7 @@ export default function CreateOrder() {
         discount_is_percent: discountIsPercent,
         is_cod: isCod,
         cod_amount: 0,          // 0 = collect whatever is still outstanding
-        amount_paid: paymentStatus === "full" ? grandTotal : amountPaid,
+        amount_paid: modeOfPayment === SPLIT_MODE ? splitTotal(splitRows) : (paymentStatus === "full" ? grandTotal : amountPaid),
         payment_screenshots: paymentScreenshots,
         mode_of_payment: modeOfPayment,
         payment_mode_details: paymentModeDetails,
@@ -927,7 +931,7 @@ export default function CreateOrder() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <Label>Payment Status</Label>
-              <Select value={paymentStatus} onValueChange={setPaymentStatus}>
+              <Select value={modeOfPayment === SPLIT_MODE ? splitStatus(splitRows, grandTotal) : paymentStatus} onValueChange={setPaymentStatus} disabled={modeOfPayment === SPLIT_MODE}>
                 <SelectTrigger data-testid="payment-status-select"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="unpaid">Unpaid</SelectItem>
@@ -935,7 +939,7 @@ export default function CreateOrder() {
                   <SelectItem value="full">Full Paid</SelectItem>
                 </SelectContent>
               </Select>
-              {paymentStatus !== "full" && (
+              {(modeOfPayment === SPLIT_MODE ? splitStatus(splitRows, grandTotal) : paymentStatus) !== "full" && (
                 <label className="flex items-start gap-2 mt-2 cursor-pointer">
                   <input type="checkbox" className="mt-0.5" checked={isCod}
                          onChange={(e) => setIsCod(e.target.checked)}
@@ -953,7 +957,7 @@ export default function CreateOrder() {
               <Label>Mode of Payment</Label>
               <Select value={modeOfPayment} onValueChange={setModeOfPayment}>
                 <SelectTrigger data-testid="mode-of-payment-select"><SelectValue placeholder="Select mode" /></SelectTrigger>
-                <SelectContent>{PAYMENT_MODES.map(m => (<SelectItem key={m} value={m}>{m}</SelectItem>))}</SelectContent>
+                <SelectContent>{PAYMENT_MODES.map(m => (<SelectItem key={m} value={m}>{m === SPLIT_MODE ? SPLIT_LABEL : m}</SelectItem>))}</SelectContent>
               </Select>
             </div>
             {modeOfPayment === "Other" && (
@@ -963,7 +967,8 @@ export default function CreateOrder() {
               </div>
             )}
           </div>
-          {paymentStatus === "partial" && (
+          {modeOfPayment === SPLIT_MODE && <SplitPayments rows={splitRows} onChange={setSplitRows} grandTotal={grandTotal} />}
+          {modeOfPayment !== SPLIT_MODE && paymentStatus === "partial" && (
             <div className="grid grid-cols-2 gap-4">
               <div><Label>Amount Paid</Label><Input type="number" value={amountPaid || ""} onChange={e => setAmountPaid(+e.target.value)} data-testid="amount-paid-input" /></div>
               <div><Label>Balance</Label><Input type="number" value={balanceAmount || ""} readOnly className="bg-muted" /></div>
