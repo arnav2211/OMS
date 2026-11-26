@@ -2112,6 +2112,8 @@ async def update_order(order_id: str, updates: dict, user=Depends(get_current_us
         if "payments" not in updates:
             updates["payments"] = order.get("payments")
         _apply_split(updates, updates.get("grand_total", order.get("grand_total")))
+        if not updates["payments"] and order.get("payments") and updates.get("mode_of_payment", "") != "Other":
+            updates["payment_mode_details"] = ""      # the old split summary must not stick to a normal mode
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.orders.update_one({"id": order_id}, {"$set": updates})
     if result.matched_count == 0:
