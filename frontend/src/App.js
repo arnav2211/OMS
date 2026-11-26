@@ -40,6 +40,7 @@ import SecurityLog from "@/pages/admin/SecurityLog";
 import CourierCompare from "@/pages/CourierCompare";
 import BookShipments from "@/pages/BookShipments";
 import Stickers from "@/pages/media/Stickers";
+import ProductDocuments from "@/pages/media/ProductDocuments";
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
@@ -85,6 +86,7 @@ function AppRoutes() {
       <Route path="/proforma" element={<ProtectedRoute allowedRoles={["telecaller", "admin"]}><PIBuilder /></ProtectedRoute>} />
       <Route path="/item-analytics" element={<ProtectedRoute allowedRoles={["admin"]}><ItemAnalytics /></ProtectedRoute>} />
       <Route path="/stickers" element={<ProtectedRoute allowedRoles={["admin", "media"]}><Stickers /></ProtectedRoute>} />
+      <Route path="/documents" element={<ProtectedRoute allowedRoles={["admin", "media"]}><ProductDocuments /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute allowedRoles={["admin"]}><UserManagement /></ProtectedRoute>} />
       <Route path="/tracking" element={<ProtectedRoute allowedRoles={["admin"]}><FieldTracking /></ProtectedRoute>} />
       <Route path="/amazon-orders" element={<ProtectedRoute allowedRoles={["admin", "packaging"]}><AmazonOrders /></ProtectedRoute>} />

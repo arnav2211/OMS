@@ -12,6 +12,7 @@ import {
   LogOut, Sun, Moon, Menu, X, Plus, UserCircle, Home, Search,
   FileText, TrendingUp, Bell, ShoppingBag, Megaphone,
   ChevronDown, Layers, Navigation, IndianRupee, FileCheck, Rocket, Timer, Activity, CalendarDays, Tag,
+  Files,
 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -74,6 +75,7 @@ const NAV_ITEMS = {
     { label: "Compare Couriers", icon: Layers, path: "/compare-rates" },
     { label: "Book Shipments", icon: Rocket, path: "/book-shipments" },
     { label: "Stickers", icon: Tag, path: "/stickers" },
+    { label: "Product Documents", icon: Files, path: "/documents" },
     { label: "Item Analytics", icon: TrendingUp, path: "/item-analytics" },
     { label: "Users", icon: Settings, path: "/users" },
     { label: "Field Tracking", icon: Navigation, path: "/tracking" },
@@ -84,6 +86,7 @@ const NAV_ITEMS = {
   ],
   media: [
     { label: "Stickers", icon: Tag, path: "/" },
+    { label: "Product Documents", icon: Files, path: "/documents" },
     { label: "All Orders", icon: ClipboardList, path: "/all-orders" },
   ],
   accounts: [
