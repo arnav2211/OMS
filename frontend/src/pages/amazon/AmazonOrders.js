@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { RefreshCw, Search, Trash2 } from "lucide-react";
 import { COURIER_DROPDOWN } from "@/lib/courierTracking";
+import { courierLabel } from "@/lib/courierLabel";
 
 
 // Ship-by urgency from Amazon's latest ship date: "overdue", "today" or "".
@@ -215,7 +216,7 @@ export default function AmazonOrders() {
                     <TableCell className="text-sm">{o.customer_name}</TableCell>
                     <TableCell className="text-sm font-mono">{"\u20B9"}{o.grand_total?.toLocaleString("en-IN")}</TableCell>
                     <TableCell className="text-sm whitespace-nowrap">
-                      {o.shipping_method === "amazon" ? "Amazon" : o.courier_name || "Courier"}
+                      {o.shipping_method === "amazon" ? "Amazon" : courierLabel(o)}
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className={`text-xs capitalize ${STATUS_BADGE[o.status] || ""}`}>{o.status}</Badge>

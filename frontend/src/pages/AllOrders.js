@@ -17,6 +17,7 @@ import { Search, RefreshCw, Printer, PackageCheck, FileSpreadsheet } from "lucid
 import DTDCExportDialog from "@/components/DTDCExportDialog";
 import CourierStatusDialog from "@/components/CourierStatusDialog";
 import { supportsLiveTracking } from "@/lib/courierTracking";
+import { courierLabel } from "@/lib/courierLabel";
 
 const STATUS_COLORS = {
   new: "bg-blue-100 text-blue-800",
@@ -31,15 +32,6 @@ const CHECK_COLORS = {
 };
 const CHECK_LABELS = { received: "Checked", pending: "Pending", pending_recheck: "Re-check" };
 const COURIER_OPTIONS = ["DTDC", "Anjani", "India Post", "Amazon", "Shiprocket", "Shipmozo", "XpressBees", "Delhivery B2B", "Others"];
-
-// For the aggregators, the company whose pickup agent comes (booked one, else the one chosen), tagged SR / SM
-const AGGREGATOR_TAG = { Shiprocket: ["SR", "shiprocket"], Shipmozo: ["SM", "shipmozo"] };
-function courierLabel(o) {
-  const agg = AGGREGATOR_TAG[o.courier_name];
-  if (!agg) return o.courier_name || "Courier";
-  const partner = o[`${agg[1]}_shipment`]?.courier_name || o[`${agg[1]}_courier`]?.name || o.dispatch?.courier_partner;
-  return partner ? `${partner} (${agg[0]})` : o.courier_name;
-}
 
 export default function AllOrders() {
   const { user } = useAuth();
